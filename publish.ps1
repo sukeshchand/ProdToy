@@ -15,7 +15,7 @@
 
 .EXAMPLE
     .\publish.ps1
-    .\publish.ps1 -DeployPath "\\ps1-storage\Install\DevToy" -ReleaseNotes "Added auto-update feature"
+    .\publish.ps1 -DeployPath "\\server\share\DevToy" -ReleaseNotes "Added auto-update feature"
 #>
 param(
     [string]$DeployPath = "",

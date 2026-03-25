@@ -16,7 +16,7 @@ record AppSettingsData
     public bool ShowQuotes { get; init; } = true;
 
     [JsonPropertyName("updateLocation")]
-    public string UpdateLocation { get; init; } = @"I:\DevToy";
+    public string UpdateLocation { get; init; } = "";
 
     [JsonPropertyName("autoTitleToFolder")]
     public bool AutoTitleToFolder { get; init; } = false;

@@ -40,6 +40,9 @@ ScaffoldingReadMe.txt
 # NuGet Symbol Packages
 *.snupkg
 
+# Deployment defaults (created per-environment, not in source)
+defaultSettings.json
+
 # Others
 ~$*
 *~

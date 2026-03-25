@@ -223,18 +223,21 @@ class SetupForm : Form
 
         try
         {
-            // Step 1: Copy exe to ~/.claude/tools/
+            // Step 1: Copy exe to ~/.dev-toy/
             Directory.CreateDirectory(_toolsDir);
             File.Copy(_currentExePath, _installExePath, overwrite: true);
             log.AppendLine($"Installed to {_installExePath}");
 
-            // Step 2: Create hooks directory and write PS1 script
+            // Step 2: Apply defaults from defaultSettings.json (if present next to installer)
+            ApplyDefaultSettings(log);
+
+            // Step 3: Create hooks directory and write PS1 script
             Directory.CreateDirectory(_hooksDir);
             string ps1Path = Path.Combine(_hooksDir, "Show-DevToy.ps1");
             File.WriteAllText(ps1Path, _ps1Content, Encoding.UTF8);
             log.AppendLine($"Hook script created at {ps1Path}");
 
-            // Step 3: Backup and merge settings.json
+            // Step 4: Backup and merge settings.json
             if (File.Exists(_settingsPath))
             {
                 string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
@@ -260,6 +263,42 @@ class SetupForm : Form
             if (backupPath != null)
                 log.AppendLine($"Original settings backed up at {backupPath}");
             return new InstallResult(false, log.ToString());
+        }
+    }
+
+    /// <summary>
+    /// Reads defaultSettings.json from the directory where the installer exe is located.
+    /// If present, merges its values into the app settings as defaults.
+    /// </summary>
+    private static void ApplyDefaultSettings(StringBuilder log)
+    {
+        try
+        {
+            string sourceDir = Path.GetDirectoryName(Application.ExecutablePath)!;
+            string defaultSettingsPath = Path.Combine(sourceDir, "defaultSettings.json");
+
+            if (!File.Exists(defaultSettingsPath)) return;
+
+            string json = File.ReadAllText(defaultSettingsPath);
+            var defaults = JsonSerializer.Deserialize<AppSettingsData>(json);
+            if (defaults == null) return;
+
+            var current = AppSettings.Load();
+
+            // Only apply defaults for values that are not already set by the user
+            var merged = current with
+            {
+                UpdateLocation = string.IsNullOrWhiteSpace(current.UpdateLocation)
+                    ? defaults.UpdateLocation
+                    : current.UpdateLocation,
+            };
+
+            AppSettings.Save(merged);
+            log.AppendLine($"Applied defaults from {defaultSettingsPath}");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to apply default settings: {ex.Message}");
         }
     }
 
