@@ -19,7 +19,8 @@ class ScreenshotOverlay : Form
     public ScreenshotOverlay()
     {
         FormBorderStyle = FormBorderStyle.None;
-        WindowState = FormWindowState.Maximized;
+        StartPosition = FormStartPosition.Manual;
+        WindowState = FormWindowState.Normal;
         ShowInTaskbar = false;
         TopMost = true;
         DoubleBuffered = true;
@@ -28,28 +29,21 @@ class ScreenshotOverlay : Form
         Opacity = 1.0;
 
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-    }
 
-    protected override void OnShown(EventArgs e)
-    {
-        base.OnShown(e);
+        // Capture the screen before showing — avoids capturing our own form
         CaptureFullScreen();
     }
 
     private void CaptureFullScreen()
     {
-        // Capture all screens into one bitmap before showing the overlay
+        // Capture all screens into one bitmap
         var totalBounds = SystemInformation.VirtualScreen;
         _screenCapture = new Bitmap(totalBounds.Width, totalBounds.Height, PixelFormat.Format32bppArgb);
         using var g = Graphics.FromImage(_screenCapture);
         g.CopyFromScreen(totalBounds.Location, Point.Empty, totalBounds.Size, CopyPixelOperation.SourceCopy);
 
-        // Position overlay across all screens
-        Location = totalBounds.Location;
-        Size = totalBounds.Size;
-        WindowState = FormWindowState.Normal;
-
-        Invalidate();
+        // Position overlay to cover entire virtual screen (works on RDP + multi-monitor)
+        Bounds = totalBounds;
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
