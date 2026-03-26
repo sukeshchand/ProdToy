@@ -102,13 +102,24 @@ class ScreenshotCanvas : Control
                 CanvasResizeRequested?.Invoke(newSize);
             }
 
+            // Copy image into the _edits folder so it's preserved independently
+            string localPath = filePath;
+            if (!string.IsNullOrEmpty(_session.EditId))
+            {
+                string editsDir = _session.EditDir;
+                Directory.CreateDirectory(editsDir);
+                string localName = $"layer_{DateTime.Now:HHmmss}_{Path.GetFileName(filePath)}";
+                localPath = Path.Combine(editsDir, localName);
+                img.Save(localPath, System.Drawing.Imaging.ImageFormat.Png);
+            }
+
             // Create the image annotation
             var imageObj = new ImageObject
             {
                 Image = img,
                 Position = new PointF(dropX, dropY),
                 DisplaySize = new SizeF(img.Width, img.Height),
-                SourcePath = filePath,
+                SourcePath = localPath,
             };
 
             _session.AddAnnotation(imageObj);
