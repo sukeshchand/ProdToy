@@ -136,6 +136,7 @@ static class SessionSerializer
     {
         var data = new AnnotationData
         {
+            Id = obj.Id,
             Type = obj.GetType().Name,
             StrokeColor = ToHex(obj.StrokeColor),
             FillColor = ToHex(obj.FillColor),
@@ -228,6 +229,7 @@ static class SessionSerializer
 
         if (obj != null)
         {
+            if (data.Id > 0) obj.Id = data.Id;
             obj.StrokeColor = FromHex(data.StrokeColor, Color.Red);
             obj.FillColor = FromHex(data.FillColor, Color.Transparent);
             obj.Thickness = data.Thickness;
@@ -386,6 +388,7 @@ class SessionState
 
 class AnnotationData
 {
+    [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("type")] public string Type { get; set; } = "";
     [JsonPropertyName("strokeColor")] public string? StrokeColor { get; set; }
     [JsonPropertyName("fillColor")] public string? FillColor { get; set; }

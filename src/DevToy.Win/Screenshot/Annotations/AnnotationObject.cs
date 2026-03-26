@@ -19,7 +19,7 @@ abstract class AnnotationObject
 {
     private static int _nextId;
 
-    public int Id { get; } = Interlocked.Increment(ref _nextId);
+    public int Id { get; set; } = Interlocked.Increment(ref _nextId);
     public Color StrokeColor { get; set; } = Color.Red;
     public Color FillColor { get; set; } = Color.Transparent;
     public float Thickness { get; set; } = 2f;
