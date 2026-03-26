@@ -528,12 +528,16 @@ class ScreenshotCanvas : Control
             }
         }
 
-        // Save the layer image to _edits folder
+        // Save modified base image and layer image to _edits folder
         string localPath = "";
         if (!string.IsNullOrEmpty(_session.EditId))
         {
             string dir = _session.EditDir;
             Directory.CreateDirectory(dir);
+
+            // Persist the modified base image so it survives session restore
+            _session.OriginalImage.Save(Path.Combine(dir, "base.png"), System.Drawing.Imaging.ImageFormat.Png);
+
             localPath = Path.Combine(dir, $"layer_{DateTime.Now:HHmmss}_{x}_{y}.png");
             regionBmp.Save(localPath, System.Drawing.Imaging.ImageFormat.Png);
         }
