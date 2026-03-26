@@ -108,8 +108,8 @@ class ScreenshotEditorForm : Form
             _toolbar.Invalidate();
         };
 
-        _toolbar.UndoRequested += () => { _session.UndoRedo.Undo(); _canvas.Invalidate(); _toolbar.Invalidate(); };
-        _toolbar.RedoRequested += () => { _session.UndoRedo.Redo(); _canvas.Invalidate(); _toolbar.Invalidate(); };
+        _toolbar.UndoRequested += () => { _session.UndoRedo.Undo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); _toolbar.Invalidate(); };
+        _toolbar.RedoRequested += () => { _session.UndoRedo.Redo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); _toolbar.Invalidate(); };
         _toolbar.DeleteRequested += () => { _session.DeleteSelected(); _canvas.Invalidate(); };
         _toolbar.BringForwardRequested += () => { _session.BringForward(); _canvas.Invalidate(); };
         _toolbar.SendBackwardRequested += () => { _session.SendBackward(); _canvas.Invalidate(); };
@@ -195,8 +195,8 @@ class ScreenshotEditorForm : Form
         if (e.Control && e.Shift && e.KeyCode == Keys.C) { DoCopyPath(); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.S) { DoSave(); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.C) { DoCopy(); e.Handled = true; return; }
-        if (e.Control && e.KeyCode == Keys.Z) { _session.UndoRedo.Undo(); _canvas.Invalidate(); e.Handled = true; return; }
-        if (e.Control && e.KeyCode == Keys.Y) { _session.UndoRedo.Redo(); _canvas.Invalidate(); e.Handled = true; return; }
+        if (e.Control && e.KeyCode == Keys.Z) { _session.UndoRedo.Undo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); e.Handled = true; return; }
+        if (e.Control && e.KeyCode == Keys.Y) { _session.UndoRedo.Redo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); e.Handled = true; return; }
         if (e.KeyCode == Keys.Delete) { _session.DeleteSelected(); _canvas.Invalidate(); e.Handled = true; return; }
         if (e.KeyCode == Keys.Escape) { Close(); e.Handled = true; return; }
 

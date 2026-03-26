@@ -2,5 +2,5 @@ namespace DevToy;
 
 static class AppVersion
 {
-    public const string Current = "1.0.101";
+    public const string Current = "1.0.102";
 }

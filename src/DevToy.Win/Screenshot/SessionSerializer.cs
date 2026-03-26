@@ -110,13 +110,13 @@ static class SessionSerializer
             session.UndoRedo.Clear();
             foreach (var actionData in state.UndoStack)
             {
-                var action = DeserializeAction(actionData, session.Annotations, idMap);
+                var action = DeserializeAction(actionData, session, session.Annotations, idMap);
                 if (action != null)
                     session.UndoRedo.PushUndoRaw(action);
             }
             foreach (var actionData in state.RedoStack)
             {
-                var action = DeserializeAction(actionData, session.Annotations, idMap);
+                var action = DeserializeAction(actionData, session, session.Annotations, idMap);
                 if (action != null)
                     session.UndoRedo.PushRedoRaw(action);
             }
@@ -282,13 +282,26 @@ static class SessionSerializer
                 data.Dx = GetField<float>(floatProp, "_oldValue");
                 data.Dy = GetField<float>(floatProp, "_newValue");
                 break;
+            case CanvasResizeAction canvasResize:
+                data.AnnotationId = -1;
+                var oldSz = GetField<System.Drawing.Size>(canvasResize, "_oldSize");
+                var newSz = GetField<System.Drawing.Size>(canvasResize, "_newSize");
+                var oldOff = GetField<System.Drawing.Point>(canvasResize, "_oldOffset");
+                var newOff = GetField<System.Drawing.Point>(canvasResize, "_newOffset");
+                data.OldSizeW = oldSz.Width; data.OldSizeH = oldSz.Height;
+                data.NewSizeW = newSz.Width; data.NewSizeH = newSz.Height;
+                data.OldOffsetX = oldOff.X; data.OldOffsetY = oldOff.Y;
+                data.NewOffsetX = newOff.X; data.NewOffsetY = newOff.Y;
+                data.ShiftX = GetField<int>(canvasResize, "_shiftX");
+                data.ShiftY = GetField<int>(canvasResize, "_shiftY");
+                break;
         }
 
         return data;
     }
 
-    private static IEditorAction? DeserializeAction(ActionData data, List<AnnotationObject> objects,
-        Dictionary<int, AnnotationObject> idMap)
+    private static IEditorAction? DeserializeAction(ActionData data, EditorSession session,
+        List<AnnotationObject> objects, Dictionary<int, AnnotationObject> idMap)
     {
         AnnotationObject? FindObj() => data.AnnotationId > 0 && idMap.TryGetValue(data.AnnotationId, out var o) ? o : null;
 
@@ -310,7 +323,13 @@ static class SessionSerializer
             "ChangeZIndexAction" => FindObj() is { } zObj
                 ? new ChangeZIndexAction(objects, zObj, data.OldIndex, data.NewIndex)
                 : null,
-            _ => null, // ModifyPropertyAction can't be reliably restored (lambda setters)
+            "CanvasResizeAction" => new CanvasResizeAction(session,
+                new Size(data.OldSizeW, data.OldSizeH),
+                new Size(data.NewSizeW, data.NewSizeH),
+                new Point(data.OldOffsetX, data.OldOffsetY),
+                new Point(data.NewOffsetX, data.NewOffsetY),
+                data.ShiftX, data.ShiftY),
+            _ => null,
         };
     }
 
@@ -427,4 +446,16 @@ class ActionData
     [JsonPropertyName("newIndex")] public int NewIndex { get; set; }
     [JsonPropertyName("propertyOld")] public string? PropertyOld { get; set; }
     [JsonPropertyName("propertyNew")] public string? PropertyNew { get; set; }
+
+    // Canvas resize
+    [JsonPropertyName("oldSizeW")] public int OldSizeW { get; set; }
+    [JsonPropertyName("oldSizeH")] public int OldSizeH { get; set; }
+    [JsonPropertyName("newSizeW")] public int NewSizeW { get; set; }
+    [JsonPropertyName("newSizeH")] public int NewSizeH { get; set; }
+    [JsonPropertyName("oldOffsetX")] public int OldOffsetX { get; set; }
+    [JsonPropertyName("oldOffsetY")] public int OldOffsetY { get; set; }
+    [JsonPropertyName("newOffsetX")] public int NewOffsetX { get; set; }
+    [JsonPropertyName("newOffsetY")] public int NewOffsetY { get; set; }
+    [JsonPropertyName("shiftX")] public int ShiftX { get; set; }
+    [JsonPropertyName("shiftY")] public int ShiftY { get; set; }
 }

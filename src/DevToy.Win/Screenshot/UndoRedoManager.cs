@@ -201,3 +201,47 @@ class ChangeZIndexAction : IEditorAction
         _objects.Insert(Math.Min(_oldIndex, _objects.Count), _obj);
     }
 }
+
+class CanvasResizeAction : IEditorAction
+{
+    private readonly EditorSession _session;
+    private readonly List<AnnotationObject> _annotations;
+    private readonly System.Drawing.Size _oldSize;
+    private readonly System.Drawing.Size _newSize;
+    private readonly System.Drawing.Point _oldOffset;
+    private readonly System.Drawing.Point _newOffset;
+    private readonly int _shiftX;
+    private readonly int _shiftY;
+    public string Description => "Resize canvas";
+
+    public CanvasResizeAction(EditorSession session, System.Drawing.Size oldSize, System.Drawing.Size newSize,
+        System.Drawing.Point oldOffset, System.Drawing.Point newOffset, int shiftX, int shiftY)
+    {
+        _session = session;
+        _annotations = session.Annotations;
+        _oldSize = oldSize;
+        _newSize = newSize;
+        _oldOffset = oldOffset;
+        _newOffset = newOffset;
+        _shiftX = shiftX;
+        _shiftY = shiftY;
+    }
+
+    public void Execute()
+    {
+        _session.CanvasSize = _newSize;
+        _session.ImageOffset = _newOffset;
+        if (_shiftX != 0 || _shiftY != 0)
+            foreach (var obj in _annotations)
+                obj.Move(_shiftX, _shiftY);
+    }
+
+    public void Undo()
+    {
+        _session.CanvasSize = _oldSize;
+        _session.ImageOffset = _oldOffset;
+        if (_shiftX != 0 || _shiftY != 0)
+            foreach (var obj in _annotations)
+                obj.Move(-_shiftX, -_shiftY);
+    }
+}

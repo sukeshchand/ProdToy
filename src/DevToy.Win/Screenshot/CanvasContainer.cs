@@ -48,6 +48,16 @@ class CanvasContainer : Panel
         CenterCanvas();
     }
 
+    /// <summary>Sync the canvas control size from the session's CanvasSize and recenter.</summary>
+    public void SyncCanvasSize()
+    {
+        if (_canvas.Session != null)
+        {
+            _canvas.Size = new Size(_canvas.Session.CanvasSize.Width, _canvas.Session.CanvasSize.Height);
+        }
+        CenterCanvas();
+    }
+
     /// <summary>Recenter the canvas within this container.</summary>
     public void CenterCanvas()
     {
@@ -228,34 +238,27 @@ class CanvasContainer : Panel
             _isResizingCanvas = false;
             Capture = false;
 
-            // Calculate how much each edge moved relative to the original canvas bounds
             var oldBounds = _canvasBoundsAtStart;
             var newBounds = _previewRect;
 
-            int leftDelta = oldBounds.Left - newBounds.Left;   // positive = expanded left
-            int topDelta = oldBounds.Top - newBounds.Top;      // positive = expanded top
+            int leftDelta = oldBounds.Left - newBounds.Left;
+            int topDelta = oldBounds.Top - newBounds.Top;
             int newW = newBounds.Width;
             int newH = newBounds.Height;
 
-            // Update session: shift image offset for left/top expansion
             if (_canvas.Session != null)
             {
                 var session = _canvas.Session;
-                var currentOffset = session.ImageOffset;
-                session.ImageOffset = new Point(
-                    currentOffset.X + leftDelta,
-                    currentOffset.Y + topDelta);
-                session.CanvasSize = new Size(newW, newH);
+                var oldSize = session.CanvasSize;
+                var oldOffset = session.ImageOffset;
+                var newSize = new Size(newW, newH);
+                var newOffset = new Point(oldOffset.X + leftDelta, oldOffset.Y + topDelta);
 
-                // Also shift all existing annotations by the same amount
-                if (leftDelta != 0 || topDelta != 0)
-                {
-                    foreach (var obj in session.Annotations)
-                        obj.Move(leftDelta, topDelta);
-                }
+                // Execute through undo system
+                var action = new CanvasResizeAction(session, oldSize, newSize, oldOffset, newOffset, leftDelta, topDelta);
+                session.UndoRedo.Execute(action);
             }
 
-            // Apply the new canvas size
             _canvas.Size = new Size(newW, newH);
             CenterCanvas();
             return;
