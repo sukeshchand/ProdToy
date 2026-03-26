@@ -14,8 +14,8 @@ static class ScreenshotExporter
         var result = new Bitmap(canvasSize.Width, canvasSize.Height, PixelFormat.Format32bppArgb);
         using var g = Graphics.FromImage(result);
 
-        // White/transparent background for expanded areas
-        g.Clear(Color.White);
+        // Background color for canvas (including expanded areas)
+        g.Clear(session.CanvasBackgroundColor);
 
         // Draw original image at its offset
         g.DrawImage(session.OriginalImage, imgOffset.X, imgOffset.Y);

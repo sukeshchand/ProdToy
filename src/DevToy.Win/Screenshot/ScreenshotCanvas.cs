@@ -53,12 +53,17 @@ class ScreenshotCanvas : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
 
-        // Checkerboard background for transparency indication
-        using (var checker = new HatchBrush(HatchStyle.LargeCheckerBoard,
-            Color.FromArgb(50, 50, 50), Color.FromArgb(40, 40, 40)))
+        if (_session == null)
+        {
+            using var checker = new HatchBrush(HatchStyle.LargeCheckerBoard,
+                Color.FromArgb(50, 50, 50), Color.FromArgb(40, 40, 40));
             g.FillRectangle(checker, ClientRectangle);
+            return;
+        }
 
-        if (_session == null) return;
+        // Fill with canvas background color
+        using (var bgBrush = new SolidBrush(_session.CanvasBackgroundColor))
+            g.FillRectangle(bgBrush, ClientRectangle);
 
         // Draw the original image at its offset (shifts when canvas expands left/top)
         var imgOff = _session.ImageOffset;

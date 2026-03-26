@@ -5,6 +5,7 @@ namespace DevToy;
 class EditorSession
 {
     public Bitmap OriginalImage { get; }
+    public string? TempId { get; set; }
     public List<AnnotationObject> Annotations { get; } = new();
     public UndoRedoManager UndoRedo { get; }
     public AnnotationTool CurrentTool { get; set; } = AnnotationTool.Select;
@@ -21,6 +22,9 @@ class EditorSession
 
     /// <summary>Current canvas size (may be larger than OriginalImage).</summary>
     public Size CanvasSize { get; set; }
+
+    // Canvas background
+    public Color CanvasBackgroundColor { get; set; } = Color.White;
 
     // Border settings
     public bool BorderEnabled { get; set; }

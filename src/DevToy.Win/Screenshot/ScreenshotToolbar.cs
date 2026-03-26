@@ -15,14 +15,6 @@ class ScreenshotToolbar : Control
     private int _hoverIndex = -1;
     private EditorSession? _session;
 
-    // Color picker state
-    private static readonly Color[] Palette = new[]
-    {
-        Color.Red, Color.FromArgb(255, 100, 0), Color.Yellow, Color.Lime,
-        Color.Cyan, Color.DodgerBlue, Color.FromArgb(160, 32, 240), Color.Magenta,
-        Color.White, Color.Black, Color.FromArgb(128, 128, 128),
-    };
-
     public event Action? QuickCopyRequested;
     public event Action? CopyPathRequested;
     public event Action<AnnotationTool>? ToolSelected;
@@ -36,6 +28,8 @@ class ScreenshotToolbar : Control
     public event Action? CopyRequested;
     public event Action? CancelRequested;
     public event Action<Color>? ColorChanged;
+    public event Action? ColorPickerRequested;
+    public event Action? BgColorPickerRequested;
     public event Action<float>? ThicknessChanged;
     public event Action<float>? FontSizeChanged;
     public event Action? BorderToggled;
@@ -92,8 +86,9 @@ class ScreenshotToolbar : Control
         AddButton("border", "\u25A3", "Border Settings (B)", () => BorderToggled?.Invoke());
         AddSeparator();
 
-        // Color palette (compact)
-        AddColorPicker();
+        // Color: swatch showing current color, opens full picker
+        _items.Add(new ToolbarColorSwatch("color", "Stroke Color", () => ColorPickerRequested?.Invoke(), session => session?.CurrentColor));
+        _items.Add(new ToolbarColorSwatch("bgcolor", "Canvas BG Color", () => BgColorPickerRequested?.Invoke(), session => session?.CanvasBackgroundColor));
         AddSeparator();
 
         // Thickness
@@ -122,15 +117,6 @@ class ScreenshotToolbar : Control
     private void AddSeparator()
     {
         _items.Add(new ToolbarSeparator());
-    }
-
-    private void AddColorPicker()
-    {
-        _items.Add(new ToolbarColorPicker(Palette, color =>
-        {
-            ColorChanged?.Invoke(color);
-            Invalidate();
-        }));
     }
 
     private void AddThicknessSelector()
@@ -193,10 +179,20 @@ class ScreenshotToolbar : Control
             Invalidate();
 
             // Tooltip
-            if (idx >= 0 && _items[idx] is ToolbarButton btn)
+            if (idx >= 0)
             {
-                var tt = GetOrCreateTooltip();
-                tt.SetToolTip(this, btn.Tooltip);
+                string? tooltip = _items[idx] switch
+                {
+                    ToolbarButton btn => btn.Tooltip,
+                    ToolbarPrimaryButton pb => pb.Tooltip,
+                    ToolbarColorSwatch cs => cs.Tooltip,
+                    _ => null,
+                };
+                if (tooltip != null)
+                {
+                    var tt = GetOrCreateTooltip();
+                    tt.SetToolTip(this, tooltip);
+                }
             }
         }
     }
@@ -427,61 +423,63 @@ class ScreenshotToolbar : Control
         }
     }
 
-    class ToolbarColorPicker : ToolbarItem
+    /// <summary>A small colored swatch that shows the current color and opens a picker on click.</summary>
+    class ToolbarColorSwatch : ToolbarItem
     {
-        private readonly Color[] _colors;
-        private readonly Action<Color> _onPick;
-        private const int SwatchSize = 14;
-        private const int Cols = 6;
+        private readonly string _id;
+        public string Tooltip { get; }
+        private readonly Action _onClick;
+        private readonly Func<EditorSession?, Color?> _getColor;
+        private const int SwatchW = 28;
 
-        public ToolbarColorPicker(Color[] colors, Action<Color> onPick)
+        public ToolbarColorSwatch(string id, string tooltip, Action onClick, Func<EditorSession?, Color?> getColor)
         {
-            _colors = colors;
-            _onPick = onPick;
+            _id = id;
+            Tooltip = tooltip;
+            _onClick = onClick;
+            _getColor = getColor;
         }
 
-        public override int GetWidth()
-        {
-            int cols = Math.Min(Cols, _colors.Length);
-            return cols * (SwatchSize + 1) + 2;
-        }
+        public override int GetWidth() => SwatchW;
 
         public override void Render(Graphics g, Rectangle rect, bool hover, EditorSession? session)
         {
-            int x = rect.X + 1;
-            int y = rect.Y + 2;
-            for (int i = 0; i < _colors.Length; i++)
-            {
-                int col = i % Cols;
-                int row = i / Cols;
-                var sr = new Rectangle(x + col * (SwatchSize + 1), y + row * (SwatchSize + 1), SwatchSize, SwatchSize);
-                using var brush = new SolidBrush(_colors[i]);
-                g.FillRectangle(brush, sr);
+            var color = _getColor(session) ?? Color.Red;
+            int pad = 4;
+            var swatchRect = new Rectangle(rect.X + pad, rect.Y + pad, rect.Width - pad * 2, rect.Height - pad * 2);
 
-                if (session != null && _colors[i].ToArgb() == session.CurrentColor.ToArgb())
-                {
-                    using var selPen = new Pen(Color.White, 1.5f);
-                    g.DrawRectangle(selPen, sr.X - 1, sr.Y - 1, sr.Width + 1, sr.Height + 1);
-                }
+            // Fill with checkerboard first (for light colors visibility)
+            using (var checker = new System.Drawing.Drawing2D.HatchBrush(
+                System.Drawing.Drawing2D.HatchStyle.SmallCheckerBoard,
+                Color.FromArgb(60, 60, 60), Color.FromArgb(40, 40, 40)))
+                g.FillRectangle(checker, swatchRect);
+
+            // Color fill
+            using (var brush = new SolidBrush(color))
+                g.FillRectangle(brush, swatchRect);
+
+            // Border
+            var borderColor = hover ? Color.FromArgb(180, 80, 160, 255) : Color.FromArgb(100, 160, 160, 170);
+            using var pen = new Pen(borderColor, hover ? 1.5f : 1f);
+            g.DrawRectangle(pen, swatchRect);
+
+            // Small label
+            using var font = new Font("Segoe UI", 6f);
+            using var labelBrush = new SolidBrush(Color.FromArgb(140, 200, 200, 210));
+            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            string label = _id == "bgcolor" ? "BG" : "";
+            if (label.Length > 0)
+            {
+                // Draw label background
+                var labelRect = new RectangleF(swatchRect.X, swatchRect.Bottom - 9, swatchRect.Width, 9);
+                using var labelBg = new SolidBrush(Color.FromArgb(160, 0, 0, 0));
+                g.FillRectangle(labelBg, labelRect);
+                using var labelTextBrush = new SolidBrush(Color.FromArgb(200, 220, 220, 230));
+                g.DrawString(label, font, labelTextBrush, labelRect, sf);
             }
         }
 
-        public override void HandleClick(Point pt, Rectangle rect, EditorSession? session)
-        {
-            int x = rect.X + 1;
-            int y = rect.Y + 2;
-            for (int i = 0; i < _colors.Length; i++)
-            {
-                int col = i % Cols;
-                int row = i / Cols;
-                var sr = new Rectangle(x + col * (SwatchSize + 1), y + row * (SwatchSize + 1), SwatchSize, SwatchSize);
-                if (sr.Contains(pt))
-                {
-                    _onPick(_colors[i]);
-                    return;
-                }
-            }
-        }
+        public override void HandleClick(Point pt, Rectangle rect, EditorSession? session) => _onClick();
     }
 
     class ToolbarThicknessSelector : ToolbarItem

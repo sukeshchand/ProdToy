@@ -25,6 +25,9 @@ static class AppPaths
     /// <summary>Screenshots directory: Root\screenshots\</summary>
     public static string ScreenshotsDir { get; } = Path.Combine(Root, "screenshots");
 
+    /// <summary>Temp captures: Root\screenshots\temp\</summary>
+    public static string ScreenshotsTempDir { get; } = Path.Combine(Root, "screenshots", "temp");
+
     /// <summary>Scripts directory: Root\scripts\</summary>
     public static string ScriptsDir { get; } = Path.Combine(Root, "scripts");
 
