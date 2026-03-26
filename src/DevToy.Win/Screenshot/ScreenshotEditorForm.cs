@@ -5,9 +5,9 @@ namespace DevToy;
 
 class ScreenshotEditorForm : Form
 {
-    private readonly EditorSession _session;
-    private readonly ScreenshotCanvas _canvas;
-    private readonly CanvasContainer _canvasContainer;
+    private EditorSession _session;
+    private ScreenshotCanvas _canvas;
+    private CanvasContainer _canvasContainer;
     private readonly ScreenshotToolbar _toolbar;
     private readonly RecentImagesPanel _recentPanel;
     private readonly PopupTheme _theme;
@@ -61,6 +61,8 @@ class ScreenshotEditorForm : Form
             Size = new Size(170, ClientSize.Height - canvasTop),
             Anchor = AnchorStyles.Top | AnchorStyles.Right | AnchorStyles.Bottom,
         };
+        _recentPanel.OpenRequested += OpenFromList;
+        _recentPanel.SetEditingId(_session.EditId);
         Controls.Add(_recentPanel);
 
         // Canvas container (left of recent panel)
@@ -331,6 +333,76 @@ class ScreenshotEditorForm : Form
     {
         Directory.CreateDirectory(AppPaths.ScreenshotsDir);
         return Path.Combine(AppPaths.ScreenshotsDir, _session.EditId + ".png");
+    }
+
+    private void OpenFromList(string filePath)
+    {
+        // Don't reload the same image
+        string fileEditId = Path.GetFileNameWithoutExtension(filePath);
+        if (fileEditId.Equals(_session.EditId, StringComparison.OrdinalIgnoreCase)) return;
+
+        if (MessageBox.Show(this,
+            "Save current edits and open the selected image?",
+            "Open Image",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button1) != DialogResult.Yes)
+            return;
+
+        try
+        {
+            // Save current session state + final image
+            _canvas.CommitTextEdit();
+            ScreenshotExporter.SaveToFile(_session, GetLinkedSavePath());
+            SessionSerializer.Save(_session);
+            SavePreview();
+            _session.OriginalImage.Dispose();
+
+            // Load the selected image from its _edits/base.png if available, otherwise from the file
+            string editDir = Path.Combine(AppPaths.ScreenshotsEditsDir, fileEditId);
+            string basePath = Path.Combine(editDir, "base.png");
+            string loadFrom = File.Exists(basePath) ? basePath : filePath;
+
+            Bitmap newImage;
+            using (var stream = File.OpenRead(loadFrom))
+            using (var bmp = new Bitmap(stream))
+            {
+                newImage = new Bitmap(bmp.Width, bmp.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                using var g = Graphics.FromImage(newImage);
+                g.DrawImage(bmp, 0, 0);
+            }
+
+            // Create new session
+            _session = new EditorSession(newImage) { EditId = fileEditId };
+
+            // If _edits folder has state.json, restore annotations and settings
+            if (Directory.Exists(editDir))
+                SessionSerializer.Restore(_session);
+
+            // Replace canvas
+            _canvasContainer.Controls.Remove(_canvas);
+            _canvas = new ScreenshotCanvas
+            {
+                Size = new Size(_session.CanvasSize.Width, _session.CanvasSize.Height),
+                Session = _session,
+            };
+            _canvasContainer.Controls.Add(_canvas);
+            _canvasContainer.CenterCanvas();
+
+            // Auto-save on undo/redo for new session
+            _session.UndoRedo.StateChanged += () => SessionSerializer.Save(_session);
+
+            _toolbar.Session = _session;
+            _toolbar.Invalidate();
+            _recentPanel.SetEditingId(_session.EditId);
+
+            Text = $"DevToy \u2014 {Path.GetFileName(filePath)}";
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"OpenFromList failed: {ex.Message}");
+            MessageBox.Show(this, $"Failed to open: {ex.Message}", "Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

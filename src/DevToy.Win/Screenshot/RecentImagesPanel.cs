@@ -23,11 +23,20 @@ class RecentImagesPanel : Panel
     private bool _collapsed;
     private string? _selectedFilePath;
     private Panel? _selectedItemPanel;
+    private string? _editingEditId;
 
     public event Action<string?>? SelectionChanged;
+    public event Action<string>? OpenRequested;
 
     public string? SelectedFilePath => _selectedFilePath;
     public bool IsCollapsed => _collapsed;
+
+    /// <summary>Set the EditId of the currently editing session to highlight it in the list.</summary>
+    public void SetEditingId(string? editId)
+    {
+        _editingEditId = editId;
+        Reload();
+    }
 
     public RecentImagesPanel(PopupTheme theme)
     {
@@ -122,29 +131,58 @@ class RecentImagesPanel : Panel
 
         foreach (var filePath in files)
         {
-            var item = CreateItem(filePath, y, innerW);
+            // Check if this file matches the currently editing session
+            bool isEditing = _editingEditId != null &&
+                Path.GetFileNameWithoutExtension(filePath)
+                    .Equals(_editingEditId, StringComparison.OrdinalIgnoreCase);
+
+            var item = CreateItem(filePath, y, innerW, isEditing);
             _scrollContent.Controls.Add(item);
             y += item.Height + ItemPad;
         }
     }
 
-    private Panel CreateItem(string filePath, int y, int innerW)
+    private Panel CreateItem(string filePath, int y, int innerW, bool isEditing)
     {
         string fileName = Path.GetFileNameWithoutExtension(filePath);
         if (fileName.Length > 20) fileName = fileName[..17] + "...";
 
+        int extraH = isEditing ? 16 : 0;
         var panel = new Panel
         {
             Location = new Point(4, y),
-            Size = new Size(innerW, ThumbHeight + 16),
-            BackColor = _theme.BgDark,
+            Size = new Size(innerW, ThumbHeight + 16 + extraH),
+            BackColor = isEditing
+                ? Color.FromArgb(20, _theme.Primary.R, _theme.Primary.G, _theme.Primary.B)
+                : _theme.BgDark,
             Cursor = Cursors.Hand,
         };
 
+        // Editing accent bar + label
+        if (isEditing)
+        {
+            panel.Controls.Add(new Panel
+            {
+                Location = new Point(0, 0),
+                Size = new Size(3, panel.Height),
+                BackColor = _theme.Primary,
+            });
+            panel.Controls.Add(new Label
+            {
+                Text = "\u25CF Editing",
+                Font = new Font("Segoe UI", 7f, FontStyle.Bold),
+                ForeColor = _theme.Primary,
+                AutoSize = true,
+                Location = new Point(8, 2),
+                BackColor = Color.Transparent,
+            });
+        }
+
+        int thumbTop = isEditing ? 16 : 2;
         var thumb = new PictureBox
         {
-            Location = new Point(2, 2),
-            Size = new Size(innerW - 4, ThumbHeight),
+            Location = new Point(isEditing ? 6 : 2, thumbTop),
+            Size = new Size(innerW - (isEditing ? 8 : 4), ThumbHeight),
             SizeMode = PictureBoxSizeMode.Zoom,
             BackColor = Color.FromArgb(35, 35, 35),
         };
@@ -169,32 +207,42 @@ class RecentImagesPanel : Panel
         var label = new Label
         {
             Text = fileName, Font = new Font("Segoe UI", 7f),
-            ForeColor = _theme.TextSecondary,
+            ForeColor = isEditing ? _theme.TextPrimary : _theme.TextSecondary,
             AutoSize = false, Size = new Size(innerW - 4, 14),
-            Location = new Point(2, ThumbHeight + 2),
+            Location = new Point(isEditing ? 6 : 2, thumbTop + ThumbHeight + 2),
             BackColor = Color.Transparent, TextAlign = ContentAlignment.MiddleLeft,
         };
         panel.Controls.Add(label);
 
+        var defaultBg = isEditing
+            ? Color.FromArgb(20, _theme.Primary.R, _theme.Primary.G, _theme.Primary.B)
+            : _theme.BgDark;
+
         var path = filePath;
-        void OnClick(object? s, EventArgs e) => SelectItem(path, panel);
+        void OnClick(object? s, EventArgs e) => SelectItem(path, panel, defaultBg);
+        void OnDblClick(object? s, EventArgs e) => OpenRequested?.Invoke(path);
         panel.Click += OnClick;
         thumb.Click += OnClick;
         label.Click += OnClick;
+        panel.DoubleClick += OnDblClick;
+        thumb.DoubleClick += OnDblClick;
+        label.DoubleClick += OnDblClick;
 
         panel.MouseEnter += (_, _) => { if (_selectedItemPanel != panel) panel.BackColor = _theme.PrimaryDim; };
-        panel.MouseLeave += (_, _) => { if (_selectedItemPanel != panel) panel.BackColor = _theme.BgDark; };
+        panel.MouseLeave += (_, _) => { if (_selectedItemPanel != panel) panel.BackColor = defaultBg; };
         thumb.MouseEnter += (_, _) => { if (_selectedItemPanel != panel) panel.BackColor = _theme.PrimaryDim; };
-        thumb.MouseLeave += (_, _) => { if (_selectedItemPanel != panel) panel.BackColor = _theme.BgDark; };
+        thumb.MouseLeave += (_, _) => { if (_selectedItemPanel != panel) panel.BackColor = defaultBg; };
 
         return panel;
     }
 
-    private void SelectItem(string filePath, Panel panel)
+    private Color _selectedDefaultBg;
+
+    private void SelectItem(string filePath, Panel panel, Color defaultBg)
     {
         if (_selectedFilePath == filePath)
         {
-            _selectedItemPanel!.BackColor = _theme.BgDark;
+            _selectedItemPanel!.BackColor = _selectedDefaultBg;
             _selectedFilePath = null;
             _selectedItemPanel = null;
             SelectionChanged?.Invoke(null);
@@ -202,11 +250,12 @@ class RecentImagesPanel : Panel
         }
 
         if (_selectedItemPanel != null)
-            _selectedItemPanel.BackColor = _theme.BgDark;
+            _selectedItemPanel.BackColor = _selectedDefaultBg;
 
         _selectedFilePath = filePath;
         _selectedItemPanel = panel;
-        panel.BackColor = Color.FromArgb(35, _theme.Primary.R, _theme.Primary.G, _theme.Primary.B);
+        _selectedDefaultBg = defaultBg;
+        panel.BackColor = Color.FromArgb(50, _theme.Primary.R, _theme.Primary.G, _theme.Primary.B);
         SelectionChanged?.Invoke(filePath);
     }
 }

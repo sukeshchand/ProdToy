@@ -10,9 +10,9 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <Version>1.0.95</Version>
-    <FileVersion>1.0.95.0</FileVersion>
-    <AssemblyVersion>1.0.95.0</AssemblyVersion>
+    <Version>1.0.97</Version>
+    <FileVersion>1.0.97.0</FileVersion>
+    <AssemblyVersion>1.0.97.0</AssemblyVersion>
     <Product>DevToy</Product>
     <Company>DevToy</Company>
     <Description>Developer utility toolkit for Windows</Description>
