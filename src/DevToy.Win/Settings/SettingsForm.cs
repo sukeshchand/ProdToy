@@ -339,7 +339,69 @@ class SettingsForm : Form
         claudePage.Controls.Add(statusLineCheck);
         claudePage.Controls.Add(statusLineHint);
         claudePage.Controls.Add(statusLineStatus);
-        cy += 60;
+        cy += 62;
+
+        // Status line item checkboxes
+        var slItems = new (string Label, string Setting, bool Default)[]
+        {
+            ("Model", "SlShowModel", true),
+            ("Directory", "SlShowDir", true),
+            ("Branch", "SlShowBranch", true),
+            ("Prompts", "SlShowPrompts", true),
+            ("Context %", "SlShowContext", true),
+            ("Duration", "SlShowDuration", true),
+            ("Mode", "SlShowMode", true),
+            ("Version", "SlShowVersion", true),
+            ("Edit Stats", "SlShowEditStats", true),
+        };
+
+        var slSettings = AppSettings.Load();
+        int colWidth = tabInner / 3;
+        for (int i = 0; i < slItems.Length; i++)
+        {
+            int col = i % 3;
+            int row = i / 3;
+            var item = slItems[i];
+
+            // Read current value via reflection
+            var prop = typeof(AppSettingsData).GetProperty(item.Setting);
+            bool isChecked = prop != null ? (bool)prop.GetValue(slSettings)! : item.Default;
+
+            var cb = new CheckBox
+            {
+                Text = item.Label,
+                Font = new Font("Segoe UI", 8.5f),
+                ForeColor = currentTheme.TextPrimary,
+                BackColor = Color.Transparent,
+                Checked = isChecked,
+                AutoSize = true,
+                Location = new Point(tp + col * colWidth, cy + row * 22),
+                Cursor = Cursors.Hand,
+            };
+            string settingName = item.Setting;
+            cb.CheckedChanged += (_, _) =>
+            {
+                var s = AppSettings.Load();
+                // Use reflection to set the property via with expression workaround
+                s = settingName switch
+                {
+                    "SlShowModel" => s with { SlShowModel = cb.Checked },
+                    "SlShowDir" => s with { SlShowDir = cb.Checked },
+                    "SlShowBranch" => s with { SlShowBranch = cb.Checked },
+                    "SlShowPrompts" => s with { SlShowPrompts = cb.Checked },
+                    "SlShowContext" => s with { SlShowContext = cb.Checked },
+                    "SlShowDuration" => s with { SlShowDuration = cb.Checked },
+                    "SlShowMode" => s with { SlShowMode = cb.Checked },
+                    "SlShowVersion" => s with { SlShowVersion = cb.Checked },
+                    "SlShowEditStats" => s with { SlShowEditStats = cb.Checked },
+                    _ => s,
+                };
+                AppSettings.Save(s);
+                ClaudeStatusLine.WriteConfig();
+            };
+            claudePage.Controls.Add(cb);
+        }
+        cy += (slItems.Length / 3 + 1) * 22 + 4;
 
         // =============================================
         // TAB 3: Advanced

@@ -9,6 +9,28 @@ $C_NONE   = "$ESC[38;5;109m"   # muted teal — no branch
 $C_WHITE  = "$ESC[38;5;231m"  # bright white — upgrade notice
 $C_RESET  = "$ESC[0m"
 
+# Read config for item visibility
+$cfg = @{
+    model = $true; dir = $true; branch = $true
+    prompts = $true; context = $true; duration = $true
+    mode = $true; version = $true; editStats = $true
+}
+$cfgPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "status-line-config.json"
+if (Test-Path $cfgPath) {
+    try {
+        $cfgData = Get-Content $cfgPath -Raw | ConvertFrom-Json
+        if ($null -ne $cfgData.model) { $cfg.model = [bool]$cfgData.model }
+        if ($null -ne $cfgData.dir) { $cfg.dir = [bool]$cfgData.dir }
+        if ($null -ne $cfgData.branch) { $cfg.branch = [bool]$cfgData.branch }
+        if ($null -ne $cfgData.prompts) { $cfg.prompts = [bool]$cfgData.prompts }
+        if ($null -ne $cfgData.context) { $cfg.context = [bool]$cfgData.context }
+        if ($null -ne $cfgData.duration) { $cfg.duration = [bool]$cfgData.duration }
+        if ($null -ne $cfgData.mode) { $cfg.mode = [bool]$cfgData.mode }
+        if ($null -ne $cfgData.version) { $cfg.version = [bool]$cfgData.version }
+        if ($null -ne $cfgData.editStats) { $cfg.editStats = [bool]$cfgData.editStats }
+    } catch {}
+}
+
 try {
     $jsonData = [Console]::In.ReadToEnd() | ConvertFrom-Json
 } catch {
@@ -23,7 +45,7 @@ $dir = if ($cwd) { Split-Path -Leaf $cwd } else { "?" }
 # Git branch
 $branch = ""
 $dirty = 0
-if ($cwd -and (Test-Path $cwd)) {
+if ($cfg.branch -and $cwd -and (Test-Path $cwd)) {
     Push-Location $cwd
     try {
         $branch = git branch --show-current 2>$null
@@ -42,7 +64,8 @@ $editEvents = [System.Collections.Generic.List[hashtable]]::new()
 $transcript = $jsonData.transcript_path
 $lineIdx = 0
 
-if ($transcript -and (Test-Path $transcript)) {
+$needTranscript = $cfg.prompts -or $cfg.mode -or $cfg.editStats
+if ($needTranscript -and $transcript -and (Test-Path $transcript)) {
     Get-Content $transcript | ForEach-Object {
         $line = $_
 
@@ -59,7 +82,7 @@ if ($transcript -and (Test-Path $transcript)) {
         }
 
         # Edit/Write tool calls
-        if ($line -match '"name"\s*:\s*"Edit"' -or $line -match '"name"\s*:\s*"Write"') {
+        if ($cfg.editStats -and ($line -match '"name"\s*:\s*"Edit"' -or $line -match '"name"\s*:\s*"Write"')) {
             try {
                 $obj = $line | ConvertFrom-Json
                 $content = $obj.message.content
@@ -95,21 +118,23 @@ if ($transcript -and (Test-Path $transcript)) {
     }
 }
 
-# Compute edit stats (excluding files that no longer exist)
+# Compute edit stats
 $totalAdded = 0; $totalDeleted = 0; $totalModified = 0; $totalFilePaths = @()
 $promptAdded = 0; $promptDeleted = 0; $promptModified = 0; $promptFilePaths = @()
-foreach ($ev in $editEvents) {
-    $absPath = if ([System.IO.Path]::IsPathRooted($ev.FilePath)) { $ev.FilePath } else { Join-Path $cwd $ev.FilePath }
-    if (-not (Test-Path $absPath)) { continue }
-    $totalAdded    += $ev.Added
-    $totalDeleted  += $ev.Deleted
-    $totalModified += $ev.Modified
-    $totalFilePaths += $ev.FilePath
-    if ($ev.LineIdx -gt $lastUserLineIdx) {
-        $promptAdded    += $ev.Added
-        $promptDeleted  += $ev.Deleted
-        $promptModified += $ev.Modified
-        $promptFilePaths += $ev.FilePath
+if ($cfg.editStats) {
+    foreach ($ev in $editEvents) {
+        $absPath = if ([System.IO.Path]::IsPathRooted($ev.FilePath)) { $ev.FilePath } else { Join-Path $cwd $ev.FilePath }
+        if (-not (Test-Path $absPath)) { continue }
+        $totalAdded    += $ev.Added
+        $totalDeleted  += $ev.Deleted
+        $totalModified += $ev.Modified
+        $totalFilePaths += $ev.FilePath
+        if ($ev.LineIdx -gt $lastUserLineIdx) {
+            $promptAdded    += $ev.Added
+            $promptDeleted  += $ev.Deleted
+            $promptModified += $ev.Modified
+            $promptFilePaths += $ev.FilePath
+        }
     }
 }
 $totalFileCount = @($totalFilePaths | Select-Object -Unique).Count
@@ -118,7 +143,7 @@ $promptFileCount = @($promptFilePaths | Select-Object -Unique).Count
 # Context window usage
 $ctx = ""
 $ctxPct = $jsonData.context_window.used_percentage
-if ($null -ne $ctxPct) {
+if ($cfg.context -and $null -ne $ctxPct) {
     $ctx = "ctx ${ctxPct}%"
 }
 $ctxColor = if ($null -eq $ctxPct) { $C_VALUE }
@@ -128,15 +153,17 @@ $ctxColor = if ($null -eq $ctxPct) { $C_VALUE }
 
 # Session duration
 $duration = ""
-$dur_ms = if ($jsonData.cost.total_duration_ms) { [long]$jsonData.cost.total_duration_ms } else { 0 }
-if ($dur_ms -gt 0) {
-    $mins = [math]::Floor($dur_ms / 60000)
-    if ($mins -ge 60) {
-        $h = [math]::Floor($mins / 60)
-        $m = $mins % 60
-        $duration = "${h}h${m}m"
-    } else {
-        $duration = "${mins}m"
+if ($cfg.duration) {
+    $dur_ms = if ($jsonData.cost.total_duration_ms) { [long]$jsonData.cost.total_duration_ms } else { 0 }
+    if ($dur_ms -gt 0) {
+        $mins = [math]::Floor($dur_ms / 60000)
+        if ($mins -ge 60) {
+            $h = [math]::Floor($mins / 60)
+            $m = $mins % 60
+            $duration = "${h}h${m}m"
+        } else {
+            $duration = "${mins}m"
+        }
     }
 }
 
@@ -153,17 +180,23 @@ function Format-EditStats($added, $deleted, $modified, $files) {
 
 # Row 1: environment
 $sep = "${C_SEP} | "
-$branchStr = if ($branch) { $branch + $(if ($dirty -gt 0) { " *${dirty}" } else { "" }) } else { "none" }
-$branchColor = if (-not $branch) {
-    $C_NONE
-} elseif ($branch -eq "main" -or $branch -eq "master") {
-    $C_RED
-} elseif ($branch.StartsWith("dev")) {
-    $C_YELLOW
-} else {
-    $C_VALUE
+$row1Parts = [System.Collections.Generic.List[string]]::new()
+if ($cfg.model) { $row1Parts.Add("${C_LABEL}Model: ${C_VALUE}${model}") }
+if ($cfg.dir) { $row1Parts.Add("${C_LABEL}Dir: ${C_VALUE}${dir}") }
+if ($cfg.branch) {
+    $branchStr = if ($branch) { $branch + $(if ($dirty -gt 0) { " *${dirty}" } else { "" }) } else { "none" }
+    $branchColor = if (-not $branch) {
+        $C_NONE
+    } elseif ($branch -eq "main" -or $branch -eq "master") {
+        $C_RED
+    } elseif ($branch.StartsWith("dev")) {
+        $C_YELLOW
+    } else {
+        $C_VALUE
+    }
+    $row1Parts.Add("${C_LABEL}Branch: ${branchColor}${branchStr}")
 }
-$row1 = "${C_LABEL}Model: ${C_VALUE}${model}${sep}${C_LABEL}Dir: ${C_VALUE}${dir}${sep}${C_LABEL}Branch: ${branchColor}${branchStr}"
+$row1 = $row1Parts -join $sep
 
 # Row 2: session stats + mode
 $permDisplay = switch ($permMode) {
@@ -172,71 +205,76 @@ $permDisplay = switch ($permMode) {
     "bypassPermissions"  { @{ label = "Bypass All"; color = $C_RED    } }
     default              { @{ label = $permMode;    color = $C_VALUE  } }
 }
-$row2 = "${C_LABEL}Prompts: ${C_VALUE}${prompts}"
-if ($ctx) { $row2 += "${sep}${C_LABEL}Context: ${ctxColor}${ctxPct}%" }
-if ($duration) { $row2 += "${sep}${C_LABEL}Duration: ${C_VALUE}${duration}" }
-$row2 += "${sep}${C_LABEL}Mode: $($permDisplay.color)$($permDisplay.label)"
 
-# Claude Code versions: running (from session JSON) vs installed (cached cli + npm lookup)
-$versionCacheFile = Join-Path $env:TEMP "claude-version-cache.json"
-$runningVersion = if ($jsonData.version) { $jsonData.version } else { "" }
-$installedVersion = ""
-$latestVersion = ""
+$row2Parts = [System.Collections.Generic.List[string]]::new()
+if ($cfg.prompts) { $row2Parts.Add("${C_LABEL}Prompts: ${C_VALUE}${prompts}") }
+if ($cfg.context -and $ctx) { $row2Parts.Add("${C_LABEL}Context: ${ctxColor}${ctxPct}%") }
+if ($cfg.duration -and $duration) { $row2Parts.Add("${C_LABEL}Duration: ${C_VALUE}${duration}") }
+if ($cfg.mode) { $row2Parts.Add("${C_LABEL}Mode: $($permDisplay.color)$($permDisplay.label)") }
 
-$cacheValid = $false
-if (Test-Path $versionCacheFile) {
-    try {
-        $cache = Get-Content $versionCacheFile -Raw | ConvertFrom-Json
-        $cacheAge = (Get-Date) - [datetime]$cache.timestamp
-        if ($cacheAge.TotalMinutes -lt 10) {
-            $installedVersion = $cache.installed
-            $latestVersion    = $cache.latest
-            $cacheValid = $true
+# Version info
+if ($cfg.version) {
+    $versionCacheFile = Join-Path $env:TEMP "claude-version-cache.json"
+    $runningVersion = if ($jsonData.version) { $jsonData.version } else { "" }
+    $installedVersion = ""
+    $latestVersion = ""
+
+    $cacheValid = $false
+    if (Test-Path $versionCacheFile) {
+        try {
+            $cache = Get-Content $versionCacheFile -Raw | ConvertFrom-Json
+            $cacheAge = (Get-Date) - [datetime]$cache.timestamp
+            if ($cacheAge.TotalMinutes -lt 10) {
+                $installedVersion = $cache.installed
+                $latestVersion    = $cache.latest
+                $cacheValid = $true
+            }
+        } catch {}
+    }
+
+    if (-not $cacheValid) {
+        try {
+            $installedVersion = (claude --version 2>$null).Trim() -replace '\(Claude Code\)', '' -replace '\s+', ' ' | ForEach-Object { $_.Trim() }
+        } catch {}
+        try {
+            $latestVersion = (npm view @anthropic-ai/claude-code@latest version 2>$null).Trim()
+        } catch {}
+        try {
+            @{ timestamp = (Get-Date -Format o); installed = $installedVersion; latest = $latestVersion } |
+                ConvertTo-Json | Set-Content $versionCacheFile -Encoding UTF8
+        } catch {}
+    }
+
+    if ($runningVersion) {
+        $verStr = "${C_LABEL}Running: ${C_VALUE}${runningVersion}"
+        if ($installedVersion -and $installedVersion -ne $runningVersion) {
+            $verStr += " ${C_WHITE}(new version v${installedVersion} available)"
+        } elseif ($latestVersion -and $latestVersion -ne $runningVersion) {
+            $verStr += " ${C_WHITE}(new version v${latestVersion} available)"
         }
-    } catch {}
-}
-
-if (-not $cacheValid) {
-    try {
-        $installedVersion = (claude --version 2>$null).Trim() -replace '\(Claude Code\)', '' -replace '\s+', ' ' | ForEach-Object { $_.Trim() }
-    } catch {}
-    try {
-        $latestVersion = (npm view @anthropic-ai/claude-code@latest version 2>$null).Trim()
-    } catch {}
-    try {
-        @{ timestamp = (Get-Date -Format o); installed = $installedVersion; latest = $latestVersion } |
-            ConvertTo-Json | Set-Content $versionCacheFile -Encoding UTF8
-    } catch {}
-}
-
-# Display: "Running: x.y.z" with upgrade hint if installed or latest differs
-if ($runningVersion) {
-    $row2 += "${sep}${C_LABEL}Running: ${C_VALUE}${runningVersion}"
-    if ($installedVersion -and $installedVersion -ne $runningVersion) {
-        $row2 += " ${C_WHITE}(new version v${installedVersion} available)"
-    } elseif ($latestVersion -and $latestVersion -ne $runningVersion) {
-        $row2 += " ${C_WHITE}(new version v${latestVersion} available)"
+        $row2Parts.Add($verStr)
+    } elseif ($installedVersion) {
+        $verStr = "${C_LABEL}Installed: ${C_VALUE}${installedVersion}"
+        if ($latestVersion -and $latestVersion -ne $installedVersion) {
+            $verStr += " ${C_WHITE}(new version v${latestVersion} available)"
+        }
+        $row2Parts.Add($verStr)
     }
-} elseif ($installedVersion) {
-    # Fallback if session JSON has no version: show installed + latest
-    $row2 += "${sep}${C_LABEL}Installed: ${C_VALUE}${installedVersion}"
-    if ($latestVersion -and $latestVersion -ne $installedVersion) {
-        $row2 += " ${C_WHITE}(new version v${latestVersion} available)"
-    }
-} else {
-    $row2 += "${sep}${C_LABEL}Ver: ${C_RED}fetch failed"
 }
+$row2 = $row2Parts -join $sep
 
 # Row 3: edit stats
 $row3 = ""
-if ($totalFileCount -gt 0) {
-    $row3 += "${C_LABEL}Session: $(Format-EditStats $totalAdded $totalDeleted $totalModified $totalFileCount)"
-}
-if ($promptFileCount -gt 0) {
-    if ($row3) { $row3 += $sep }
-    $row3 += "${C_LABEL}Last: $(Format-EditStats $promptAdded $promptDeleted $promptModified $promptFileCount)"
+if ($cfg.editStats) {
+    if ($totalFileCount -gt 0) {
+        $row3 += "${C_LABEL}Session: $(Format-EditStats $totalAdded $totalDeleted $totalModified $totalFileCount)"
+    }
+    if ($promptFileCount -gt 0) {
+        if ($row3) { $row3 += $sep }
+        $row3 += "${C_LABEL}Last: $(Format-EditStats $promptAdded $promptDeleted $promptModified $promptFileCount)"
+    }
 }
 
-Write-Host "${row1}${C_RESET}"
-Write-Host "${row2}${C_RESET}"
+if ($row1) { Write-Host "${row1}${C_RESET}" }
+if ($row2) { Write-Host "${row2}${C_RESET}" }
 if ($row3) { Write-Host "${row3}${C_RESET}" }

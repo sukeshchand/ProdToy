@@ -64,6 +64,9 @@ static class ClaudeStatusLine
 
             var options = new JsonSerializerOptions { WriteIndented = true };
             File.WriteAllText(settingsPath, root.ToJsonString(options), Encoding.UTF8);
+
+            // Write config file for script item visibility
+            WriteConfig();
         }
         catch (Exception ex)
         {
@@ -101,6 +104,38 @@ static class ClaudeStatusLine
         {
             Debug.WriteLine($"Failed to disable status line: {ex.Message}");
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Writes status-line-config.json next to the script with item visibility flags.
+    /// </summary>
+    public static void WriteConfig()
+    {
+        try
+        {
+            var settings = AppSettings.Load();
+            var config = new JsonObject
+            {
+                ["model"] = settings.SlShowModel,
+                ["dir"] = settings.SlShowDir,
+                ["branch"] = settings.SlShowBranch,
+                ["prompts"] = settings.SlShowPrompts,
+                ["context"] = settings.SlShowContext,
+                ["duration"] = settings.SlShowDuration,
+                ["mode"] = settings.SlShowMode,
+                ["version"] = settings.SlShowVersion,
+                ["editStats"] = settings.SlShowEditStats,
+            };
+
+            Directory.CreateDirectory(AppPaths.ScriptsDir);
+            string configPath = Path.Combine(AppPaths.ScriptsDir, "status-line-config.json");
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            File.WriteAllText(configPath, config.ToJsonString(options), Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to write status line config: {ex.Message}");
         }
     }
 
