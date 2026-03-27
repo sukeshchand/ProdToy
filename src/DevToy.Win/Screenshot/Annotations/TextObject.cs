@@ -13,7 +13,7 @@ class TextObject : AnnotationObject
 
     public override RectangleF GetBounds()
     {
-        using var font = CreateFont();
+        var font = GetFont();
         var size = MeasureText(font);
         return new RectangleF(Position.X - 2, Position.Y - 2, size.Width + 4, size.Height + 4);
     }
@@ -24,7 +24,7 @@ class TextObject : AnnotationObject
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-        using var font = CreateFont();
+        var font = GetFont();
         using var brush = CreateBrush();
 
         string displayText = Text;
@@ -73,10 +73,10 @@ class TextObject : AnnotationObject
         StrokeColor = StrokeColor, Opacity = Opacity, ZIndex = ZIndex,
     };
 
-    private Font CreateFont()
+    private Font GetFont()
     {
         var style = Bold ? FontStyle.Bold : FontStyle.Regular;
-        return new Font("Segoe UI", FontSize, style);
+        return FontPool.Get("Segoe UI", FontSize, style);
     }
 
     private SizeF MeasureText(Font font)

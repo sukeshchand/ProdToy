@@ -7,9 +7,21 @@ class PenStroke : AnnotationObject
 {
     public List<PointF> Points { get; set; } = new();
 
+    // Cached bounds to avoid O(n) recalculation on every call
+    private RectangleF? _cachedBounds;
+    private int _cachedPointCount;
+    private float _cachedThickness;
+
+    public void InvalidateBoundsCache() => _cachedBounds = null;
+
     public override RectangleF GetBounds()
     {
         if (Points.Count == 0) return RectangleF.Empty;
+
+        // Return cached if points/thickness haven't changed
+        if (_cachedBounds.HasValue && _cachedPointCount == Points.Count && Math.Abs(_cachedThickness - Thickness) < 0.01f)
+            return _cachedBounds.Value;
+
         float minX = float.MaxValue, minY = float.MaxValue;
         float maxX = float.MinValue, maxY = float.MinValue;
         foreach (var p in Points)
@@ -20,7 +32,10 @@ class PenStroke : AnnotationObject
             if (p.Y > maxY) maxY = p.Y;
         }
         float pad = Thickness / 2 + 2;
-        return new RectangleF(minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2);
+        _cachedBounds = new RectangleF(minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2);
+        _cachedPointCount = Points.Count;
+        _cachedThickness = Thickness;
+        return _cachedBounds.Value;
     }
 
     public override void Render(Graphics g)
@@ -34,6 +49,12 @@ class PenStroke : AnnotationObject
     public override bool HitTest(PointF point, float tolerance)
     {
         float tol = Math.Max(tolerance, Thickness / 2 + 4);
+
+        // Quick bounds check to skip expensive segment iteration
+        var bounds = GetBounds();
+        bounds.Inflate(tol, tol);
+        if (!bounds.Contains(point)) return false;
+
         for (int i = 1; i < Points.Count; i++)
         {
             if (DistanceToSegment(point, Points[i - 1], Points[i]) < tol)
@@ -46,6 +67,7 @@ class PenStroke : AnnotationObject
     {
         for (int i = 0; i < Points.Count; i++)
             Points[i] = new PointF(Points[i].X + dx, Points[i].Y + dy);
+        InvalidateBoundsCache();
     }
 
     public override AnnotationObject Clone()

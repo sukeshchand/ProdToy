@@ -41,12 +41,14 @@ class UndoRedoManager
         _undoStack.Push(action);
         _redoStack.Clear();
 
-        // Trim oldest if over capacity
+        // Trim oldest if over capacity — single pass via array
         if (_undoStack.Count > _maxHistory)
         {
-            var temp = new Stack<IEditorAction>(_undoStack.Reverse().Skip(1));
+            var items = _undoStack.ToArray(); // top-to-bottom order
             _undoStack.Clear();
-            foreach (var a in temp.Reverse()) _undoStack.Push(a);
+            // Push back all except the oldest (last element), bottom-to-top
+            for (int i = items.Length - 2; i >= 0; i--)
+                _undoStack.Push(items[i]);
         }
 
         StateChanged?.Invoke();

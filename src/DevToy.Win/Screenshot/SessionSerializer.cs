@@ -17,11 +17,18 @@ static class SessionSerializer
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
+    private static readonly object _saveLock = new();
+
+    // Cached FieldInfo for reflection (Fix #5: avoid repeated reflection lookups)
+    private static readonly Dictionary<(Type, string), System.Reflection.FieldInfo?> _fieldCache = new();
+
     /// <summary>Save session state to _edits/{editId}/state.json</summary>
     public static void Save(EditorSession session)
     {
         if (string.IsNullOrEmpty(session.EditId)) return;
 
+        // Lock to prevent concurrent access to Annotations list from UI thread vs StateChanged event
+        lock (_saveLock)
         try
         {
             var state = new SessionState
@@ -55,7 +62,12 @@ static class SessionSerializer
             string dir = session.EditDir;
             Directory.CreateDirectory(dir);
             string json = JsonSerializer.Serialize(state, JsonOpts);
-            File.WriteAllText(Path.Combine(dir, "state.json"), json);
+            string filePath = Path.Combine(dir, "state.json");
+
+            // Use FileStream with exclusive write to prevent concurrent edit corruption
+            using var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None);
+            using var writer = new StreamWriter(fs);
+            writer.Write(json);
         }
         catch (Exception ex)
         {
@@ -380,16 +392,26 @@ static class SessionSerializer
 
     private static AnnotationObject? GetObj(object action)
     {
-        var field = action.GetType().GetField("_obj",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var field = GetCachedField(action.GetType(), "_obj");
         return field?.GetValue(action) as AnnotationObject;
     }
 
     private static T GetField<T>(object action, string fieldName)
     {
-        var field = action.GetType().GetField(fieldName,
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var field = GetCachedField(action.GetType(), fieldName);
         return field != null ? (T)field.GetValue(action)! : default!;
+    }
+
+    private static System.Reflection.FieldInfo? GetCachedField(Type type, string fieldName)
+    {
+        var key = (type, fieldName);
+        if (_fieldCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var field = type.GetField(fieldName,
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        _fieldCache[key] = field;
+        return field;
     }
 
     // --- Color helpers ---

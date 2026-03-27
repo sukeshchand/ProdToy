@@ -7,8 +7,9 @@ namespace DevToy;
 /// An image layer dropped onto the canvas. Renders a bitmap at a position,
 /// selectable, movable, and resizable.
 /// </summary>
-class ImageObject : AnnotationObject
+class ImageObject : AnnotationObject, IDisposable
 {
+    private bool _disposed;
     public Bitmap Image { get; set; } = null!;
     public PointF Position { get; set; }
     public SizeF DisplaySize { get; set; }
@@ -89,5 +90,12 @@ class ImageObject : AnnotationObject
             Opacity = Opacity,
             ZIndex = ZIndex,
         };
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Image?.Dispose();
     }
 }

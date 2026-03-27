@@ -8,10 +8,24 @@ static class AlarmNotifier
     private static Form? _marshalForm;
     private static NotifyIcon? _trayIcon;
 
+    // Track snooze timers per alarm to prevent leaks and duplicates
+    private static readonly Dictionary<string, System.Threading.Timer> _snoozeTimers = new();
+    private static readonly object _snoozeLock = new();
+
     public static void Initialize(Form marshalForm, NotifyIcon trayIcon)
     {
         _marshalForm = marshalForm;
         _trayIcon = trayIcon;
+    }
+
+    public static void Cleanup()
+    {
+        lock (_snoozeLock)
+        {
+            foreach (var timer in _snoozeTimers.Values)
+                timer.Dispose();
+            _snoozeTimers.Clear();
+        }
     }
 
     public static void HandleAlarmTriggered(AlarmEntry alarm)
@@ -74,11 +88,7 @@ static class AlarmNotifier
                         Detail = $"Snoozed for {minutes} minutes",
                     });
 
-                    // Schedule re-trigger after snooze
-                    var snoozeTimer = new System.Threading.Timer(_ =>
-                    {
-                        _marshalForm?.Invoke(() => ShowAlarm(alarm));
-                    }, null, TimeSpan.FromMinutes(minutes), Timeout.InfiniteTimeSpan);
+                    ScheduleSnooze(alarm, minutes);
                 };
                 ringForm.Show();
 
@@ -118,6 +128,33 @@ static class AlarmNotifier
                 EventType = AlarmHistoryEventType.TriggerFailed,
                 Detail = ex.Message,
             });
+        }
+    }
+
+    private static void ScheduleSnooze(AlarmEntry alarm, int minutes)
+    {
+        lock (_snoozeLock)
+        {
+            // Cancel any existing snooze for this alarm
+            if (_snoozeTimers.TryGetValue(alarm.Id, out var existing))
+            {
+                existing.Dispose();
+                _snoozeTimers.Remove(alarm.Id);
+            }
+
+            var timer = new System.Threading.Timer(_ =>
+            {
+                // Remove from tracking
+                lock (_snoozeLock) { _snoozeTimers.Remove(alarm.Id); }
+
+                if (_marshalForm != null && !_marshalForm.IsDisposed)
+                {
+                    try { _marshalForm.Invoke(() => ShowAlarm(alarm)); }
+                    catch (Exception ex) { Debug.WriteLine($"Snooze re-trigger failed: {ex.Message}"); }
+                }
+            }, null, TimeSpan.FromMinutes(minutes), Timeout.InfiniteTimeSpan);
+
+            _snoozeTimers[alarm.Id] = timer;
         }
     }
 }

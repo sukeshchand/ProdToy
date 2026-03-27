@@ -7,15 +7,35 @@ static class AlarmStore
 {
     private static readonly string _alarmsFile = Path.Combine(AppPaths.AlarmsDir, "alarms.json");
     private static readonly string _historyFile = Path.Combine(AppPaths.AlarmsDir, "alarm-history.json");
-    private static readonly object _lock = new();
+    private static readonly object _alarmLock = new();
+    private static readonly object _historyLock = new();
     private static readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = true };
 
     private static List<AlarmEntry>? _cachedAlarms;
     private static List<AlarmHistoryEntry>? _cachedHistory;
 
+    // History write batching: buffer entries in memory, flush periodically
+    private static readonly List<AlarmHistoryEntry> _historyBuffer = new();
+    private static System.Threading.Timer? _historyFlushTimer;
+
+    public static void StartHistoryFlush()
+    {
+        _historyFlushTimer = new System.Threading.Timer(_ => FlushHistory(), null,
+            TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
+    }
+
+    public static void StopHistoryFlush()
+    {
+        _historyFlushTimer?.Dispose();
+        _historyFlushTimer = null;
+        FlushHistory(); // Final flush on shutdown
+    }
+
+    // --- Alarms ---
+
     public static List<AlarmEntry> LoadAlarms()
     {
-        lock (_lock)
+        lock (_alarmLock)
         {
             if (_cachedAlarms != null) return _cachedAlarms;
             try
@@ -38,19 +58,21 @@ static class AlarmStore
 
     public static void SaveAlarms(List<AlarmEntry> alarms)
     {
-        lock (_lock)
+        string json;
+        lock (_alarmLock)
         {
             _cachedAlarms = alarms;
-            try
-            {
-                Directory.CreateDirectory(AppPaths.AlarmsDir);
-                var json = JsonSerializer.Serialize(alarms, _jsonOpts);
-                File.WriteAllText(_alarmsFile, json);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Failed to save alarms: {ex.Message}");
-            }
+            json = JsonSerializer.Serialize(alarms, _jsonOpts);
+        }
+        // Write outside lock to reduce lock duration
+        try
+        {
+            Directory.CreateDirectory(AppPaths.AlarmsDir);
+            File.WriteAllText(_alarmsFile, json);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to save alarms: {ex.Message}");
         }
     }
 
@@ -124,11 +146,8 @@ static class AlarmStore
                 UpdatedAt = DateTime.Now,
             };
 
-            // Handle one-time and fire-and-forget
             if (alarm.Schedule.Type == AlarmScheduleType.Once)
-            {
                 alarms[idx] = alarms[idx] with { Status = AlarmStatus.Completed };
-            }
 
             if (alarm.FireAndForget)
             {
@@ -146,27 +165,38 @@ static class AlarmStore
         }
     }
 
-    // --- History ---
+    // --- History (batched writes) ---
 
     public static List<AlarmHistoryEntry> LoadHistory()
     {
-        lock (_lock)
+        lock (_historyLock)
         {
-            if (_cachedHistory != null) return _cachedHistory;
+            if (_cachedHistory != null)
+            {
+                // Include any buffered entries not yet flushed
+                if (_historyBuffer.Count > 0)
+                    return _cachedHistory.Concat(_historyBuffer).ToList();
+                return _cachedHistory;
+            }
             try
             {
                 if (File.Exists(_historyFile))
                 {
                     var json = File.ReadAllText(_historyFile);
                     _cachedHistory = JsonSerializer.Deserialize<List<AlarmHistoryEntry>>(json) ?? new();
-                    return _cachedHistory;
+                }
+                else
+                {
+                    _cachedHistory = new();
                 }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Failed to load alarm history: {ex.Message}");
+                _cachedHistory = new();
             }
-            _cachedHistory = new();
+            if (_historyBuffer.Count > 0)
+                return _cachedHistory.Concat(_historyBuffer).ToList();
             return _cachedHistory;
         }
     }
@@ -178,35 +208,78 @@ static class AlarmStore
 
     public static void AddHistoryEntry(AlarmHistoryEntry entry)
     {
-        lock (_lock)
+        lock (_historyLock)
         {
-            var history = new List<AlarmHistoryEntry>(LoadHistory()) { entry };
+            _historyBuffer.Add(entry);
+        }
+    }
+
+    private static void FlushHistory()
+    {
+        List<AlarmHistoryEntry> toFlush;
+        lock (_historyLock)
+        {
+            if (_historyBuffer.Count == 0) return;
+            toFlush = new List<AlarmHistoryEntry>(_historyBuffer);
+            _historyBuffer.Clear();
+        }
+
+        try
+        {
+            // Load existing from cache or disk
+            List<AlarmHistoryEntry> history;
+            lock (_historyLock)
+            {
+                if (_cachedHistory != null)
+                    history = new List<AlarmHistoryEntry>(_cachedHistory);
+                else if (File.Exists(_historyFile))
+                {
+                    var json = File.ReadAllText(_historyFile);
+                    history = JsonSerializer.Deserialize<List<AlarmHistoryEntry>>(json) ?? new();
+                }
+                else
+                {
+                    history = new();
+                }
+            }
+
+            history.AddRange(toFlush);
 
             // Trim to max entries
             int max = AppSettings.Load().AlarmHistoryMaxEntries;
             if (history.Count > max)
                 history = history.Skip(history.Count - max).ToList();
 
-            _cachedHistory = history;
-            try
+            // Write to disk outside lock
+            var jsonOut = JsonSerializer.Serialize(history, _jsonOpts);
+            Directory.CreateDirectory(AppPaths.AlarmsDir);
+            File.WriteAllText(_historyFile, jsonOut);
+
+            // Update cache
+            lock (_historyLock)
             {
-                Directory.CreateDirectory(AppPaths.AlarmsDir);
-                var json = JsonSerializer.Serialize(history, _jsonOpts);
-                File.WriteAllText(_historyFile, json);
+                _cachedHistory = history;
             }
-            catch (Exception ex)
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to flush alarm history: {ex.Message}");
+            // Put entries back in buffer to retry next flush
+            lock (_historyLock)
             {
-                Debug.WriteLine($"Failed to save alarm history: {ex.Message}");
+                _historyBuffer.InsertRange(0, toFlush);
             }
         }
     }
 
+    public static void InvalidateAlarms()
+    {
+        lock (_alarmLock) { _cachedAlarms = null; }
+    }
+
     public static void Invalidate()
     {
-        lock (_lock)
-        {
-            _cachedAlarms = null;
-            _cachedHistory = null;
-        }
+        lock (_alarmLock) { _cachedAlarms = null; }
+        lock (_historyLock) { _cachedHistory = null; }
     }
 }

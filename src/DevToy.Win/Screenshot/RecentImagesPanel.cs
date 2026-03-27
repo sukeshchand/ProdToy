@@ -113,11 +113,13 @@ class RecentImagesPanel : Panel
         {
             string dir = AppPaths.ScreenshotsDir;
             if (!Directory.Exists(dir)) return;
-            files = Directory.GetFiles(dir, "*.png")
-                .Concat(Directory.GetFiles(dir, "*.jpg"))
-                .Concat(Directory.GetFiles(dir, "*.bmp"))
-                .OrderByDescending(File.GetCreationTime)
+            var dirInfo = new DirectoryInfo(dir);
+            files = dirInfo.GetFiles("*.png")
+                .Concat(dirInfo.GetFiles("*.jpg"))
+                .Concat(dirInfo.GetFiles("*.bmp"))
+                .OrderByDescending(f => f.CreationTime)
                 .Take(MaxItems)
+                .Select(f => f.FullName)
                 .ToArray();
         }
         catch (Exception ex)

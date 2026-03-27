@@ -166,22 +166,23 @@ class EllipseObject : ShapeObject
     public override bool HitTest(PointF point, float tolerance)
     {
         var rect = GetShapeRect();
+        using var path = new GraphicsPath();
         if (Filled)
         {
-            using var path = new GraphicsPath();
             path.AddEllipse(rect);
             return path.IsVisible(point);
         }
+        // Check outer boundary
         rect.Inflate(tolerance, tolerance);
-        using var outer = new GraphicsPath();
-        outer.AddEllipse(rect);
-        if (!outer.IsVisible(point)) return false;
+        path.AddEllipse(rect);
+        if (!path.IsVisible(point)) return false;
+        // Check inner boundary
         var inner = GetShapeRect();
         inner.Inflate(-tolerance, -tolerance);
         if (inner.Width <= 0 || inner.Height <= 0) return true;
-        using var innerPath = new GraphicsPath();
-        innerPath.AddEllipse(inner);
-        return !innerPath.IsVisible(point);
+        path.Reset();
+        path.AddEllipse(inner);
+        return !path.IsVisible(point);
     }
 
     public override AnnotationObject Clone() => new EllipseObject

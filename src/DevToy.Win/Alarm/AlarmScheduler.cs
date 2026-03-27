@@ -7,13 +7,16 @@ static class AlarmScheduler
     private static System.Threading.Timer? _timer;
     private static readonly HashSet<string> _firedKeys = new();
     private static readonly object _lock = new();
+    private static bool _missedCheckDone;
+    private static int _tickCount;
 
     public static event Action<AlarmEntry>? AlarmTriggered;
 
     public static void Start()
     {
         Stop();
-        // Initial delay 5 seconds, then tick every 30 seconds
+        _missedCheckDone = false;
+        _tickCount = 0;
         _timer = new System.Threading.Timer(_ => Tick(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30));
         Debug.WriteLine("AlarmScheduler started");
     }
@@ -28,7 +31,8 @@ static class AlarmScheduler
 
     public static void Refresh()
     {
-        AlarmStore.Invalidate();
+        // Only invalidate alarm cache, not history — the scheduler only reads alarms
+        AlarmStore.InvalidateAlarms();
     }
 
     public static void TestTrigger(AlarmEntry alarm)
@@ -42,6 +46,26 @@ static class AlarmScheduler
         {
             var now = DateTime.Now;
             var alarms = AlarmStore.LoadAlarms();
+
+            // Early exit: no alarms at all
+            if (alarms.Count == 0)
+            {
+                if (!_missedCheckDone) _missedCheckDone = true;
+                return;
+            }
+
+            // Early exit: no active alarms
+            bool hasActive = false;
+            foreach (var alarm in alarms)
+            {
+                if (alarm.Status == AlarmStatus.Active) { hasActive = true; break; }
+            }
+
+            if (!hasActive)
+            {
+                if (!_missedCheckDone) _missedCheckDone = true;
+                return;
+            }
 
             foreach (var alarm in alarms)
             {
@@ -83,11 +107,13 @@ static class AlarmScheduler
                 }
             }
 
-            // Check for missed alarms on startup (grace period)
+            // Check for missed alarms only once on startup
             CheckMissedAlarms(now, alarms);
 
-            // Prune old fired keys (older than 24h)
-            PruneFiredKeys(now);
+            // Prune fired keys every ~5 minutes (10 ticks) instead of every tick
+            _tickCount++;
+            if (_tickCount % 10 == 0)
+                PruneFiredKeys(now);
         }
         catch (Exception ex)
         {
@@ -100,9 +126,6 @@ static class AlarmScheduler
         var time = alarm.Schedule.GetTimeOfDay();
         var nowTime = now.TimeOfDay;
 
-        // Must match within same minute
-        bool timeMatch = nowTime.Hours == time.Hours && nowTime.Minutes == time.Minutes;
-
         // For interval-based, check differently
         if (alarm.Schedule.Type == AlarmScheduleType.Interval)
         {
@@ -110,11 +133,13 @@ static class AlarmScheduler
             {
                 if (alarm.LastTriggeredAt is DateTime last)
                     return (now - last).TotalMinutes >= mins;
-                return true; // First trigger
+                return true;
             }
             return false;
         }
 
+        // Must match within same minute
+        bool timeMatch = nowTime.Hours == time.Hours && nowTime.Minutes == time.Minutes;
         if (!timeMatch) return false;
 
         // Check end date
@@ -136,8 +161,6 @@ static class AlarmScheduler
         };
     }
 
-    private static bool _missedCheckDone;
-
     private static void CheckMissedAlarms(DateTime now, List<AlarmEntry> alarms)
     {
         if (_missedCheckDone) return;
@@ -151,15 +174,10 @@ static class AlarmScheduler
             if (alarm.Status != AlarmStatus.Active) continue;
             if (alarm.Schedule.Type == AlarmScheduleType.Interval) continue;
 
-            var nextTrigger = alarm.GetNextTrigger();
-            if (nextTrigger == null) continue;
-
-            // Check if alarm should have fired recently (within grace period before now)
             var time = alarm.Schedule.GetTimeOfDay();
             var scheduledToday = now.Date + time;
             if (scheduledToday < now && (now - scheduledToday).TotalMinutes <= graceMinutes)
             {
-                // Check it wasn't already fired
                 var key = $"{alarm.Id}|{scheduledToday:yyyy-MM-dd HH:mm}";
                 bool isNew;
                 lock (_lock) { isNew = _firedKeys.Add(key); }
@@ -186,14 +204,12 @@ static class AlarmScheduler
     {
         lock (_lock)
         {
-            var stale = _firedKeys.Where(k =>
+            if (_firedKeys.Count == 0) return;
+            _firedKeys.RemoveWhere(k =>
             {
-                var parts = k.Split('|');
-                return parts.Length == 2 && DateTime.TryParse(parts[1], out var dt) && (now - dt).TotalHours > 24;
-            }).ToList();
-
-            foreach (var key in stale)
-                _firedKeys.Remove(key);
+                var sep = k.LastIndexOf('|');
+                return sep > 0 && DateTime.TryParse(k[(sep + 1)..], out var dt) && (now - dt).TotalHours > 24;
+            });
         }
     }
 }

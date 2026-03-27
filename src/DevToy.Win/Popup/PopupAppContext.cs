@@ -65,6 +65,7 @@ class PopupAppContext : ApplicationContext
         {
             AlarmNotifier.Initialize(_popupForm, _trayIcon);
             AlarmScheduler.AlarmTriggered += AlarmNotifier.HandleAlarmTriggered;
+            AlarmStore.StartHistoryFlush();
             AlarmScheduler.Start();
         }
     }
@@ -286,6 +287,8 @@ class PopupAppContext : ApplicationContext
         _cts.Cancel();
         UpdateChecker.Stop();
         AlarmScheduler.Stop();
+        AlarmStore.StopHistoryFlush();
+        AlarmNotifier.Cleanup();
         _globalHotkey.Dispose();
         _alarmForm?.Close();
         _settingsForm?.Close();
