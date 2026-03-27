@@ -423,7 +423,7 @@ if ($inputJson) {{
         if ($payload.hook_event_name -eq ""UserPromptSubmit"") {{
             # Save question to history via ProdToy and exit
             if ($payload.prompt) {{
-                $qFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ""devtoy_question.txt"")
+                $qFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ""prodtoy_question.txt"")
                 [System.IO.File]::WriteAllText($qFile, $payload.prompt, [System.Text.Encoding]::UTF8)
                 $qArgs = @(""--save-question"", ""`""$qFile`"""")
                 if ($sessionId) {{ $qArgs += ""--session-id"", $sessionId }}
@@ -450,7 +450,7 @@ if ($inputJson) {{
     catch {{ }}
 }}
 
-$msgFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ""devtoy_msg.txt"")
+$msgFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ""prodtoy_msg.txt"")
 [System.IO.File]::WriteAllText($msgFile, $message, [System.Text.Encoding]::UTF8)
 
 $argList = @(""--title"", ""`""$title`"""", ""--message-file"", ""`""$msgFile`"""", ""--type"", $type)

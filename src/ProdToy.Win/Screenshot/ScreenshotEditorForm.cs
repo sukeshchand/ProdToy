@@ -205,20 +205,26 @@ class ScreenshotEditorForm : Form
         if (e.Control && e.KeyCode == Keys.C) { DoCopy(); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.Z) { _session.UndoRedo.Undo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.Y) { _session.UndoRedo.Redo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); e.Handled = true; return; }
-        if (e.KeyCode == Keys.Delete) { _session.DeleteSelected(); _canvas.Invalidate(); e.Handled = true; return; }
-        if (e.KeyCode == Keys.Escape) { Close(); e.Handled = true; return; }
+        // Skip Delete/Escape and single-key shortcuts while editing text
+        bool isEditingText = _session.Annotations.Any(a => a is TextObject { IsEditing: true });
 
-        if (!e.Control && !e.Alt)
+        if (e.KeyCode == Keys.Delete && !isEditingText) { _session.DeleteSelected(); _canvas.Invalidate(); e.Handled = true; return; }
+        if (e.KeyCode == Keys.Escape)
+        {
+            if (isEditingText) { _canvas.CommitTextEdit(); _canvas.Invalidate(); e.Handled = true; return; }
+            Close(); e.Handled = true; return;
+        }
+
+        if (!e.Control && !e.Alt && !isEditingText)
         {
             AnnotationTool? tool = e.KeyCode switch
             {
                 Keys.V => AnnotationTool.Select, Keys.P => AnnotationTool.Pen,
                 Keys.M => AnnotationTool.Marker, Keys.L => AnnotationTool.Line,
                 Keys.A => AnnotationTool.Arrow, Keys.R => AnnotationTool.Rectangle,
-                Keys.E => AnnotationTool.Ellipse, _ => null,
+                Keys.E => AnnotationTool.Ellipse, Keys.T => AnnotationTool.Text,
+                _ => null,
             };
-            if (e.KeyCode == Keys.T && _session.Annotations.All(a => a is not TextObject { IsEditing: true }))
-                tool = AnnotationTool.Text;
             if (e.KeyCode == Keys.B)
             {
                 _session.BorderEnabled = !_session.BorderEnabled;

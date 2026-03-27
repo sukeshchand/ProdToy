@@ -79,7 +79,7 @@ static class Uninstaller
             // Self-delete the batch script
             batLines.AppendLine("del /f /q \"%~f0\" >nul 2>&1");
 
-            cleanupBatPath = Path.Combine(Path.GetTempPath(), "devtoy_uninstall.cmd");
+            cleanupBatPath = Path.Combine(Path.GetTempPath(), "prodtoy_uninstall.cmd");
             File.WriteAllText(cleanupBatPath, batLines.ToString(), Encoding.ASCII);
 
             log.AppendLine();
