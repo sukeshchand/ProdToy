@@ -318,6 +318,28 @@ class ScreenshotCanvas : Control
         }
     }
 
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        if (_session == null || e.Button != MouseButtons.Left) { base.OnMouseDoubleClick(e); return; }
+        var pt = new PointF(e.X, e.Y);
+
+        // Double-click on a TextObject in Select mode → re-enter text editing
+        if (_session.CurrentTool == AnnotationTool.Select)
+        {
+            for (int i = _session.Annotations.Count - 1; i >= 0; i--)
+            {
+                if (_session.Annotations[i] is TextObject txt && txt.HitTest(pt, 6f))
+                {
+                    _isMoving = false;
+                    StartTextEdit(txt);
+                    Invalidate();
+                    return;
+                }
+            }
+        }
+        base.OnMouseDoubleClick(e);
+    }
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         if (_session == null) return;
