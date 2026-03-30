@@ -95,26 +95,8 @@ class PopupAppContext : ApplicationContext
         {
             // Open the editor instead of saving immediately
             var editor = new ScreenshotEditorForm(bitmap);
-            editor.ImageSaved += filePath =>
-            {
-                _popupForm.Invoke(() =>
-                {
-                    _popupForm.ShowPopup(
-                        "Screenshot Saved",
-                        $"Saved to:\n`{filePath}`",
-                        NotificationType.Success);
-                });
-            };
-            editor.ImageCopied += () =>
-            {
-                _popupForm.Invoke(() =>
-                {
-                    _popupForm.ShowPopup(
-                        "Screenshot Copied",
-                        "Screenshot copied to clipboard.",
-                        NotificationType.Success);
-                });
-            };
+            editor.ImageSaved += _ => { };
+            editor.ImageCopied += () => { };
             editor.Show();
         };
         overlay.Show();
@@ -145,13 +127,7 @@ class PopupAppContext : ApplicationContext
             }
 
             var editor = new ScreenshotEditorForm(image);
-            editor.ImageSaved += filePath =>
-            {
-                _popupForm.Invoke(() =>
-                {
-                    _popupForm.ShowPopup("Screenshot Saved", $"Saved to:\n`{filePath}`", NotificationType.Success);
-                });
-            };
+            editor.ImageSaved += _ => { };
             editor.Show();
         }
         catch (Exception ex)
