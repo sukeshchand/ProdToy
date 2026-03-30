@@ -336,6 +336,7 @@ class ScreenshotCanvas : Control
             case AnnotationTool.Arrow:
             case AnnotationTool.Rectangle:
             case AnnotationTool.Ellipse:
+            case AnnotationTool.MaskBox:
                 StartShapeDraw(pt);
                 break;
             case AnnotationTool.Text:
@@ -712,6 +713,7 @@ class ScreenshotCanvas : Control
             AnnotationTool.Arrow => new ArrowObject(),
             AnnotationTool.Rectangle => new RectangleObject(),
             AnnotationTool.Ellipse => new EllipseObject(),
+            AnnotationTool.MaskBox => new MaskBoxObject(),
             _ => new LineObject(),
         };
         shape.Start = pt;

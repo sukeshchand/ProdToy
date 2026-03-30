@@ -193,6 +193,10 @@ static class SessionSerializer
                 data.StartX = arr.Start.X; data.StartY = arr.Start.Y;
                 data.EndX = arr.End.X; data.EndY = arr.End.Y;
                 break;
+            case MaskBoxObject mask:
+                data.StartX = mask.Start.X; data.StartY = mask.Start.Y;
+                data.EndX = mask.End.X; data.EndY = mask.End.Y;
+                break;
             case LineObject line:
                 data.StartX = line.Start.X; data.StartY = line.Start.Y;
                 data.EndX = line.End.X; data.EndY = line.End.Y;
@@ -213,6 +217,11 @@ static class SessionSerializer
             "MarkerStroke" => new MarkerStroke
             {
                 Points = data.Points?.Select(p => new PointF(p[0], p[1])).ToList() ?? new(),
+            },
+            "MaskBoxObject" => new MaskBoxObject
+            {
+                Start = new PointF(data.StartX, data.StartY),
+                End = new PointF(data.EndX, data.EndY),
             },
             "LineObject" => new LineObject
             {

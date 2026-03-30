@@ -191,3 +191,26 @@ class EllipseObject : ShapeObject
         Thickness = Thickness, Opacity = Opacity, ZIndex = ZIndex, Filled = Filled,
     };
 }
+
+class MaskBoxObject : ShapeObject
+{
+    public override void Render(Graphics g)
+    {
+        var rect = GetShapeRect();
+        using var brush = new SolidBrush(StrokeColor);
+        g.FillRectangle(brush, rect);
+    }
+
+    public override bool HitTest(PointF point, float tolerance)
+    {
+        var rect = GetShapeRect();
+        rect.Inflate(tolerance, tolerance);
+        return rect.Contains(point);
+    }
+
+    public override AnnotationObject Clone() => new MaskBoxObject
+    {
+        Start = Start, End = End, StrokeColor = StrokeColor,
+        Thickness = Thickness, Opacity = Opacity, ZIndex = ZIndex,
+    };
+}

@@ -14,6 +14,7 @@ enum AnnotationTool
     Ellipse,
     Text,
     Eraser,
+    MaskBox,
 }
 
 abstract class AnnotationObject

@@ -69,6 +69,7 @@ class ScreenshotToolbar : Control
         AddButton("rect", "\u25A1", "Rectangle (R)", () => ToolSelected?.Invoke(AnnotationTool.Rectangle));
         AddButton("ellipse", "\u25CB", "Ellipse (E)", () => ToolSelected?.Invoke(AnnotationTool.Ellipse));
         AddButton("text", "T", "Text (T)", () => ToolSelected?.Invoke(AnnotationTool.Text));
+        AddButton("mask", "\u2588", "Mask Box (K)", () => ToolSelected?.Invoke(AnnotationTool.MaskBox));
         AddButton("eraser", "\u25D5", "Eraser (X)", () => ToolSelected?.Invoke(AnnotationTool.Eraser));
         AddSeparator();
 
@@ -297,6 +298,7 @@ class ScreenshotToolbar : Control
             ["rect"] = AnnotationTool.Rectangle,
             ["ellipse"] = AnnotationTool.Ellipse,
             ["text"] = AnnotationTool.Text,
+            ["mask"] = AnnotationTool.MaskBox,
             ["eraser"] = AnnotationTool.Eraser,
         };
 
