@@ -247,3 +247,52 @@ class CanvasResizeAction : IEditorAction
                 obj.Move(-_shiftX, -_shiftY);
     }
 }
+
+class BitmapEraseAction : IEditorAction
+{
+    private readonly System.Drawing.Bitmap _targetBitmap;
+    private readonly System.Drawing.Rectangle _affectedRect;
+    private readonly System.Drawing.Bitmap _beforeRegion;
+    private System.Drawing.Bitmap? _afterRegion;
+    public string Description => "Erase bitmap";
+
+    public BitmapEraseAction(System.Drawing.Bitmap targetBitmap, System.Drawing.Bitmap beforeFullSnapshot, System.Drawing.Rectangle affectedRect)
+    {
+        _targetBitmap = targetBitmap;
+
+        // Clamp to bitmap bounds
+        int x = Math.Max(0, affectedRect.X);
+        int y = Math.Max(0, affectedRect.Y);
+        int right = Math.Min(targetBitmap.Width, affectedRect.Right);
+        int bottom = Math.Min(targetBitmap.Height, affectedRect.Bottom);
+        _affectedRect = new System.Drawing.Rectangle(x, y, Math.Max(1, right - x), Math.Max(1, bottom - y));
+
+        // Extract the affected region from the before-snapshot
+        _beforeRegion = beforeFullSnapshot.Clone(_affectedRect, beforeFullSnapshot.PixelFormat);
+        beforeFullSnapshot.Dispose();
+    }
+
+    public void CaptureAfterState()
+    {
+        if (_affectedRect.Width > 0 && _affectedRect.Height > 0)
+            _afterRegion = _targetBitmap.Clone(_affectedRect, _targetBitmap.PixelFormat);
+    }
+
+    public void Execute()
+    {
+        if (_afterRegion != null && _affectedRect.Width > 0 && _affectedRect.Height > 0)
+        {
+            using var g = System.Drawing.Graphics.FromImage(_targetBitmap);
+            g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+            g.DrawImage(_afterRegion, _affectedRect.X, _affectedRect.Y);
+        }
+    }
+
+    public void Undo()
+    {
+        if (_affectedRect.Width <= 0 || _affectedRect.Height <= 0) return;
+        using var g = System.Drawing.Graphics.FromImage(_targetBitmap);
+        g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+        g.DrawImage(_beforeRegion, _affectedRect.X, _affectedRect.Y);
+    }
+}

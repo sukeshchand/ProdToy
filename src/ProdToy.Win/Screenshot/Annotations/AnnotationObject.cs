@@ -13,6 +13,7 @@ enum AnnotationTool
     Rectangle,
     Ellipse,
     Text,
+    Eraser,
 }
 
 abstract class AnnotationObject

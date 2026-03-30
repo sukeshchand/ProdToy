@@ -69,6 +69,7 @@ class ScreenshotToolbar : Control
         AddButton("rect", "\u25A1", "Rectangle (R)", () => ToolSelected?.Invoke(AnnotationTool.Rectangle));
         AddButton("ellipse", "\u25CB", "Ellipse (E)", () => ToolSelected?.Invoke(AnnotationTool.Ellipse));
         AddButton("text", "T", "Text (T)", () => ToolSelected?.Invoke(AnnotationTool.Text));
+        AddButton("eraser", "\u25D5", "Eraser (X)", () => ToolSelected?.Invoke(AnnotationTool.Eraser));
         AddSeparator();
 
         // Undo/Redo
@@ -296,6 +297,7 @@ class ScreenshotToolbar : Control
             ["rect"] = AnnotationTool.Rectangle,
             ["ellipse"] = AnnotationTool.Ellipse,
             ["text"] = AnnotationTool.Text,
+            ["eraser"] = AnnotationTool.Eraser,
         };
 
         public ToolbarButton(string id, string icon, string tooltip, Action onClick)

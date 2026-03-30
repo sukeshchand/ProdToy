@@ -223,6 +223,7 @@ class ScreenshotEditorForm : Form
                 Keys.M => AnnotationTool.Marker, Keys.L => AnnotationTool.Line,
                 Keys.A => AnnotationTool.Arrow, Keys.R => AnnotationTool.Rectangle,
                 Keys.E => AnnotationTool.Ellipse, Keys.T => AnnotationTool.Text,
+                Keys.X => AnnotationTool.Eraser,
                 _ => null,
             };
             if (e.KeyCode == Keys.B)

@@ -28,6 +28,15 @@ class ScreenshotCanvas : Control
     private PointF _regionEnd;
     private RectangleF? _selectedRegion;
 
+    // Eraser state
+    private bool _isErasing;
+    private Bitmap? _eraserTarget;
+    private PointF _eraserTargetOffset;
+    private SizeF _eraserTargetScale;
+    private readonly List<PointF> _eraserPoints = new();
+    private PointF _lastEraserPoint;
+    private Bitmap? _eraserBeforeSnapshot;
+
     public event Action? CanvasChanged;
     public event Action? SelectionChanged;
 
@@ -315,6 +324,9 @@ class ScreenshotCanvas : Control
             case AnnotationTool.Text:
                 HandleTextClick(pt);
                 break;
+            case AnnotationTool.Eraser:
+                StartErase(pt);
+                break;
         }
     }
 
@@ -348,6 +360,13 @@ class ScreenshotCanvas : Control
         if (_isSelectingRegion)
         {
             _regionEnd = pt;
+            Invalidate();
+            return;
+        }
+
+        if (_isErasing && _eraserTarget != null)
+        {
+            ApplyErasePoint(pt);
             Invalidate();
             return;
         }
@@ -401,6 +420,12 @@ class ScreenshotCanvas : Control
     protected override void OnMouseUp(MouseEventArgs e)
     {
         if (_session == null || e.Button != MouseButtons.Left) return;
+
+        if (_isErasing)
+        {
+            FinishErase();
+            return;
+        }
 
         if (_isSelectingRegion)
         {
@@ -692,6 +717,144 @@ class ScreenshotCanvas : Control
 
         _drawingObject = null;
         Invalidate();
+    }
+
+    // --- Eraser methods ---
+
+    private void StartErase(PointF canvasPt)
+    {
+        if (_session == null) return;
+
+        _eraserTarget = null;
+        _eraserPoints.Clear();
+
+        // Hit-test annotations top-down for ImageObject
+        for (int i = _session.Annotations.Count - 1; i >= 0; i--)
+        {
+            if (_session.Annotations[i] is ImageObject imgObj)
+            {
+                var bounds = new RectangleF(imgObj.Position, imgObj.DisplaySize);
+                if (bounds.Contains(canvasPt))
+                {
+                    _eraserTarget = imgObj.Image;
+                    _eraserTargetOffset = imgObj.Position;
+                    _eraserTargetScale = new SizeF(
+                        imgObj.Image.Width / imgObj.DisplaySize.Width,
+                        imgObj.Image.Height / imgObj.DisplaySize.Height);
+                    break;
+                }
+            }
+        }
+
+        // If no ImageObject hit, check OriginalImage bounds
+        if (_eraserTarget == null)
+        {
+            var imgOff = _session.ImageOffset;
+            var imgBounds = new RectangleF(imgOff.X, imgOff.Y,
+                _session.OriginalImage.Width, _session.OriginalImage.Height);
+            if (imgBounds.Contains(canvasPt))
+            {
+                _eraserTarget = _session.OriginalImage;
+                _eraserTargetOffset = new PointF(imgOff.X, imgOff.Y);
+                _eraserTargetScale = new SizeF(1f, 1f);
+            }
+        }
+
+        if (_eraserTarget == null) return;
+
+        _eraserBeforeSnapshot = (Bitmap)_eraserTarget.Clone();
+        _isErasing = true;
+        _eraserPoints.Add(canvasPt);
+        _lastEraserPoint = canvasPt;
+        EraseAtCanvasPoint(canvasPt);
+        Invalidate();
+    }
+
+    private void ApplyErasePoint(PointF canvasPt)
+    {
+        _eraserPoints.Add(canvasPt);
+
+        float eraserRadius = _session!.CurrentThickness * 2;
+        float step = Math.Max(1f, eraserRadius / 3f);
+        float dx = canvasPt.X - _lastEraserPoint.X;
+        float dy = canvasPt.Y - _lastEraserPoint.Y;
+        float length = MathF.Sqrt(dx * dx + dy * dy);
+
+        if (length > step)
+        {
+            int steps = (int)(length / step);
+            for (int i = 1; i <= steps; i++)
+            {
+                float t = i / (float)steps;
+                EraseAtCanvasPoint(new PointF(
+                    _lastEraserPoint.X + dx * t,
+                    _lastEraserPoint.Y + dy * t));
+            }
+        }
+        else
+        {
+            EraseAtCanvasPoint(canvasPt);
+        }
+
+        _lastEraserPoint = canvasPt;
+    }
+
+    private void EraseAtCanvasPoint(PointF canvasPt)
+    {
+        if (_eraserTarget == null || _session == null) return;
+
+        float bmpX = (canvasPt.X - _eraserTargetOffset.X) * _eraserTargetScale.Width;
+        float bmpY = (canvasPt.Y - _eraserTargetOffset.Y) * _eraserTargetScale.Height;
+        float bmpRadius = _session.CurrentThickness * 2 * Math.Max(_eraserTargetScale.Width, _eraserTargetScale.Height);
+
+        using var g = Graphics.FromImage(_eraserTarget);
+        g.CompositingMode = CompositingMode.SourceCopy;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var brush = new SolidBrush(Color.FromArgb(0, 0, 0, 0));
+        g.FillEllipse(brush, bmpX - bmpRadius, bmpY - bmpRadius, bmpRadius * 2, bmpRadius * 2);
+    }
+
+    private void FinishErase()
+    {
+        _isErasing = false;
+        if (_eraserTarget == null || _eraserPoints.Count == 0 || _session == null || _eraserBeforeSnapshot == null)
+        {
+            _eraserTarget = null;
+            _eraserBeforeSnapshot?.Dispose();
+            _eraserBeforeSnapshot = null;
+            return;
+        }
+
+        // Compute bounding box in bitmap coordinates
+        float eraserRadius = _session.CurrentThickness * 2;
+        float minX = float.MaxValue, minY = float.MaxValue;
+        float maxX = float.MinValue, maxY = float.MinValue;
+        foreach (var pt in _eraserPoints)
+        {
+            float bmpX = (pt.X - _eraserTargetOffset.X) * _eraserTargetScale.Width;
+            float bmpY = (pt.Y - _eraserTargetOffset.Y) * _eraserTargetScale.Height;
+            float bmpR = eraserRadius * Math.Max(_eraserTargetScale.Width, _eraserTargetScale.Height);
+            minX = Math.Min(minX, bmpX - bmpR);
+            minY = Math.Min(minY, bmpY - bmpR);
+            maxX = Math.Max(maxX, bmpX + bmpR);
+            maxY = Math.Max(maxY, bmpY + bmpR);
+        }
+
+        int rx = Math.Max(0, (int)Math.Floor(minX) - 1);
+        int ry = Math.Max(0, (int)Math.Floor(minY) - 1);
+        int rr = Math.Min(_eraserTarget.Width, (int)Math.Ceiling(maxX) + 1);
+        int rb = Math.Min(_eraserTarget.Height, (int)Math.Ceiling(maxY) + 1);
+        var affectedRect = new System.Drawing.Rectangle(rx, ry, Math.Max(1, rr - rx), Math.Max(1, rb - ry));
+
+        var action = new BitmapEraseAction(_eraserTarget, _eraserBeforeSnapshot, affectedRect);
+        action.CaptureAfterState();
+        _session.UndoRedo.Execute(action);
+
+        _eraserBeforeSnapshot = null; // ownership transferred
+        _eraserTarget = null;
+        _eraserPoints.Clear();
+        Invalidate();
+        CanvasChanged?.Invoke();
     }
 
     private void HandleTextClick(PointF pt)
