@@ -97,25 +97,36 @@ class PopupAppContext : ApplicationContext
         return menu;
     }
 
-    private ScreenshotEditorForm GetOrCreateEditor()
+    private void EnsureEditor(Bitmap capturedImage)
     {
         if (_editorForm == null || _editorForm.IsDisposed)
         {
-            // Create with a small placeholder — hidden until LoadCapture/LoadFile resizes it
-            _editorForm = new ScreenshotEditorForm(new Bitmap(100, 100));
-            _editorForm.Visible = false;
+            _editorForm = new ScreenshotEditorForm(capturedImage);
+            _editorForm.BringToForeground();
         }
-        return _editorForm;
+        else
+        {
+            _editorForm.LoadCapture(capturedImage);
+        }
+    }
+
+    private void EnsureEditor(string filePath)
+    {
+        if (_editorForm == null || _editorForm.IsDisposed)
+        {
+            _editorForm = new ScreenshotEditorForm(filePath);
+            _editorForm.BringToForeground();
+        }
+        else
+        {
+            _editorForm.LoadFile(filePath);
+        }
     }
 
     private void TakeScreenshot()
     {
         var overlay = new ScreenshotOverlay();
-        overlay.RegionCaptured += bitmap =>
-        {
-            var editor = GetOrCreateEditor();
-            editor.LoadCapture(bitmap);
-        };
+        overlay.RegionCaptured += bitmap => EnsureEditor(bitmap);
         overlay.Show();
     }
 
@@ -134,8 +145,7 @@ class PopupAppContext : ApplicationContext
 
             if (lastFile == null) return;
 
-            var editor = GetOrCreateEditor();
-            editor.LoadFile(lastFile);
+            EnsureEditor(lastFile);
         }
         catch (Exception ex)
         {
