@@ -133,6 +133,18 @@ static class SessionSerializer
                     session.UndoRedo.PushRedoRaw(action);
             }
 
+            // Find the last CropAction in the undo stack and apply its after-image
+            // to reconstruct the OriginalImage (base.png is the uncropped original)
+            CropAction? lastCrop = null;
+            foreach (var action in session.UndoRedo.UndoItems)
+            {
+                if (action is CropAction ca) lastCrop = ca;
+            }
+            if (lastCrop != null)
+            {
+                session.OriginalImage = (Bitmap)lastCrop.GetAfterImage().Clone();
+            }
+
             return true;
         }
         catch (Exception ex)
