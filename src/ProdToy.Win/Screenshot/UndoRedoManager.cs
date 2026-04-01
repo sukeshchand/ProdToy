@@ -156,6 +156,22 @@ class ResizeObjectAction : IEditorAction
     public void Undo() => _obj.Resize(_handle, -_dx, -_dy);
 }
 
+class RotateObjectAction : IEditorAction
+{
+    private readonly AnnotationObject _obj;
+    private readonly float _angleDelta;
+    public string Description => "Rotate annotation";
+
+    public RotateObjectAction(AnnotationObject obj, float angleDelta)
+    {
+        _obj = obj;
+        _angleDelta = angleDelta;
+    }
+
+    public void Execute() => _obj.Rotation += _angleDelta;
+    public void Undo() => _obj.Rotation -= _angleDelta;
+}
+
 class ModifyPropertyAction<T> : IEditorAction
 {
     private readonly Action<T> _setter;

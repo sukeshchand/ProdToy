@@ -152,6 +152,8 @@ class ScreenshotEditorForm : Form
         _toolbar.ToolSelected += tool =>
         {
             _canvas.CommitTextEdit();
+            if (_session.CurrentTool == AnnotationTool.Crop && tool != AnnotationTool.Crop)
+                _canvas.CancelCrop();
             _session.CurrentTool = tool;
             if (tool != AnnotationTool.Select) _session.DeselectAll();
             _canvas.UpdateToolCursor();
@@ -265,8 +267,15 @@ class ScreenshotEditorForm : Form
             e.Handled = true;
             return;
         }
+        if (e.KeyCode == Keys.Enter && _session.CurrentTool == AnnotationTool.Crop)
+        {
+            _canvas.ApplyCrop();
+            _canvasContainer.SyncCanvasSize();
+            e.Handled = true; return;
+        }
         if (e.KeyCode == Keys.Escape)
         {
+            if (_session.CurrentTool == AnnotationTool.Crop) { _canvas.CancelCrop(); _canvas.Invalidate(); e.Handled = true; return; }
             if (isEditingText) { _canvas.CommitTextEdit(); _canvas.Invalidate(); e.Handled = true; return; }
             Close(); e.Handled = true; return;
         }
@@ -281,6 +290,7 @@ class ScreenshotEditorForm : Form
                 Keys.E => AnnotationTool.Ellipse, Keys.T => AnnotationTool.Text,
                 Keys.K => AnnotationTool.MaskBox,
                 Keys.X => AnnotationTool.Eraser,
+                Keys.C => AnnotationTool.Crop,
                 _ => null,
             };
             if (e.KeyCode == Keys.B)
@@ -506,6 +516,7 @@ class ScreenshotEditorForm : Form
             _toolbar.Session = _session;
             _toolbar.Invalidate();
             _recentPanel.SetEditingId(_session.EditId);
+            ResizeFormToFitCanvas();
 
             Text = $"ProdToy \u2014 {Path.GetFileName(filePath)}";
         }
@@ -515,6 +526,32 @@ class ScreenshotEditorForm : Form
             MessageBox.Show(this, $"Failed to open: {ex.Message}", "Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void ResizeFormToFitCanvas()
+    {
+        int imgW = _session.CanvasSize.Width;
+        int imgH = _session.CanvasSize.Height;
+        int extraPad = 80;
+        int recentPanelWidth = 170;
+        int toolbarAreaHeight = 60;
+        int pad = 8;
+
+        int clientW = Math.Max(imgW + extraPad * 2 + recentPanelWidth, 600);
+        int clientH = imgH + toolbarAreaHeight + extraPad + pad;
+
+        var screen = Screen.FromControl(this).WorkingArea;
+        clientW = Math.Min(clientW, screen.Width - 40);
+        clientH = Math.Min(clientH, screen.Height - 40);
+
+        ClientSize = new Size(clientW, clientH);
+
+        // Re-center on screen
+        Location = new Point(
+            screen.X + (screen.Width - Width) / 2,
+            screen.Y + (screen.Height - Height) / 2);
+
+        _canvasContainer.SyncCanvasSize();
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

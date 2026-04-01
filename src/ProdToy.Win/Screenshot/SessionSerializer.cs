@@ -155,6 +155,7 @@ static class SessionSerializer
             Thickness = obj.Thickness,
             Opacity = obj.Opacity,
             ZIndex = obj.ZIndex,
+            Rotation = obj.Rotation,
         };
 
         switch (obj)
@@ -265,6 +266,7 @@ static class SessionSerializer
             obj.Thickness = data.Thickness;
             obj.Opacity = data.Opacity;
             obj.ZIndex = data.ZIndex;
+            obj.Rotation = data.Rotation;
         }
 
         return obj;
@@ -326,6 +328,10 @@ static class SessionSerializer
                 data.Dy = GetField<float>(resize, "_dy");
                 data.Handle = GetField<HandlePosition>(resize, "_handle").ToString();
                 break;
+            case RotateObjectAction rotate:
+                data.AnnotationId = GetObjId(rotate);
+                data.Dx = GetField<float>(rotate, "_angleDelta");
+                break;
             case ChangeZIndexAction zIndex:
                 data.AnnotationId = GetObjId(zIndex);
                 data.OldIndex = GetField<int>(zIndex, "_oldIndex");
@@ -378,6 +384,9 @@ static class SessionSerializer
             "ResizeObjectAction" => FindObj() is { } resizeObj &&
                 Enum.TryParse<HandlePosition>(data.Handle, out var h)
                 ? new ResizeObjectAction(resizeObj, h, data.Dx, data.Dy)
+                : null,
+            "RotateObjectAction" => FindObj() is { } rotObj
+                ? new RotateObjectAction(rotObj, data.Dx)
                 : null,
             "ChangeZIndexAction" => FindObj() is { } zObj
                 ? new ChangeZIndexAction(objects, zObj, data.OldIndex, data.NewIndex)
@@ -483,6 +492,7 @@ class AnnotationData
     [JsonPropertyName("thickness")] public float Thickness { get; set; }
     [JsonPropertyName("opacity")] public float Opacity { get; set; }
     [JsonPropertyName("zIndex")] public int ZIndex { get; set; }
+    [JsonPropertyName("rotation")] public float Rotation { get; set; }
 
     // Points (for PenStroke, MarkerStroke)
     [JsonPropertyName("points")] public List<float[]>? Points { get; set; }

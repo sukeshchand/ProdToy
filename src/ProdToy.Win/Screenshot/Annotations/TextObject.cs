@@ -21,6 +21,7 @@ class TextObject : AnnotationObject
     public override void Render(Graphics g)
     {
         if (string.IsNullOrEmpty(Text) && !IsEditing) return;
+        var state = ApplyRotation(g);
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
@@ -33,7 +34,6 @@ class TextObject : AnnotationObject
 
         g.DrawString(displayText, font, brush, Position);
 
-        // Draw cursor when editing
         if (IsEditing)
         {
             var textSize = g.MeasureString(Text, font);
@@ -43,13 +43,15 @@ class TextObject : AnnotationObject
             using var cursorPen = new Pen(StrokeColor, 1.5f);
             g.DrawLine(cursorPen, cursorX, cursorTop, cursorX, cursorBottom);
         }
+        g.Restore(state);
     }
 
     public override bool HitTest(PointF point, float tolerance)
     {
+        var local = RotatePoint(point, GetCenter(), -Rotation);
         var bounds = GetBounds();
         bounds.Inflate(tolerance, tolerance);
-        return bounds.Contains(point);
+        return bounds.Contains(local);
     }
 
     public override void Move(float dx, float dy)
@@ -70,7 +72,7 @@ class TextObject : AnnotationObject
     public override AnnotationObject Clone() => new TextObject
     {
         Text = Text, Position = Position, FontSize = FontSize, Bold = Bold,
-        StrokeColor = StrokeColor, Opacity = Opacity, ZIndex = ZIndex,
+        StrokeColor = StrokeColor, Opacity = Opacity, ZIndex = ZIndex, Rotation = Rotation,
     };
 
     private Font GetFont()

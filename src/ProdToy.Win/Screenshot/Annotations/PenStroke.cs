@@ -41,23 +41,25 @@ class PenStroke : AnnotationObject
     public override void Render(Graphics g)
     {
         if (Points.Count < 2) return;
+        var state = ApplyRotation(g);
         using var pen = CreatePen();
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.DrawLines(pen, Points.ToArray());
+        g.Restore(state);
     }
 
     public override bool HitTest(PointF point, float tolerance)
     {
+        var local = RotatePoint(point, GetCenter(), -Rotation);
         float tol = Math.Max(tolerance, Thickness / 2 + 4);
 
-        // Quick bounds check to skip expensive segment iteration
         var bounds = GetBounds();
         bounds.Inflate(tol, tol);
-        if (!bounds.Contains(point)) return false;
+        if (!bounds.Contains(local)) return false;
 
         for (int i = 1; i < Points.Count; i++)
         {
-            if (DistanceToSegment(point, Points[i - 1], Points[i]) < tol)
+            if (DistanceToSegment(local, Points[i - 1], Points[i]) < tol)
                 return true;
         }
         return false;
@@ -79,6 +81,7 @@ class PenStroke : AnnotationObject
             Thickness = Thickness,
             Opacity = Opacity,
             ZIndex = ZIndex,
+            Rotation = Rotation,
         };
     }
 

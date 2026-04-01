@@ -16,8 +16,10 @@ class ScreenshotCanvas : Control
     // Selection/move state
     private bool _isMoving;
     private bool _isResizing;
+    private bool _isRotating;
     private HandlePosition _resizeHandle;
     private float _totalMoveDx, _totalMoveDy;
+    private float _totalRotation;
 
     // Text editing
     private TextObject? _editingText;
@@ -38,6 +40,14 @@ class ScreenshotCanvas : Control
     private Bitmap? _eraserBeforeSnapshot;
     private PointF _eraserCursorPos;
     private bool _eraserCursorVisible;
+
+    // Crop state
+    private bool _isCropDragging;   // Phase 1: user is dragging to define the crop area
+    private bool _isCropAdjusting;  // Phase 2: crop area defined, user can adjust handles
+    private RectangleF _cropRect;
+    private PointF _cropDragStart;
+    private HandlePosition _cropHandle;
+    private bool _isDraggingCropHandle;
 
     public event Action? CanvasChanged;
     public event Action? SelectionChanged;
@@ -213,6 +223,86 @@ class ScreenshotCanvas : Control
             g.DrawEllipse(innerPen, cx, cy, d, d);
         }
 
+        // Draw crop overlay
+        if (_isCropDragging || _isCropAdjusting)
+        {
+            // Normalize rect during drag (start/end may be inverted)
+            var cr = _isCropDragging
+                ? new RectangleF(
+                    Math.Min(_cropDragStart.X, _cropRect.Right),
+                    Math.Min(_cropDragStart.Y, _cropRect.Bottom),
+                    Math.Abs(_cropRect.Width), Math.Abs(_cropRect.Height))
+                : _cropRect;
+            if (cr.Width >= 2 && cr.Height >= 2)
+            {
+            // Dim area outside crop
+            using var dimBrush = new SolidBrush(Color.FromArgb(120, 0, 0, 0));
+            g.FillRectangle(dimBrush, 0, 0, ClientSize.Width, cr.Y);
+            g.FillRectangle(dimBrush, 0, cr.Bottom, ClientSize.Width, ClientSize.Height - cr.Bottom);
+            g.FillRectangle(dimBrush, 0, cr.Y, cr.X, cr.Height);
+            g.FillRectangle(dimBrush, cr.Right, cr.Y, ClientSize.Width - cr.Right, cr.Height);
+
+            // Crop border — red
+            var cropColor = Color.FromArgb(220, 220, 50, 50);
+            using var cropPen = new Pen(cropColor, 2f);
+            g.DrawRectangle(cropPen, cr.X, cr.Y, cr.Width, cr.Height);
+
+            // Rule of thirds grid
+            using var gridPen = new Pen(Color.FromArgb(50, 220, 50, 50), 0.5f);
+            for (int i = 1; i <= 2; i++)
+            {
+                float gx = cr.X + cr.Width * i / 3f;
+                float gy = cr.Y + cr.Height * i / 3f;
+                g.DrawLine(gridPen, gx, cr.Y, gx, cr.Bottom);
+                g.DrawLine(gridPen, cr.X, gy, cr.Right, gy);
+            }
+
+            // 8 small box handles — red filled with white border
+            float hs = 8f, hh = hs / 2;
+            float mx = cr.X + cr.Width / 2, my = cr.Y + cr.Height / 2;
+            using var handleFill = new SolidBrush(cropColor);
+            using var handleBorder = new Pen(Color.White, 1f);
+            var handles = new[] {
+                new RectangleF(cr.Left - hh, cr.Top - hh, hs, hs),
+                new RectangleF(mx - hh, cr.Top - hh, hs, hs),
+                new RectangleF(cr.Right - hh, cr.Top - hh, hs, hs),
+                new RectangleF(cr.Left - hh, my - hh, hs, hs),
+                new RectangleF(cr.Right - hh, my - hh, hs, hs),
+                new RectangleF(cr.Left - hh, cr.Bottom - hh, hs, hs),
+                new RectangleF(mx - hh, cr.Bottom - hh, hs, hs),
+                new RectangleF(cr.Right - hh, cr.Bottom - hh, hs, hs),
+            };
+            foreach (var h in handles)
+            {
+                g.FillRectangle(handleFill, h);
+                g.DrawRectangle(handleBorder, h.X, h.Y, h.Width, h.Height);
+            }
+
+            // Size label
+            using var labelFont = new Font("Segoe UI", 8f);
+            string sizeText = $"{(int)cr.Width} x {(int)cr.Height}";
+            var textSize = g.MeasureString(sizeText, labelFont);
+            float lx = cr.Right - textSize.Width - 4;
+            float ly = cr.Bottom + 4;
+            using var labelBg = new SolidBrush(Color.FromArgb(180, 0, 0, 0));
+            g.FillRectangle(labelBg, lx - 2, ly, textSize.Width + 4, textSize.Height);
+            using var labelBrush = new SolidBrush(Color.White);
+            g.DrawString(sizeText, labelFont, labelBrush, lx, ly);
+
+            // Hint text (only in adjust phase)
+            if (_isCropAdjusting)
+            {
+                string hint = "Double-click or Enter to crop \u2022 Esc to cancel";
+                var hintSize = g.MeasureString(hint, labelFont);
+                float hx = cr.X + (cr.Width - hintSize.Width) / 2;
+                float hy = cr.Y - hintSize.Height - 6;
+                if (hy < 0) hy = cr.Bottom + 4 + textSize.Height + 4;
+                g.FillRectangle(labelBg, hx - 2, hy, hintSize.Width + 4, hintSize.Height);
+                g.DrawString(hint, labelFont, labelBrush, hx, hy);
+            }
+            } // end cr.Width >= 2
+        }
+
         // Draw region selection rectangle
         if (_isSelectingRegion || _selectedRegion.HasValue)
         {
@@ -345,12 +435,22 @@ class ScreenshotCanvas : Control
             case AnnotationTool.Eraser:
                 StartErase(pt);
                 break;
+            case AnnotationTool.Crop:
+                HandleCropMouseDown(pt);
+                break;
         }
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         if (_session == null || e.Button != MouseButtons.Left) { base.OnMouseDoubleClick(e); return; }
+
+        // Double-click applies crop
+        if (_isCropAdjusting && _session.CurrentTool == AnnotationTool.Crop)
+        {
+            ApplyCrop();
+            return;
+        }
         var pt = new PointF(e.X, e.Y);
 
         // Double-click on a TextObject in Select mode → re-enter text editing
@@ -374,6 +474,13 @@ class ScreenshotCanvas : Control
     {
         if (_session == null) return;
         var pt = new PointF(e.X, e.Y);
+
+        if (_isCropDragging || _isDraggingCropHandle)
+        {
+            HandleCropMouseMove(pt);
+            Invalidate();
+            return;
+        }
 
         if (_isSelectingRegion)
         {
@@ -417,6 +524,19 @@ class ScreenshotCanvas : Control
             return;
         }
 
+        if (_isRotating && _session.SelectedObject != null)
+        {
+            var center = _session.SelectedObject.GetCenter();
+            float prevAngle = MathF.Atan2(_lastDragPos.Y - center.Y, _lastDragPos.X - center.X);
+            float currAngle = MathF.Atan2(pt.Y - center.Y, pt.X - center.X);
+            float delta = (currAngle - prevAngle) * 180f / MathF.PI;
+            _session.SelectedObject.Rotation += delta;
+            _totalRotation += delta;
+            _lastDragPos = pt;
+            Invalidate();
+            return;
+        }
+
         if (_isResizing && _session.SelectedObject != null)
         {
             float dx = pt.X - _lastDragPos.X;
@@ -448,6 +568,31 @@ class ScreenshotCanvas : Control
     {
         if (_session == null || e.Button != MouseButtons.Left) return;
 
+        if (_isCropDragging)
+        {
+            _isCropDragging = false;
+            // Normalize the rect and transition to adjust phase if big enough
+            float x = Math.Min(_cropDragStart.X, _cropRect.Right);
+            float y = Math.Min(_cropDragStart.Y, _cropRect.Bottom);
+            float w = Math.Abs(_cropRect.Width);
+            float h = Math.Abs(_cropRect.Height);
+            if (w > 10 && h > 10)
+            {
+                _cropRect = new RectangleF(x, y, w, h);
+                _isCropAdjusting = true;
+            }
+            Invalidate();
+            return;
+        }
+
+        if (_isDraggingCropHandle)
+        {
+            _isDraggingCropHandle = false;
+            _cropHandle = HandlePosition.None;
+            Invalidate();
+            return;
+        }
+
         if (_isErasing)
         {
             FinishErase();
@@ -472,12 +617,24 @@ class ScreenshotCanvas : Control
             return;
         }
 
+        if (_isRotating && _session.SelectedObject != null)
+        {
+            if (Math.Abs(_totalRotation) > 0.1f)
+            {
+                _session.SelectedObject.Rotation -= _totalRotation;
+                _session.UndoRedo.Execute(new RotateObjectAction(_session.SelectedObject, _totalRotation));
+            }
+            _isRotating = false;
+            Invalidate();
+            CanvasChanged?.Invoke();
+            return;
+        }
+
         if (_isMoving && _session.SelectedObject != null)
         {
             // Record as undoable move
             if (Math.Abs(_totalMoveDx) > 0.5f || Math.Abs(_totalMoveDy) > 0.5f)
             {
-                // Undo the live move, then execute via undo system
                 _session.SelectedObject.Move(-_totalMoveDx, -_totalMoveDy);
                 _session.UndoRedo.Execute(new MoveObjectAction(_session.SelectedObject, _totalMoveDx, _totalMoveDy));
             }
@@ -580,6 +737,7 @@ class ScreenshotCanvas : Control
     }
 
     public bool HasSelectedRegion => _selectedRegion.HasValue;
+    public bool IsCropActive => _isCropDragging || _isCropAdjusting;
 
     public void DeleteSelectedRegion()
     {
@@ -625,6 +783,194 @@ class ScreenshotCanvas : Control
         Invalidate();
         CanvasChanged?.Invoke();
     }
+
+    public void CropCanvasToRegion()
+    {
+        if (_session == null || !_selectedRegion.HasValue) return;
+        CropCanvasTo(_selectedRegion.Value);
+        _selectedRegion = null;
+    }
+
+    private void CropCanvasTo(RectangleF rect)
+    {
+        if (_session == null) return;
+        int rx = Math.Max(0, (int)rect.X);
+        int ry = Math.Max(0, (int)rect.Y);
+        int rw = Math.Min((int)rect.Width, _session.CanvasSize.Width - rx);
+        int rh = Math.Min((int)rect.Height, _session.CanvasSize.Height - ry);
+        if (rw <= 0 || rh <= 0) return;
+
+        // Crop the OriginalImage to the intersection with the region
+        var imgOff = _session.ImageOffset;
+        int imgX = rx - imgOff.X;
+        int imgY = ry - imgOff.Y;
+
+        // Compute intersection of region with original image
+        int srcX = Math.Max(0, imgX);
+        int srcY = Math.Max(0, imgY);
+        int srcR = Math.Min(_session.OriginalImage.Width, imgX + rw);
+        int srcB = Math.Min(_session.OriginalImage.Height, imgY + rh);
+        int srcW = Math.Max(0, srcR - srcX);
+        int srcH = Math.Max(0, srcB - srcY);
+
+        // Create cropped original image
+        var croppedImage = new Bitmap(rw, rh, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(croppedImage))
+        {
+            g.Clear(_session.CanvasBackgroundColor);
+            if (srcW > 0 && srcH > 0)
+            {
+                int destX = srcX - imgX;
+                int destY = srcY - imgY;
+                g.DrawImage(_session.OriginalImage,
+                    new System.Drawing.Rectangle(destX, destY, srcW, srcH),
+                    new System.Drawing.Rectangle(srcX, srcY, srcW, srcH),
+                    GraphicsUnit.Pixel);
+            }
+        }
+
+        // Snapshot for undo
+        var beforeImage = _session.OriginalImage;
+        var oldSize = _session.CanvasSize;
+        var oldOffset = _session.ImageOffset;
+
+        // Apply crop: replace original image, reset offset, update canvas size
+        _session.OriginalImage = croppedImage;
+        _session.CanvasSize = new Size(rw, rh);
+        _session.ImageOffset = Point.Empty;
+
+        // Shift all annotations by the crop offset
+        foreach (var obj in _session.Annotations)
+            obj.Move(-rx, -ry);
+
+        Size = new Size(rw, rh);
+        Invalidate();
+        CanvasChanged?.Invoke();
+    }
+
+    // --- Crop tool methods ---
+
+    private void HandleCropMouseDown(PointF pt)
+    {
+        if (_session == null) return;
+
+        // Phase 2: adjusting — check handles or move
+        if (_isCropAdjusting)
+        {
+            _cropHandle = HitTestCropHandle(pt);
+            if (_cropHandle != HandlePosition.None)
+            {
+                _isDraggingCropHandle = true;
+                _lastDragPos = pt;
+                return;
+            }
+            if (_cropRect.Contains(pt))
+            {
+                _cropHandle = HandlePosition.None;
+                _isDraggingCropHandle = true;
+                _lastDragPos = pt;
+                return;
+            }
+            // Click outside crop rect — restart drag selection
+            _isCropAdjusting = false;
+        }
+
+        // Phase 1: start drag selection
+        _cropDragStart = pt;
+        _cropRect = new RectangleF(pt.X, pt.Y, 0, 0);
+        _isCropDragging = true;
+    }
+
+    private void HandleCropMouseMove(PointF pt)
+    {
+        if (_isCropDragging)
+        {
+            // Update crop rect from drag start to current point
+            _cropRect = new RectangleF(
+                Math.Min(_cropDragStart.X, pt.X),
+                Math.Min(_cropDragStart.Y, pt.Y),
+                Math.Abs(pt.X - _cropDragStart.X),
+                Math.Abs(pt.Y - _cropDragStart.Y));
+            return;
+        }
+
+        // Phase 2: adjusting handles
+        float dx = pt.X - _lastDragPos.X;
+        float dy = pt.Y - _lastDragPos.Y;
+        var cr = _cropRect;
+
+        if (_cropHandle == HandlePosition.None)
+        {
+            cr.Offset(dx, dy);
+        }
+        else
+        {
+            switch (_cropHandle)
+            {
+                case HandlePosition.TopLeft:
+                    cr = RectangleF.FromLTRB(cr.Left + dx, cr.Top + dy, cr.Right, cr.Bottom); break;
+                case HandlePosition.TopCenter:
+                    cr = RectangleF.FromLTRB(cr.Left, cr.Top + dy, cr.Right, cr.Bottom); break;
+                case HandlePosition.TopRight:
+                    cr = RectangleF.FromLTRB(cr.Left, cr.Top + dy, cr.Right + dx, cr.Bottom); break;
+                case HandlePosition.MiddleLeft:
+                    cr = RectangleF.FromLTRB(cr.Left + dx, cr.Top, cr.Right, cr.Bottom); break;
+                case HandlePosition.MiddleRight:
+                    cr = RectangleF.FromLTRB(cr.Left, cr.Top, cr.Right + dx, cr.Bottom); break;
+                case HandlePosition.BottomLeft:
+                    cr = RectangleF.FromLTRB(cr.Left + dx, cr.Top, cr.Right, cr.Bottom + dy); break;
+                case HandlePosition.BottomCenter:
+                    cr = RectangleF.FromLTRB(cr.Left, cr.Top, cr.Right, cr.Bottom + dy); break;
+                case HandlePosition.BottomRight:
+                    cr = RectangleF.FromLTRB(cr.Left, cr.Top, cr.Right + dx, cr.Bottom + dy); break;
+            }
+        }
+
+        if (cr.Width >= 10 && cr.Height >= 10)
+            _cropRect = cr;
+        _lastDragPos = pt;
+    }
+
+    public void ApplyCrop()
+    {
+        if (!_isCropAdjusting || _session == null) return;
+        _isCropAdjusting = false;
+        _isCropDragging = false;
+        CropCanvasTo(_cropRect);
+    }
+
+    public void CancelCrop()
+    {
+        _isCropDragging = false;
+        _isCropAdjusting = false;
+        _isDraggingCropHandle = false;
+        Invalidate();
+    }
+
+    private HandlePosition HitTestCropHandle(PointF pt)
+    {
+        var cr = _cropRect;
+        float hs = 8f, tol = 6f;
+        float mx = cr.X + cr.Width / 2, my = cr.Y + cr.Height / 2;
+        var positions = new[] {
+            (HandlePosition.TopLeft, cr.Left, cr.Top),
+            (HandlePosition.TopCenter, mx, cr.Top),
+            (HandlePosition.TopRight, cr.Right, cr.Top),
+            (HandlePosition.MiddleLeft, cr.Left, my),
+            (HandlePosition.MiddleRight, cr.Right, my),
+            (HandlePosition.BottomLeft, cr.Left, cr.Bottom),
+            (HandlePosition.BottomCenter, mx, cr.Bottom),
+            (HandlePosition.BottomRight, cr.Right, cr.Bottom),
+        };
+        foreach (var (handle, hx, hy) in positions)
+        {
+            if (Math.Abs(pt.X - hx) < hs + tol && Math.Abs(pt.Y - hy) < hs + tol)
+                return handle;
+        }
+        return HandlePosition.None;
+    }
+
+
 
     private void RegionToLayer(bool clearOriginal)
     {
@@ -710,6 +1056,13 @@ class ScreenshotCanvas : Control
         if (_session!.SelectedObject != null)
         {
             var handle = _session.SelectedObject.HitTestHandle(pt);
+            if (handle == HandlePosition.Rotate)
+            {
+                _isRotating = true;
+                _lastDragPos = pt;
+                _totalRotation = 0;
+                return;
+            }
             if (handle != HandlePosition.None)
             {
                 _isResizing = true;

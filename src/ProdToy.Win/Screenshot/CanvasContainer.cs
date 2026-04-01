@@ -87,8 +87,8 @@ class CanvasContainer : Panel
         using var borderPen = new Pen(Color.FromArgb(100, 128, 128, 128), 1f);
         g.DrawRectangle(borderPen, cr.X - 1, cr.Y - 1, cr.Width + 1, cr.Height + 1);
 
-        // Draw resize handles (on the actual canvas, not the preview)
-        if (!_isResizingCanvas)
+        // Draw resize handles (on the actual canvas, not the preview) — hide during crop
+        if (!_isResizingCanvas && !_canvas.IsCropActive)
         {
             DrawResizeHandles(g, cr);
         }
@@ -168,6 +168,8 @@ class CanvasContainer : Panel
     protected override void OnMouseDown(MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
+
+        if (_canvas.IsCropActive) return;
 
         var handle = HitTestHandle(e.Location);
         if (handle != HandlePosition.None)

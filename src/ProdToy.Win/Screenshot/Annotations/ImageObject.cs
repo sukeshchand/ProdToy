@@ -25,15 +25,18 @@ class ImageObject : AnnotationObject, IDisposable
     public override void Render(Graphics g)
     {
         if (Image == null) return;
+        var state = ApplyRotation(g);
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
         g.DrawImage(Image, Position.X, Position.Y, DisplaySize.Width, DisplaySize.Height);
+        g.Restore(state);
     }
 
     public override bool HitTest(PointF point, float tolerance)
     {
+        var local = RotatePoint(point, GetCenter(), -Rotation);
         var bounds = new RectangleF(Position, DisplaySize);
         bounds.Inflate(tolerance, tolerance);
-        return bounds.Contains(point);
+        return bounds.Contains(local);
     }
 
     public override void Move(float dx, float dy)
@@ -89,6 +92,7 @@ class ImageObject : AnnotationObject, IDisposable
             StrokeColor = StrokeColor,
             Opacity = Opacity,
             ZIndex = ZIndex,
+            Rotation = Rotation,
         };
     }
 

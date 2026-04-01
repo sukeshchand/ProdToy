@@ -4,7 +4,7 @@ namespace ProdToy;
 
 class EditorSession
 {
-    public Bitmap OriginalImage { get; }
+    public Bitmap OriginalImage { get; set; }
     public string EditId { get; set; } = "";
     public string EditDir => Path.Combine(AppPaths.ScreenshotsEditsDir, EditId);
     public List<AnnotationObject> Annotations { get; } = new();

@@ -74,6 +74,7 @@ class ScreenshotToolbar : Control
         AddButton("text", "\uE8D2", "Text (T)", () => ToolSelected?.Invoke(AnnotationTool.Text));
         AddButton("mask", "***", "Mask Box (K)", () => ToolSelected?.Invoke(AnnotationTool.MaskBox));
         AddButton("eraser", "\uE75C", "Eraser (X)", () => ToolSelected?.Invoke(AnnotationTool.Eraser));
+        AddButton("crop", "\uE7A8", "Crop (C)", () => ToolSelected?.Invoke(AnnotationTool.Crop));
         AddSeparator();
 
         // Undo/Redo
@@ -303,6 +304,7 @@ class ScreenshotToolbar : Control
             ["text"] = AnnotationTool.Text,
             ["mask"] = AnnotationTool.MaskBox,
             ["eraser"] = AnnotationTool.Eraser,
+            ["crop"] = AnnotationTool.Crop,
         };
 
         public ToolbarButton(string id, string icon, string tooltip, Action onClick)
