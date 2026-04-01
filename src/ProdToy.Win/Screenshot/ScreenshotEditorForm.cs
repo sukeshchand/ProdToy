@@ -469,9 +469,12 @@ class ScreenshotEditorForm : Form
     {
         try
         {
-            // Save current session
+            // Save current session (skip if form hasn't been shown yet — placeholder)
             _canvas.CommitTextEdit();
-            AutoSaveNow();
+            if (Visible)
+                AutoSaveNow();
+            else
+                CleanupPlaceholder();
             _session.OriginalImage.Dispose();
 
             // Load the selected image from its _edits/base.png if available, otherwise from the file
@@ -526,6 +529,18 @@ class ScreenshotEditorForm : Form
             MessageBox.Show(this, $"Failed to open: {ex.Message}", "Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void CleanupPlaceholder()
+    {
+        try
+        {
+            string linkedPath = GetLinkedSavePath();
+            if (File.Exists(linkedPath)) File.Delete(linkedPath);
+            string editDir = _session.EditDir;
+            if (Directory.Exists(editDir)) Directory.Delete(editDir, true);
+        }
+        catch { }
     }
 
     private void ResizeFormToFitCanvas()

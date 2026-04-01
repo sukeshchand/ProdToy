@@ -101,8 +101,9 @@ class PopupAppContext : ApplicationContext
     {
         if (_editorForm == null || _editorForm.IsDisposed)
         {
-            // Create with a 1x1 placeholder — will be replaced immediately by LoadCapture/LoadFile
-            _editorForm = new ScreenshotEditorForm(new Bitmap(1, 1));
+            // Create with a small placeholder — hidden until LoadCapture/LoadFile resizes it
+            _editorForm = new ScreenshotEditorForm(new Bitmap(100, 100));
+            _editorForm.Visible = false;
         }
         return _editorForm;
     }

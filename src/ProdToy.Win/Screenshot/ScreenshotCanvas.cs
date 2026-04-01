@@ -41,13 +41,12 @@ class ScreenshotCanvas : Control
     private PointF _eraserCursorPos;
     private bool _eraserCursorVisible;
 
-    // Crop state
-    private bool _isCropDragging;   // Phase 1: user is dragging to define the crop area
-    private bool _isCropAdjusting;  // Phase 2: crop area defined, user can adjust handles
-    private RectangleF _cropRect;
+    // Crop state (perspective: 4 independent corners)
+    private bool _isCropDragging;   // Phase 1: user is dragging to define initial area
+    private bool _isCropAdjusting;  // Phase 2: user adjusts corners
     private PointF _cropDragStart;
-    private HandlePosition _cropHandle;
-    private bool _isDraggingCropHandle;
+    private PointF[] _cropCorners = new PointF[4]; // TL, TR, BR, BL
+    private int _dragCornerIndex = -1; // -1=none, 0-3=corner, 4=move all
 
     public event Action? CanvasChanged;
     public event Action? SelectionChanged;
@@ -223,67 +222,56 @@ class ScreenshotCanvas : Control
             g.DrawEllipse(innerPen, cx, cy, d, d);
         }
 
-        // Draw crop overlay
+        // Draw perspective crop overlay
         if (_isCropDragging || _isCropAdjusting)
         {
-            // Normalize rect during drag (start/end may be inverted)
-            var cr = _isCropDragging
-                ? new RectangleF(
-                    Math.Min(_cropDragStart.X, _cropRect.Right),
-                    Math.Min(_cropDragStart.Y, _cropRect.Bottom),
-                    Math.Abs(_cropRect.Width), Math.Abs(_cropRect.Height))
-                : _cropRect;
-            if (cr.Width >= 2 && cr.Height >= 2)
-            {
-            // Dim area outside crop
-            using var dimBrush = new SolidBrush(Color.FromArgb(120, 0, 0, 0));
-            g.FillRectangle(dimBrush, 0, 0, ClientSize.Width, cr.Y);
-            g.FillRectangle(dimBrush, 0, cr.Bottom, ClientSize.Width, ClientSize.Height - cr.Bottom);
-            g.FillRectangle(dimBrush, 0, cr.Y, cr.X, cr.Height);
-            g.FillRectangle(dimBrush, cr.Right, cr.Y, ClientSize.Width - cr.Right, cr.Height);
-
-            // Crop border — red
+            var cc = GetNormalizedCropCorners();
             var cropColor = Color.FromArgb(220, 220, 50, 50);
-            using var cropPen = new Pen(cropColor, 2f);
-            g.DrawRectangle(cropPen, cr.X, cr.Y, cr.Width, cr.Height);
 
-            // Rule of thirds grid
-            using var gridPen = new Pen(Color.FromArgb(50, 220, 50, 50), 0.5f);
+            // Dim area outside the quad using GraphicsPath clipping
+            using var dimPath = new GraphicsPath();
+            dimPath.AddRectangle(new RectangleF(0, 0, ClientSize.Width, ClientSize.Height));
+            dimPath.AddPolygon(cc);
+            using var dimBrush = new SolidBrush(Color.FromArgb(120, 0, 0, 0));
+            g.FillPath(dimBrush, dimPath);
+
+            // Quad border — red
+            using var cropPen = new Pen(cropColor, 2f);
+            g.DrawPolygon(cropPen, cc);
+
+            // Perspective grid (3x3) using bilinear interpolation
+            using var gridPen = new Pen(Color.FromArgb(60, 220, 50, 50), 0.5f);
             for (int i = 1; i <= 2; i++)
             {
-                float gx = cr.X + cr.Width * i / 3f;
-                float gy = cr.Y + cr.Height * i / 3f;
-                g.DrawLine(gridPen, gx, cr.Y, gx, cr.Bottom);
-                g.DrawLine(gridPen, cr.X, gy, cr.Right, gy);
+                float t = i / 3f;
+                // Horizontal grid line
+                var hl = Lerp(cc[0], cc[3], t);
+                var hr = Lerp(cc[1], cc[2], t);
+                g.DrawLine(gridPen, hl, hr);
+                // Vertical grid line
+                var vt = Lerp(cc[0], cc[1], t);
+                var vb = Lerp(cc[3], cc[2], t);
+                g.DrawLine(gridPen, vt, vb);
             }
 
-            // 8 small box handles — red filled with white border
+            // 4 corner handles — red filled with white border
             float hs = 8f, hh = hs / 2;
-            float mx = cr.X + cr.Width / 2, my = cr.Y + cr.Height / 2;
             using var handleFill = new SolidBrush(cropColor);
             using var handleBorder = new Pen(Color.White, 1f);
-            var handles = new[] {
-                new RectangleF(cr.Left - hh, cr.Top - hh, hs, hs),
-                new RectangleF(mx - hh, cr.Top - hh, hs, hs),
-                new RectangleF(cr.Right - hh, cr.Top - hh, hs, hs),
-                new RectangleF(cr.Left - hh, my - hh, hs, hs),
-                new RectangleF(cr.Right - hh, my - hh, hs, hs),
-                new RectangleF(cr.Left - hh, cr.Bottom - hh, hs, hs),
-                new RectangleF(mx - hh, cr.Bottom - hh, hs, hs),
-                new RectangleF(cr.Right - hh, cr.Bottom - hh, hs, hs),
-            };
-            foreach (var h in handles)
+            foreach (var c in cc)
             {
-                g.FillRectangle(handleFill, h);
-                g.DrawRectangle(handleBorder, h.X, h.Y, h.Width, h.Height);
+                g.FillRectangle(handleFill, c.X - hh, c.Y - hh, hs, hs);
+                g.DrawRectangle(handleBorder, c.X - hh, c.Y - hh, hs, hs);
             }
 
-            // Size label
+            // Size label (estimated output dimensions)
+            float outW = Math.Max(Dist(cc[0], cc[1]), Dist(cc[3], cc[2]));
+            float outH = Math.Max(Dist(cc[0], cc[3]), Dist(cc[1], cc[2]));
             using var labelFont = new Font("Segoe UI", 8f);
-            string sizeText = $"{(int)cr.Width} x {(int)cr.Height}";
+            string sizeText = $"{(int)outW} x {(int)outH}";
             var textSize = g.MeasureString(sizeText, labelFont);
-            float lx = cr.Right - textSize.Width - 4;
-            float ly = cr.Bottom + 4;
+            float lx = cc[2].X - textSize.Width;
+            float ly = cc[2].Y + 4;
             using var labelBg = new SolidBrush(Color.FromArgb(180, 0, 0, 0));
             g.FillRectangle(labelBg, lx - 2, ly, textSize.Width + 4, textSize.Height);
             using var labelBrush = new SolidBrush(Color.White);
@@ -292,15 +280,14 @@ class ScreenshotCanvas : Control
             // Hint text (only in adjust phase)
             if (_isCropAdjusting)
             {
-                string hint = "Double-click or Enter to crop \u2022 Esc to cancel";
+                string hint = "Drag corners to adjust \u2022 Enter to crop \u2022 Esc to cancel";
                 var hintSize = g.MeasureString(hint, labelFont);
-                float hx = cr.X + (cr.Width - hintSize.Width) / 2;
-                float hy = cr.Y - hintSize.Height - 6;
-                if (hy < 0) hy = cr.Bottom + 4 + textSize.Height + 4;
+                float hx = (cc[0].X + cc[1].X) / 2 - hintSize.Width / 2;
+                float hy = Math.Min(cc[0].Y, cc[1].Y) - hintSize.Height - 6;
+                if (hy < 0) hy = Math.Max(cc[2].Y, cc[3].Y) + 20;
                 g.FillRectangle(labelBg, hx - 2, hy, hintSize.Width + 4, hintSize.Height);
                 g.DrawString(hint, labelFont, labelBrush, hx, hy);
             }
-            } // end cr.Width >= 2
         }
 
         // Draw region selection rectangle
@@ -475,7 +462,7 @@ class ScreenshotCanvas : Control
         if (_session == null) return;
         var pt = new PointF(e.X, e.Y);
 
-        if (_isCropDragging || _isDraggingCropHandle)
+        if (_isCropDragging || _dragCornerIndex >= 0)
         {
             HandleCropMouseMove(pt);
             Invalidate();
@@ -571,24 +558,22 @@ class ScreenshotCanvas : Control
         if (_isCropDragging)
         {
             _isCropDragging = false;
-            // Normalize the rect and transition to adjust phase if big enough
-            float x = Math.Min(_cropDragStart.X, _cropRect.Right);
-            float y = Math.Min(_cropDragStart.Y, _cropRect.Bottom);
-            float w = Math.Abs(_cropRect.Width);
-            float h = Math.Abs(_cropRect.Height);
+            var cc = GetNormalizedCropCorners();
+            float w = Dist(cc[0], cc[1]);
+            float h = Dist(cc[0], cc[3]);
             if (w > 10 && h > 10)
             {
-                _cropRect = new RectangleF(x, y, w, h);
+                _cropCorners = cc;
                 _isCropAdjusting = true;
             }
+            _dragCornerIndex = -1;
             Invalidate();
             return;
         }
 
-        if (_isDraggingCropHandle)
+        if (_dragCornerIndex >= 0)
         {
-            _isDraggingCropHandle = false;
-            _cropHandle = HandlePosition.None;
+            _dragCornerIndex = -1;
             Invalidate();
             return;
         }
@@ -854,30 +839,31 @@ class ScreenshotCanvas : Control
     {
         if (_session == null) return;
 
-        // Phase 2: adjusting — check handles or move
         if (_isCropAdjusting)
         {
-            _cropHandle = HitTestCropHandle(pt);
-            if (_cropHandle != HandlePosition.None)
+            // Check if clicking a corner handle
+            int corner = HitTestCropCorner(pt);
+            if (corner >= 0)
             {
-                _isDraggingCropHandle = true;
+                _dragCornerIndex = corner;
                 _lastDragPos = pt;
                 return;
             }
-            if (_cropRect.Contains(pt))
+            // Check if inside the quad — move all corners
+            if (PointInQuad(pt, _cropCorners))
             {
-                _cropHandle = HandlePosition.None;
-                _isDraggingCropHandle = true;
+                _dragCornerIndex = 4; // move all
                 _lastDragPos = pt;
                 return;
             }
-            // Click outside crop rect — restart drag selection
+            // Click outside — restart
             _isCropAdjusting = false;
         }
 
-        // Phase 1: start drag selection
+        // Start drag selection
         _cropDragStart = pt;
-        _cropRect = new RectangleF(pt.X, pt.Y, 0, 0);
+        _cropCorners[0] = pt; _cropCorners[1] = pt;
+        _cropCorners[2] = pt; _cropCorners[3] = pt;
         _isCropDragging = true;
     }
 
@@ -885,49 +871,35 @@ class ScreenshotCanvas : Control
     {
         if (_isCropDragging)
         {
-            // Update crop rect from drag start to current point
-            _cropRect = new RectangleF(
-                Math.Min(_cropDragStart.X, pt.X),
-                Math.Min(_cropDragStart.Y, pt.Y),
-                Math.Abs(pt.X - _cropDragStart.X),
-                Math.Abs(pt.Y - _cropDragStart.Y));
+            // Build rectangle from drag, stored as 4 corners
+            float x1 = Math.Min(_cropDragStart.X, pt.X);
+            float y1 = Math.Min(_cropDragStart.Y, pt.Y);
+            float x2 = Math.Max(_cropDragStart.X, pt.X);
+            float y2 = Math.Max(_cropDragStart.Y, pt.Y);
+            _cropCorners[0] = new PointF(x1, y1); // TL
+            _cropCorners[1] = new PointF(x2, y1); // TR
+            _cropCorners[2] = new PointF(x2, y2); // BR
+            _cropCorners[3] = new PointF(x1, y2); // BL
             return;
         }
 
-        // Phase 2: adjusting handles
         float dx = pt.X - _lastDragPos.X;
         float dy = pt.Y - _lastDragPos.Y;
-        var cr = _cropRect;
 
-        if (_cropHandle == HandlePosition.None)
+        if (_dragCornerIndex >= 0 && _dragCornerIndex <= 3)
         {
-            cr.Offset(dx, dy);
+            // Move single corner
+            _cropCorners[_dragCornerIndex] = new PointF(
+                _cropCorners[_dragCornerIndex].X + dx,
+                _cropCorners[_dragCornerIndex].Y + dy);
         }
-        else
+        else if (_dragCornerIndex == 4)
         {
-            switch (_cropHandle)
-            {
-                case HandlePosition.TopLeft:
-                    cr = RectangleF.FromLTRB(cr.Left + dx, cr.Top + dy, cr.Right, cr.Bottom); break;
-                case HandlePosition.TopCenter:
-                    cr = RectangleF.FromLTRB(cr.Left, cr.Top + dy, cr.Right, cr.Bottom); break;
-                case HandlePosition.TopRight:
-                    cr = RectangleF.FromLTRB(cr.Left, cr.Top + dy, cr.Right + dx, cr.Bottom); break;
-                case HandlePosition.MiddleLeft:
-                    cr = RectangleF.FromLTRB(cr.Left + dx, cr.Top, cr.Right, cr.Bottom); break;
-                case HandlePosition.MiddleRight:
-                    cr = RectangleF.FromLTRB(cr.Left, cr.Top, cr.Right + dx, cr.Bottom); break;
-                case HandlePosition.BottomLeft:
-                    cr = RectangleF.FromLTRB(cr.Left + dx, cr.Top, cr.Right, cr.Bottom + dy); break;
-                case HandlePosition.BottomCenter:
-                    cr = RectangleF.FromLTRB(cr.Left, cr.Top, cr.Right, cr.Bottom + dy); break;
-                case HandlePosition.BottomRight:
-                    cr = RectangleF.FromLTRB(cr.Left, cr.Top, cr.Right + dx, cr.Bottom + dy); break;
-            }
+            // Move all corners
+            for (int i = 0; i < 4; i++)
+                _cropCorners[i] = new PointF(_cropCorners[i].X + dx, _cropCorners[i].Y + dy);
         }
 
-        if (cr.Width >= 10 && cr.Height >= 10)
-            _cropRect = cr;
         _lastDragPos = pt;
     }
 
@@ -936,39 +908,181 @@ class ScreenshotCanvas : Control
         if (!_isCropAdjusting || _session == null) return;
         _isCropAdjusting = false;
         _isCropDragging = false;
-        CropCanvasTo(_cropRect);
+        _dragCornerIndex = -1;
+        ApplyPerspectiveCrop();
     }
 
     public void CancelCrop()
     {
         _isCropDragging = false;
         _isCropAdjusting = false;
-        _isDraggingCropHandle = false;
+        _dragCornerIndex = -1;
         Invalidate();
     }
 
-    private HandlePosition HitTestCropHandle(PointF pt)
+    private int HitTestCropCorner(PointF pt, float tolerance = 14f)
     {
-        var cr = _cropRect;
-        float hs = 8f, tol = 6f;
-        float mx = cr.X + cr.Width / 2, my = cr.Y + cr.Height / 2;
-        var positions = new[] {
-            (HandlePosition.TopLeft, cr.Left, cr.Top),
-            (HandlePosition.TopCenter, mx, cr.Top),
-            (HandlePosition.TopRight, cr.Right, cr.Top),
-            (HandlePosition.MiddleLeft, cr.Left, my),
-            (HandlePosition.MiddleRight, cr.Right, my),
-            (HandlePosition.BottomLeft, cr.Left, cr.Bottom),
-            (HandlePosition.BottomCenter, mx, cr.Bottom),
-            (HandlePosition.BottomRight, cr.Right, cr.Bottom),
-        };
-        foreach (var (handle, hx, hy) in positions)
+        for (int i = 0; i < 4; i++)
         {
-            if (Math.Abs(pt.X - hx) < hs + tol && Math.Abs(pt.Y - hy) < hs + tol)
-                return handle;
+            if (Math.Abs(pt.X - _cropCorners[i].X) < tolerance &&
+                Math.Abs(pt.Y - _cropCorners[i].Y) < tolerance)
+                return i;
         }
-        return HandlePosition.None;
+        return -1;
     }
+
+    private static bool PointInQuad(PointF p, PointF[] quad)
+    {
+        // Cross product sign test for convex quad
+        bool SameSide(PointF a, PointF b, PointF c, PointF pt)
+        {
+            float cross1 = (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
+            float cross2 = (b.X - a.X) * (pt.Y - a.Y) - (b.Y - a.Y) * (pt.X - a.X);
+            return cross1 * cross2 >= 0;
+        }
+        // Check if point is inside triangle TL-TR-BR or TL-BR-BL
+        bool InTri(PointF a, PointF b, PointF c, PointF pt)
+        {
+            return SameSide(a, b, c, pt) && SameSide(b, c, a, pt) && SameSide(c, a, b, pt);
+        }
+        return InTri(quad[0], quad[1], quad[2], p) || InTri(quad[0], quad[2], quad[3], p);
+    }
+
+    private PointF[] GetNormalizedCropCorners()
+    {
+        if (_isCropDragging)
+        {
+            float x1 = Math.Min(_cropDragStart.X, _cropCorners[2].X);
+            float y1 = Math.Min(_cropDragStart.Y, _cropCorners[2].Y);
+            float x2 = Math.Max(_cropDragStart.X, _cropCorners[2].X);
+            float y2 = Math.Max(_cropDragStart.Y, _cropCorners[2].Y);
+            return new[] { new PointF(x1, y1), new PointF(x2, y1), new PointF(x2, y2), new PointF(x1, y2) };
+        }
+        return (PointF[])_cropCorners.Clone();
+    }
+
+    private void ApplyPerspectiveCrop()
+    {
+        if (_session == null) return;
+
+        // Flatten the full canvas (base image + annotations) into one bitmap
+        var flattened = ScreenshotExporter.Flatten(_session);
+
+        // Compute output dimensions from the quad
+        float outW = Math.Max(Dist(_cropCorners[0], _cropCorners[1]), Dist(_cropCorners[3], _cropCorners[2]));
+        float outH = Math.Max(Dist(_cropCorners[0], _cropCorners[3]), Dist(_cropCorners[1], _cropCorners[2]));
+        int w = Math.Max(1, (int)Math.Round(outW));
+        int h = Math.Max(1, (int)Math.Round(outH));
+
+        // Perspective warp: for each output pixel, sample from the source quad
+        var result = PerspectiveWarp(flattened, _cropCorners, w, h);
+        flattened.Dispose();
+
+        // Replace session state
+        _session.OriginalImage = result;
+        _session.CanvasSize = new Size(w, h);
+        _session.ImageOffset = Point.Empty;
+
+        // Clear annotations (they're baked into the warp)
+        _session.Annotations.Clear();
+        _session.UndoRedo.Clear();
+
+        Size = new Size(w, h);
+        Invalidate();
+        CanvasChanged?.Invoke();
+    }
+
+    private static unsafe Bitmap PerspectiveWarp(Bitmap source, PointF[] srcQuad, int outW, int outH)
+    {
+        var result = new Bitmap(outW, outH, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        var srcData = source.LockBits(
+            new System.Drawing.Rectangle(0, 0, source.Width, source.Height),
+            System.Drawing.Imaging.ImageLockMode.ReadOnly,
+            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        var dstData = result.LockBits(
+            new System.Drawing.Rectangle(0, 0, outW, outH),
+            System.Drawing.Imaging.ImageLockMode.WriteOnly,
+            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+        int srcStride = srcData.Stride;
+        int dstStride = dstData.Stride;
+        byte* srcPtr = (byte*)srcData.Scan0;
+        byte* dstPtr = (byte*)dstData.Scan0;
+
+        // TL=0, TR=1, BR=2, BL=3
+        float tlx = srcQuad[0].X, tly = srcQuad[0].Y;
+        float trx = srcQuad[1].X, try_ = srcQuad[1].Y;
+        float brx = srcQuad[2].X, bry = srcQuad[2].Y;
+        float blx = srcQuad[3].X, bly = srcQuad[3].Y;
+
+        int srcW = source.Width, srcH = source.Height;
+        int srcWm1 = srcW - 1, srcHm1 = srcH - 1;
+        float invH = outH > 1 ? 1f / (outH - 1) : 0;
+        float invW = outW > 1 ? 1f / (outW - 1) : 0;
+
+        for (int dy = 0; dy < outH; dy++)
+        {
+            float v = dy * invH;
+            float leftX = tlx + (blx - tlx) * v;
+            float leftY = tly + (bly - tly) * v;
+            float rightX = trx + (brx - trx) * v;
+            float rightY = try_ + (bry - try_) * v;
+
+            byte* dstRow = dstPtr + dy * dstStride;
+
+            for (int dx = 0; dx < outW; dx++)
+            {
+                float u = dx * invW;
+                float sx = leftX + (rightX - leftX) * u;
+                float sy = leftY + (rightY - leftY) * u;
+
+                // Bilinear interpolation: blend 4 surrounding pixels
+                int x0 = (int)MathF.Floor(sx);
+                int y0 = (int)MathF.Floor(sy);
+
+                if (x0 < -1 || x0 >= srcW || y0 < -1 || y0 >= srcH)
+                    continue;
+
+                float fx = sx - x0;
+                float fy = sy - y0;
+                float fx1 = 1f - fx;
+                float fy1 = 1f - fy;
+
+                // Clamp to valid pixel range
+                int x1 = Math.Min(x0 + 1, srcWm1);
+                int y1 = Math.Min(y0 + 1, srcHm1);
+                x0 = Math.Max(x0, 0);
+                y0 = Math.Max(y0, 0);
+
+                byte* p00 = srcPtr + y0 * srcStride + x0 * 4;
+                byte* p10 = srcPtr + y0 * srcStride + x1 * 4;
+                byte* p01 = srcPtr + y1 * srcStride + x0 * 4;
+                byte* p11 = srcPtr + y1 * srcStride + x1 * 4;
+
+                // Blend weights
+                float w00 = fx1 * fy1;
+                float w10 = fx * fy1;
+                float w01 = fx1 * fy;
+                float w11 = fx * fy;
+
+                byte* dstPixel = dstRow + dx * 4;
+                dstPixel[0] = (byte)(p00[0] * w00 + p10[0] * w10 + p01[0] * w01 + p11[0] * w11 + 0.5f); // B
+                dstPixel[1] = (byte)(p00[1] * w00 + p10[1] * w10 + p01[1] * w01 + p11[1] * w11 + 0.5f); // G
+                dstPixel[2] = (byte)(p00[2] * w00 + p10[2] * w10 + p01[2] * w01 + p11[2] * w11 + 0.5f); // R
+                dstPixel[3] = (byte)(p00[3] * w00 + p10[3] * w10 + p01[3] * w01 + p11[3] * w11 + 0.5f); // A
+            }
+        }
+
+        source.UnlockBits(srcData);
+        result.UnlockBits(dstData);
+        return result;
+    }
+
+    private static PointF Lerp(PointF a, PointF b, float t)
+        => new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
+
+    private static float Dist(PointF a, PointF b)
+        => MathF.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
 
 
 
