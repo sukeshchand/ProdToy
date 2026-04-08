@@ -991,39 +991,160 @@ class SettingsForm : Form
         _tabControl.TabPages.Add(aboutPage);
         int ab = tp;
 
-        // --- Version info ---
-        var aboutVersionLabel = new Label
+        // --- App icon + name + version ---
+        var appIconPanel = new Panel
         {
-            Text = $"ProdToy v{AppVersion.Current}",
-            Font = new Font("Segoe UI Semibold", 14f, FontStyle.Bold),
-            ForeColor = currentTheme.TextPrimary,
-            AutoSize = true,
+            Size = new Size(48, 48),
             Location = new Point(tp, ab),
             BackColor = Color.Transparent,
         };
-        aboutPage.Controls.Add(aboutVersionLabel);
-        ab += 34;
-
-        var aboutDescLabel = new Label
+        appIconPanel.Paint += (_, e) =>
         {
-            Text = "Developer utility toolkit for Windows",
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using var bgBrush = new SolidBrush(currentTheme.PrimaryDim);
+            e.Graphics.FillEllipse(bgBrush, 0, 0, 47, 47);
+            using var textBrush = new SolidBrush(currentTheme.Primary);
+            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            using var iconFont = new Font("Segoe UI Semibold", 18f, FontStyle.Bold);
+            e.Graphics.DrawString("P", iconFont, textBrush, new RectangleF(0, 0, 48, 48), sf);
+        };
+        aboutPage.Controls.Add(appIconPanel);
+
+        var aboutNameLabel = new Label
+        {
+            Text = "ProdToy",
+            Font = new Font("Segoe UI Semibold", 16f, FontStyle.Bold),
+            ForeColor = currentTheme.TextPrimary,
+            AutoSize = true,
+            Location = new Point(tp + 58, ab),
+            BackColor = Color.Transparent,
+        };
+        aboutPage.Controls.Add(aboutNameLabel);
+
+        var aboutVersionLabel = new Label
+        {
+            Text = $"Version {AppVersion.Current}",
             Font = new Font("Segoe UI", 9.5f),
             ForeColor = currentTheme.TextSecondary,
             AutoSize = true,
+            Location = new Point(tp + 60, ab + 28),
+            BackColor = Color.Transparent,
+        };
+        aboutPage.Controls.Add(aboutVersionLabel);
+        ab += 58;
+
+        var aboutDescLabel = new Label
+        {
+            Text = "Developer utility toolkit for Windows.\nNotifications, screen capture, and productivity tools for Claude Code.",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = currentTheme.TextSecondary,
+            AutoSize = true,
+            MaximumSize = new Size(tabInner, 0),
             Location = new Point(tp, ab),
             BackColor = Color.Transparent,
         };
         aboutPage.Controls.Add(aboutDescLabel);
-        ab += 32;
+        ab += aboutDescLabel.PreferredHeight + 14;
 
         // --- Separator ---
         aboutPage.Controls.Add(CreateSeparator(tp, ab, tabInner));
-        ab += 18;
+        ab += 14;
+
+        // --- Repository Section ---
+        var repoSectionLabel = CreateSectionLabel("REPOSITORY", tp, ab);
+        aboutPage.Controls.Add(repoSectionLabel);
+        ab += 26;
+
+        // GitHub icon (drawn) + repo link
+        var githubIconPanel = new Panel
+        {
+            Size = new Size(22, 22),
+            Location = new Point(tp, ab + 1),
+            BackColor = Color.Transparent,
+            Cursor = Cursors.Hand,
+        };
+        githubIconPanel.Paint += (_, e) =>
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            // Draw GitHub octocat-style circle icon
+            using var circleBrush = new SolidBrush(currentTheme.TextSecondary);
+            e.Graphics.FillEllipse(circleBrush, 1, 1, 20, 20);
+            using var innerBrush = new SolidBrush(currentTheme.BgDark);
+            // Inner cutout for the "cat" silhouette effect
+            e.Graphics.FillEllipse(innerBrush, 4, 4, 14, 14);
+            using var fgBrush = new SolidBrush(currentTheme.TextSecondary);
+            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            using var ghFont = new Font("Segoe UI Semibold", 9f, FontStyle.Bold);
+            e.Graphics.DrawString("\u2B24", ghFont, fgBrush, new RectangleF(0, 0, 22, 22), sf);
+        };
+        githubIconPanel.Click += (_, _) =>
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://github.com/sukeshchand/ProdToy") { UseShellExecute = true }); } catch { }
+        };
+        aboutPage.Controls.Add(githubIconPanel);
+
+        var repoLink = new Label
+        {
+            Text = "github.com/sukeshchand/ProdToy",
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Underline),
+            ForeColor = currentTheme.Primary,
+            AutoSize = true,
+            Location = new Point(tp + 28, ab + 2),
+            BackColor = Color.Transparent,
+            Cursor = Cursors.Hand,
+        };
+        repoLink.Click += (_, _) =>
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://github.com/sukeshchand/ProdToy") { UseShellExecute = true }); } catch { }
+        };
+        repoLink.MouseEnter += (_, _) => repoLink.ForeColor = currentTheme.PrimaryLight;
+        repoLink.MouseLeave += (_, _) => repoLink.ForeColor = currentTheme.Primary;
+        aboutPage.Controls.Add(repoLink);
+        ab += 30;
+
+        // Info rows: Author, License, Runtime
+        var infoItems = new (string label, string value)[]
+        {
+            ("Author", "Sukesh Chand"),
+            ("License", "MIT"),
+            ("Runtime", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription),
+            ("Platform", $"Windows {Environment.OSVersion.Version.Major}.{Environment.OSVersion.Version.Minor}"),
+        };
+        foreach (var (label, value) in infoItems)
+        {
+            var rowLabel = new Label
+            {
+                Text = label,
+                Font = new Font("Segoe UI", 8.5f),
+                ForeColor = currentTheme.TextSecondary,
+                Size = new Size(80, 20),
+                Location = new Point(tp, ab),
+                BackColor = Color.Transparent,
+            };
+            aboutPage.Controls.Add(rowLabel);
+
+            var rowValue = new Label
+            {
+                Text = value,
+                Font = new Font("Segoe UI", 8.5f),
+                ForeColor = currentTheme.TextPrimary,
+                AutoSize = true,
+                Location = new Point(tp + 84, ab),
+                BackColor = Color.Transparent,
+            };
+            aboutPage.Controls.Add(rowValue);
+            ab += 22;
+        }
+        ab += 10;
+
+        // --- Separator ---
+        aboutPage.Controls.Add(CreateSeparator(tp, ab, tabInner));
+        ab += 14;
 
         // --- Updates Section ---
         var updateSectionLabel = CreateSectionLabel("UPDATES", tp, ab);
         aboutPage.Controls.Add(updateSectionLabel);
-        ab += 24;
+        ab += 26;
 
         var updatePathLabel = new Label
         {
