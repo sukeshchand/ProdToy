@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Scripts\context-bar.ps1" LogicalName="ProdToy.Scripts.context-bar.ps1" />
+    <EmbeddedResource Include="Scripts\Show-ProdToy.ps1" LogicalName="ProdToy.Scripts.Show-ProdToy.ps1" />
   </ItemGroup>
 
   <!-- Exclude XML doc files and PDB from publish output -->

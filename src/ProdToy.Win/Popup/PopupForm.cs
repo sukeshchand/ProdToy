@@ -55,12 +55,15 @@ class PopupForm : Form
     private List<HistoryIndex>? _filteredIndex;
     private DateTime _selectedDate = DateTime.Today;
 
+    private readonly Label _copyMdLink;
+    private readonly Label _copyPreviewLink;
+    private readonly Label _copyHtmlLink;
     private readonly Label _updateAvailableLabel;
     private readonly Label _updateButton;
 
     private const int HeaderHeight = 58;
     private const int InfoBarHeight = 56;
-    private const int FooterHeight = 100;
+    private const int FooterHeight = 105;
 
     public PopupTheme CurrentTheme => _theme;
     public bool IsSnoozed => DateTime.Now < _snoozeUntil;
@@ -262,6 +265,16 @@ class PopupForm : Form
         _okButton.FlatAppearance.MouseDownBackColor = theme.PrimaryDim;
         _okButton.Click += (_, _) => OnOkClick();
 
+        // --- Copy format links ---
+        _copyMdLink = CreateCopyLink("Copy Markdown", theme);
+        _copyMdLink.Click += (_, _) => CopyAs("markdown");
+
+        _copyPreviewLink = CreateCopyLink("Copy Preview", theme);
+        _copyPreviewLink.Click += (_, _) => CopyAs("preview");
+
+        _copyHtmlLink = CreateCopyLink("Copy HTML", theme);
+        _copyHtmlLink.Click += (_, _) => CopyAs("html");
+
         _snoozeCheckBox = new CheckBox
         {
             Text = "Snooze for 30 minutes",
@@ -270,7 +283,7 @@ class PopupForm : Form
             BackColor = Color.Transparent,
             AutoSize = true,
             Cursor = Cursors.Hand,
-            Location = new Point(20, 60),
+            Location = new Point(20, 68),
         };
 
         // --- Update notification (bottom-left of footer, hidden by default) ---
@@ -281,7 +294,7 @@ class PopupForm : Form
             ForeColor = theme.SuccessColor,
             BackColor = Color.Transparent,
             AutoSize = true,
-            Location = new Point(20, 80),
+            Location = new Point(20, 88),
             Visible = false,
         };
 
@@ -298,6 +311,9 @@ class PopupForm : Form
         _updateButton.Click += (_, _) => OnUpdateClick();
 
         _footerPanel.Controls.Add(_separator);
+        _footerPanel.Controls.Add(_copyMdLink);
+        _footerPanel.Controls.Add(_copyPreviewLink);
+        _footerPanel.Controls.Add(_copyHtmlLink);
         _footerPanel.Controls.Add(_okButton);
         _footerPanel.Controls.Add(_snoozeCheckBox);
         _footerPanel.Controls.Add(_updateAvailableLabel);
@@ -359,12 +375,23 @@ class PopupForm : Form
     {
         if (_footerPanel == null || _okButton == null || _versionLabel == null) return;
 
-        // Center OK button in footer
-        _okButton.Location = new Point((_footerPanel.ClientSize.Width - _okButton.Width) / 2, 16);
+        int footerW = _footerPanel.ClientSize.Width;
+
+        // Copy links row — centered above OK button
+        int linkSpacing = 16;
+        int totalLinkWidth = _copyMdLink.PreferredWidth + _copyPreviewLink.PreferredWidth + _copyHtmlLink.PreferredWidth + linkSpacing * 2;
+        int linkStartX = (footerW - totalLinkWidth) / 2;
+        int linkY = 8;
+        _copyMdLink.Location = new Point(linkStartX, linkY);
+        _copyPreviewLink.Location = new Point(_copyMdLink.Right + linkSpacing, linkY);
+        _copyHtmlLink.Location = new Point(_copyPreviewLink.Right + linkSpacing, linkY);
+
+        // Center OK button below copy links
+        _okButton.Location = new Point((footerW - _okButton.Width) / 2, linkY + _copyMdLink.Height + 6);
 
         // Version label bottom-right of footer
         _versionLabel.Location = new Point(
-            _footerPanel.ClientSize.Width - _versionLabel.Width - 12,
+            footerW - _versionLabel.Width - 12,
             _footerPanel.ClientSize.Height - _versionLabel.Height - 6);
 
         // Nav buttons right-aligned in info panel, session info below subtitle
@@ -456,6 +483,9 @@ class PopupForm : Form
         _okButton.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
         _okButton.FlatAppearance.MouseDownBackColor = theme.PrimaryDim;
 
+        foreach (var copyLink in new[] { _copyMdLink, _copyPreviewLink, _copyHtmlLink })
+            copyLink.ForeColor = theme.TextSecondary;
+
         _snoozeCheckBox.ForeColor = theme.TextSecondary;
 
         _prevButton.BackColor = theme.PrimaryDim;
@@ -528,6 +558,104 @@ class PopupForm : Form
             bgColorHex: ToHex(_theme.BgDark),
             codeBgHex: isLight ? "rgba(0,0,0,0.06)" : "rgba(12, 16, 26, 0.8)",
             themePrimaryHex: ToHex(_theme.Primary));
+    }
+
+    private Label CreateCopyLink(string text, PopupTheme theme)
+    {
+        var link = new Label
+        {
+            Text = text,
+            Font = new Font("Segoe UI", 8f),
+            ForeColor = theme.TextSecondary,
+            BackColor = Color.Transparent,
+            AutoSize = true,
+            Cursor = Cursors.Hand,
+        };
+        link.MouseEnter += (_, _) => { link.ForeColor = _theme.Primary; link.Font = new Font(link.Font, FontStyle.Underline); };
+        link.MouseLeave += (_, _) => { link.ForeColor = _theme.TextSecondary; link.Font = new Font(link.Font, FontStyle.Regular); };
+        return link;
+    }
+
+    private void CopyAs(string format)
+    {
+        if (string.IsNullOrEmpty(_lastMessage)) return;
+
+        Label link = format switch
+        {
+            "markdown" => _copyMdLink,
+            "preview" => _copyPreviewLink,
+            _ => _copyHtmlLink,
+        };
+        string originalText = link.Text;
+
+        try
+        {
+            string textToCopy = format switch
+            {
+                "markdown" => _lastMessage,
+                "html" => RenderHtml(_lastMessage),
+                _ => _lastMessage, // preview handled below
+            };
+
+            if (format == "preview")
+            {
+                string previewHtml = RenderHtml(_lastMessage);
+                var dataObj = new DataObject();
+                dataObj.SetData(DataFormats.Html, CreateHtmlClipboardFormat(previewHtml));
+                dataObj.SetData(DataFormats.UnicodeText, _lastMessage);
+                Clipboard.SetDataObject(dataObj, copy: true);
+            }
+            else
+            {
+                Clipboard.SetDataObject(textToCopy, copy: true);
+            }
+
+            link.Text = "\u2713 Copied";
+            link.ForeColor = _theme.SuccessColor;
+            var resetTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+            resetTimer.Tick += (_, _) =>
+            {
+                link.Text = originalText;
+                link.ForeColor = _theme.TextSecondary;
+                resetTimer.Stop();
+                resetTimer.Dispose();
+            };
+            resetTimer.Start();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"CopyAs({format}) failed: {ex.Message}");
+            link.Text = "Failed";
+            link.ForeColor = _theme.ErrorColor;
+            var resetTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+            resetTimer.Tick += (_, _) =>
+            {
+                link.Text = originalText;
+                link.ForeColor = _theme.TextSecondary;
+                resetTimer.Stop();
+                resetTimer.Dispose();
+            };
+            resetTimer.Start();
+        }
+    }
+
+    private static string CreateHtmlClipboardFormat(string htmlBody)
+    {
+        string startFrag = "<!--StartFragment-->";
+        string endFrag = "<!--EndFragment-->";
+        string htmlPrefix = "<html><body>" + startFrag;
+        string htmlSuffix = endFrag + "</body></html>";
+
+        // The header has fixed-width placeholders
+        string headerTemplate = "Version:0.9\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n";
+        int headerLen = headerTemplate.Length;
+        int startHtmlIdx = headerLen;
+        int startFragIdx = headerLen + htmlPrefix.Length;
+        int endFragIdx = startFragIdx + htmlBody.Length;
+        int endHtmlIdx = endFragIdx + htmlSuffix.Length;
+
+        return $"Version:0.9\r\nStartHTML:{startHtmlIdx:D10}\r\nEndHTML:{endHtmlIdx:D10}\r\nStartFragment:{startFragIdx:D10}\r\nEndFragment:{endFragIdx:D10}\r\n"
+            + htmlPrefix + htmlBody + htmlSuffix;
     }
 
     private void ApplyTypeColors(string type)
@@ -699,6 +827,7 @@ class PopupForm : Form
 
     private void DisplayMessage(string title, string message, string type, string question = "", string sessionId = "", string cwd = "")
     {
+        _lastMessage = message;
         ApplyTypeColors(type);
         Text = title;
         _titleLabel.Text = title;
