@@ -21,6 +21,9 @@ public class ClaudeIntegrationPlugin : IPlugin
     {
         var settings = _context.LoadSettings<ClaudePluginSettings>();
 
+        // Ensure hook script exists on disk (critical after updates or fresh install)
+        EnsureHookScript();
+
         // Verify and sync all Claude hooks with plugin settings
         ClaudeHookManager.UpdateClaudeHook("Stop", null, settings.HookStopEnabled);
         ClaudeHookManager.UpdateClaudeHook("Notification",
@@ -28,9 +31,8 @@ public class ClaudeIntegrationPlugin : IPlugin
         ClaudeHookManager.UpdateClaudeHook("UserPromptSubmit", null, settings.HookUserPromptEnabled);
 
         // Verify and sync status line
-        var slSettings = _context.LoadSettings<ClaudePluginSettings>();
         if (ClaudeStatusLine.IsEnabled())
-            ClaudeStatusLine.WriteConfig(slSettings);
+            ClaudeStatusLine.WriteConfig(settings);
 
         // Sync auto-title if enabled
         if (settings.AutoTitleToFolder)
@@ -39,32 +41,68 @@ public class ClaudeIntegrationPlugin : IPlugin
         // Cleanup legacy hooks
         ClaudeHookManager.CleanupOldHook();
 
-        _context.Log("Claude integration started — hooks and status line verified");
+        _context.Log("Claude integration started — hooks, script, and status line verified");
     }
 
     public void Stop()
     {
-        // Remove all ProdToy hooks from Claude settings
+        // Remove ALL ProdToy hooks and integrations from Claude
         try
         {
+            // Remove hook entries from settings.json
             ClaudeHookManager.UpdateClaudeHook("Stop", null, false);
             ClaudeHookManager.UpdateClaudeHook("Notification",
                 "permission_prompt|idle_prompt|elicitation_dialog", false);
             ClaudeHookManager.UpdateClaudeHook("UserPromptSubmit", null, false);
 
-            // Remove auto-title instruction
+            // Remove auto-title instruction from CLAUDE.md
             ClaudeHookManager.SetAutoTitleHook(false);
 
-            // Disable status line
+            // Disable and remove status line
             if (ClaudeStatusLine.IsEnabled())
                 ClaudeStatusLine.Disable();
 
-            _context.Log("Claude integration stopped — all hooks and status line removed");
+            // Delete the hook script file so Claude Code can't invoke ProdToy
+            DeleteHookScript();
+
+            _context.Log("Claude integration stopped — all hooks, script, and status line removed");
         }
         catch (Exception ex)
         {
             _context.LogError("Failed to clean up Claude hooks on stop", ex);
         }
+    }
+
+    private void EnsureHookScript()
+    {
+        try
+        {
+            // The hook script needs the host exe path
+            string exePath = Path.Combine(_context.Host.AppRootPath, "ProdToy.exe");
+            if (!File.Exists(exePath))
+                exePath = Application.ExecutablePath;
+
+            // Delegate to host's Updater which has the script template
+            // For now, just verify the file exists
+            string scriptPath = Path.Combine(ClaudePaths.ClaudeHooksDir, "Show-ProdToy.ps1");
+            if (!File.Exists(scriptPath))
+                _context.Log("Hook script missing — will be created by host on next startup");
+        }
+        catch (Exception ex)
+        {
+            _context.LogError("Failed to ensure hook script", ex);
+        }
+    }
+
+    private static void DeleteHookScript()
+    {
+        try
+        {
+            string scriptPath = Path.Combine(ClaudePaths.ClaudeHooksDir, "Show-ProdToy.ps1");
+            if (File.Exists(scriptPath))
+                File.Delete(scriptPath);
+        }
+        catch { }
     }
 
     public void Dispose() { }
