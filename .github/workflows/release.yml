@@ -40,9 +40,41 @@ jobs:
             echo "EXISTS=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Publish
+      - name: Publish Host
         if: steps.check_tag.outputs.EXISTS == 'false'
         run: dotnet publish -c Release src/ProdToy.Win
+
+      - name: Build Plugins
+        if: steps.check_tag.outputs.EXISTS == 'false'
+        run: |
+          dotnet build -c Release src/ProdToy.Plugins.Alarm
+          dotnet build -c Release src/ProdToy.Plugins.Screenshot
+          dotnet build -c Release src/ProdToy.Plugins.ClaudeIntegration
+
+      - name: Assemble Bundle
+        if: steps.check_tag.outputs.EXISTS == 'false'
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.VERSION }}"
+          $staging = "release/bundle"
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          Copy-Item "release/ProdToy.exe" $staging
+
+          $plugins = @(
+            @{ Id="ProdToy.Alarm";              Dll="ProdToy.Plugins.Alarm" },
+            @{ Id="ProdToy.Screenshot";         Dll="ProdToy.Plugins.Screenshot" },
+            @{ Id="ProdToy.ClaudeIntegration";  Dll="ProdToy.Plugins.ClaudeIntegration" }
+          )
+          foreach ($p in $plugins) {
+            $dest = "$staging/plugins/$($p.Id)"
+            New-Item -ItemType Directory -Path $dest -Force | Out-Null
+            $src = "src/$($p.Dll)/bin/Release/net8.0-windows"
+            Copy-Item "$src/$($p.Dll).dll" $dest
+            Copy-Item "$src/$($p.Dll).deps.json" $dest -ErrorAction SilentlyContinue
+          }
+
+          Compress-Archive -Path "$staging/*" -DestinationPath "release/ProdToy-v$v.zip"
+          Write-Host "Created release/ProdToy-v$v.zip"
 
       - name: Create Release
         if: steps.check_tag.outputs.EXISTS == 'false'
@@ -51,4 +83,6 @@ jobs:
           tag_name: v${{ steps.version.outputs.VERSION }}
           name: ProdToy v${{ steps.version.outputs.VERSION }}
           generate_release_notes: true
-          files: release/ProdToy.exe
+          files: |
+            release/ProdToy-v${{ steps.version.outputs.VERSION }}.zip
+            release/ProdToy.exe

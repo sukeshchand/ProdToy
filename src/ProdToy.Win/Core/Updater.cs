@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Net.Http;
 using System.Text;
 
@@ -25,22 +26,60 @@ static class Updater
             string currentExe = Application.ExecutablePath;
             string currentExeName = Path.GetFileName(currentExe);
             string updateExe = Path.Combine(installDir, "ProdToy.update.exe");
+            string stagingPluginsDir = Path.Combine(installDir, "_update_plugins");
             string scriptPath = Path.Combine(installDir, "_update.ps1");
+            string pluginsInstallDir = AppPaths.PluginsDir;
             int currentPid = Environment.ProcessId;
 
-            // Step 1: Get new exe to local staging file
+            // Step 1: Get new exe and plugins to local staging
             bool isHttp = location.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
                        || location.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
             if (isHttp)
             {
-                // Download from URL (use DownloadUrl from metadata if available)
-                string downloadUrl = metadata?.DownloadUrl ?? "";
-                if (string.IsNullOrWhiteSpace(downloadUrl))
-                    return new UpdateResult(false, "No download URL found in the release.");
+                // Prefer bundle zip (exe + plugins), fall back to bare exe
+                string bundleUrl = metadata?.BundleDownloadUrl ?? "";
+                string exeUrl = metadata?.DownloadUrl ?? "";
 
-                var bytes = _http.GetByteArrayAsync(downloadUrl).GetAwaiter().GetResult();
-                File.WriteAllBytes(updateExe, bytes);
+                if (!string.IsNullOrWhiteSpace(bundleUrl))
+                {
+                    // Download and extract bundle zip
+                    string tempZip = Path.Combine(Path.GetTempPath(), "ProdToy_update.zip");
+                    string extractDir = Path.Combine(Path.GetTempPath(), "ProdToy_update");
+
+                    var zipBytes = _http.GetByteArrayAsync(bundleUrl).GetAwaiter().GetResult();
+                    File.WriteAllBytes(tempZip, zipBytes);
+
+                    if (Directory.Exists(extractDir))
+                        Directory.Delete(extractDir, recursive: true);
+                    ZipFile.ExtractToDirectory(tempZip, extractDir);
+
+                    // Find ProdToy.exe in extracted contents
+                    string? exeInZip = FindFileRecursive(extractDir, "ProdToy.exe");
+                    if (exeInZip == null)
+                    {
+                        CleanupTemp(tempZip, extractDir);
+                        return new UpdateResult(false, "ProdToy.exe not found in update bundle.");
+                    }
+                    File.Copy(exeInZip, updateExe, overwrite: true);
+
+                    // Stage plugins from extracted bundle
+                    string? pluginsInZip = FindDirectoryRecursive(extractDir, "plugins");
+                    if (pluginsInZip != null)
+                        CopyDirectory(pluginsInZip, stagingPluginsDir);
+
+                    CleanupTemp(tempZip, extractDir);
+                }
+                else if (!string.IsNullOrWhiteSpace(exeUrl))
+                {
+                    // Fall back to bare exe download (backward compat)
+                    var bytes = _http.GetByteArrayAsync(exeUrl).GetAwaiter().GetResult();
+                    File.WriteAllBytes(updateExe, bytes);
+                }
+                else
+                {
+                    return new UpdateResult(false, "No download URL found in the release.");
+                }
             }
             else
             {
@@ -50,19 +89,26 @@ static class Updater
                     return new UpdateResult(false, $"Update file not found at {sourceExe}");
 
                 File.Copy(sourceExe, updateExe, overwrite: true);
+
+                // Stage plugins from local/network path
+                string sourcePluginsDir = Path.Combine(location, "plugins");
+                if (Directory.Exists(sourcePluginsDir))
+                    CopyDirectory(sourcePluginsDir, stagingPluginsDir);
             }
 
             // Step 2: Write the updater PowerShell script
             string ps1 = $@"
 # ProdToy Auto-Updater
-# Wait for the original process to exit, then swap the exe and relaunch.
+# Wait for the original process to exit, then swap the exe, deploy plugins, and relaunch.
 
-$exePath   = '{currentExe.Replace("'", "''")}'
-$exeName   = '{currentExeName.Replace("'", "''")}'
-$updateExe = '{updateExe.Replace("'", "''")}'
-$installDir = '{installDir.Replace("'", "''")}'
-$targetPid  = {currentPid}
-$scriptPath = '{scriptPath.Replace("'", "''")}'
+$exePath       = '{currentExe.Replace("'", "''")}'
+$exeName       = '{currentExeName.Replace("'", "''")}'
+$updateExe     = '{updateExe.Replace("'", "''")}'
+$installDir    = '{installDir.Replace("'", "''")}'
+$targetPid     = {currentPid}
+$scriptPath    = '{scriptPath.Replace("'", "''")}'
+$pluginsSource = '{stagingPluginsDir.Replace("'", "''")}'
+$pluginsDest   = '{pluginsInstallDir.Replace("'", "''")}'
 
 # Phase 1: Wait for the process to exit (check every 2 sec, up to 10 sec)
 $waited = 0
@@ -92,6 +138,17 @@ if (Test-Path $exePath) {{
 }}
 if (Test-Path $updateExe) {{
     Rename-Item $updateExe $exeName -Force
+}}
+
+# Phase 3.5: Deploy plugin DLLs
+if (Test-Path $pluginsSource) {{
+    if (-not (Test-Path $pluginsDest)) {{ New-Item -ItemType Directory -Path $pluginsDest -Force | Out-Null }}
+    foreach ($dir in Get-ChildItem $pluginsSource -Directory) {{
+        $dest = Join-Path $pluginsDest $dir.Name
+        if (-not (Test-Path $dest)) {{ New-Item -ItemType Directory -Path $dest -Force | Out-Null }}
+        Copy-Item ""$($dir.FullName)\*"" $dest -Force -Recurse
+    }}
+    Remove-Item $pluginsSource -Recurse -Force -ErrorAction SilentlyContinue
 }}
 
 # Phase 4: Relaunch
@@ -127,6 +184,37 @@ Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
         {
             return new UpdateResult(false, $"Update failed: {ex.Message}");
         }
+    }
+
+    private static string? FindFileRecursive(string rootDir, string fileName)
+    {
+        foreach (var file in Directory.GetFiles(rootDir, fileName, SearchOption.AllDirectories))
+            return file;
+        return null;
+    }
+
+    private static string? FindDirectoryRecursive(string rootDir, string dirName)
+    {
+        foreach (var dir in Directory.GetDirectories(rootDir, dirName, SearchOption.AllDirectories))
+            return dir;
+        return null;
+    }
+
+    private static void CopyDirectory(string sourceDir, string destDir)
+    {
+        if (Directory.Exists(destDir))
+            Directory.Delete(destDir, recursive: true);
+        Directory.CreateDirectory(destDir);
+        foreach (var file in Directory.GetFiles(sourceDir))
+            File.Copy(file, Path.Combine(destDir, Path.GetFileName(file)), overwrite: true);
+        foreach (var dir in Directory.GetDirectories(sourceDir))
+            CopyDirectory(dir, Path.Combine(destDir, Path.GetFileName(dir)));
+    }
+
+    private static void CleanupTemp(string tempZip, string extractDir)
+    {
+        try { File.Delete(tempZip); } catch { }
+        try { if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true); } catch { }
     }
 
     /// <summary>

@@ -14,9 +14,16 @@ record UpdateMetadata
     public string PublishedAt { get; init; } = "";
 
     /// <summary>
-    /// HTTP URL to download the exe from (set when update source is a URL).
+    /// HTTP URL to download the bare exe from (set when update source is a URL).
     /// Null/empty when update source is a local/network path.
     /// </summary>
     [JsonIgnore]
     public string DownloadUrl { get; init; } = "";
+
+    /// <summary>
+    /// HTTP URL to download the full bundle zip (exe + plugins).
+    /// Preferred over DownloadUrl when available.
+    /// </summary>
+    [JsonIgnore]
+    public string BundleDownloadUrl { get; init; } = "";
 }

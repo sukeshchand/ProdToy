@@ -119,13 +119,25 @@ if ($DeployPath -and (Test-Path $DeployPath)) {
     Copy-Item "$releaseDir\ProdToy.exe" $DeployPath -Force
     Copy-Item $metadataPath $DeployPath -Force
 
-    # Deploy plugin zips for catalog
+    # Deploy plugin directories (for bundled install/update) and zips (for catalog)
     $deployPluginsDir = Join-Path $DeployPath "plugins"
     if (-not (Test-Path $deployPluginsDir)) { New-Item -ItemType Directory -Path $deployPluginsDir | Out-Null }
+
+    # Copy expanded plugin directories (used by Updater and SetupForm)
+    foreach ($plugin in $pluginProjects) {
+        $pluginSrcDir = Join-Path $pluginsReleaseDir $plugin.Name
+        if (Test-Path $pluginSrcDir) {
+            $destPluginDir = Join-Path $deployPluginsDir $plugin.Name
+            if (-not (Test-Path $destPluginDir)) { New-Item -ItemType Directory -Path $destPluginDir | Out-Null }
+            Copy-Item "$pluginSrcDir\*" $destPluginDir -Force -Recurse
+            Write-Host "  Deployed plugin dir: $($plugin.Name)/" -ForegroundColor Gray
+        }
+    }
+
+    # Copy plugin zips (for catalog distribution)
     $pluginZips = Get-ChildItem "$pluginsReleaseDir\*.zip" -ErrorAction SilentlyContinue
     foreach ($zip in $pluginZips) {
         Copy-Item $zip.FullName $deployPluginsDir -Force
-        Write-Host "  Deployed plugin: $($zip.Name)" -ForegroundColor Gray
     }
 
     Write-Host "Deployed v$newVersion to $DeployPath" -ForegroundColor Green

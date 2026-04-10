@@ -353,6 +353,33 @@ class SetupForm : Form
             File.Copy(_currentExePath, _installExePath, overwrite: true);
             log.AppendLine($"Installed to {_installExePath}");
 
+            // Step 2b: Copy bundled plugins (if present next to installer exe)
+            try
+            {
+                string sourceDir = Path.GetDirectoryName(_currentExePath)!;
+                string sourcePluginsDir = Path.Combine(sourceDir, "plugins");
+                if (Directory.Exists(sourcePluginsDir))
+                {
+                    string destPluginsDir = AppPaths.PluginsDir;
+                    Directory.CreateDirectory(destPluginsDir);
+                    int pluginCount = 0;
+                    foreach (var pluginDir in Directory.GetDirectories(sourcePluginsDir))
+                    {
+                        string pluginName = Path.GetFileName(pluginDir);
+                        string destDir = Path.Combine(destPluginsDir, pluginName);
+                        Directory.CreateDirectory(destDir);
+                        foreach (var file in Directory.GetFiles(pluginDir))
+                            File.Copy(file, Path.Combine(destDir, Path.GetFileName(file)), overwrite: true);
+                        pluginCount++;
+                    }
+                    log.AppendLine($"Installed {pluginCount} bundled plugin(s)");
+                }
+            }
+            catch (Exception ex)
+            {
+                log.AppendLine($"Plugin install warning: {ex.Message}");
+            }
+
             // Step 3: Apply defaults from defaultSettings.json (if present next to installer)
             ApplyDefaultSettings(log);
 

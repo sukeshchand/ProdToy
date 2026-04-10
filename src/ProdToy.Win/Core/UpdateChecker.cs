@@ -131,19 +131,23 @@ static class UpdateChecker
         string releaseNotes = root["body"]?.GetValue<string>() ?? "";
         string publishedAt = root["published_at"]?.GetValue<string>() ?? "";
 
-        // Find ProdToy.exe in assets
+        // Find ProdToy.exe and ProdToy-v*.zip in assets
         string downloadUrl = "";
+        string bundleDownloadUrl = "";
         var assets = root["assets"]?.AsArray();
         if (assets != null)
         {
             foreach (var asset in assets)
             {
                 var name = asset?["name"]?.GetValue<string>();
+                if (name == null) continue;
+
                 if (string.Equals(name, "ProdToy.exe", StringComparison.OrdinalIgnoreCase))
-                {
                     downloadUrl = asset?["browser_download_url"]?.GetValue<string>() ?? "";
-                    break;
-                }
+
+                if (name.StartsWith("ProdToy-v", StringComparison.OrdinalIgnoreCase)
+                    && name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    bundleDownloadUrl = asset?["browser_download_url"]?.GetValue<string>() ?? "";
             }
         }
 
@@ -153,6 +157,7 @@ static class UpdateChecker
             ReleaseNotes = releaseNotes,
             PublishedAt = publishedAt,
             DownloadUrl = downloadUrl,
+            BundleDownloadUrl = bundleDownloadUrl,
         };
     }
 
