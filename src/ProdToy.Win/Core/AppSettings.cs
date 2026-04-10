@@ -30,64 +30,13 @@ record AppSettingsData
     [JsonPropertyName("updateLocation")]
     public string UpdateLocation { get; init; } = "";
 
-    [JsonPropertyName("autoTitleToFolder")]
-    public bool AutoTitleToFolder { get; init; } = false;
-
-    // Status line item visibility
-    [JsonPropertyName("slShowModel")] public bool SlShowModel { get; init; } = true;
-    [JsonPropertyName("slShowDir")] public bool SlShowDir { get; init; } = true;
-    [JsonPropertyName("slShowBranch")] public bool SlShowBranch { get; init; } = true;
-    [JsonPropertyName("slShowPrompts")] public bool SlShowPrompts { get; init; } = true;
-    [JsonPropertyName("slShowContext")] public bool SlShowContext { get; init; } = true;
-    [JsonPropertyName("slShowDuration")] public bool SlShowDuration { get; init; } = true;
-    [JsonPropertyName("slShowMode")] public bool SlShowMode { get; init; } = true;
-    [JsonPropertyName("slShowVersion")] public bool SlShowVersion { get; init; } = true;
-    [JsonPropertyName("slShowEditStats")] public bool SlShowEditStats { get; init; } = true;
-
-    // Alarm settings
-    [JsonPropertyName("alarmsEnabled")]
-    public bool AlarmsEnabled { get; init; } = true;
-
-    [JsonPropertyName("alarmDefaultNotification")]
-    public string AlarmDefaultNotification { get; init; } = "Both";
-
-    [JsonPropertyName("alarmDefaultSnoozeMinutes")]
-    public int AlarmDefaultSnoozeMinutes { get; init; } = 5;
-
-    [JsonPropertyName("alarmSoundEnabled")]
-    public bool AlarmSoundEnabled { get; init; } = true;
-
-    [JsonPropertyName("alarmHistoryMaxEntries")]
-    public int AlarmHistoryMaxEntries { get; init; } = 500;
-
-    [JsonPropertyName("alarmMissedGraceMinutes")]
-    public int AlarmMissedGraceMinutes { get; init; } = 5;
-
-    // Claude hook toggles
-    [JsonPropertyName("hookStopEnabled")] public bool HookStopEnabled { get; init; } = true;
-    [JsonPropertyName("hookNotificationEnabled")] public bool HookNotificationEnabled { get; init; } = false;
-    [JsonPropertyName("hookUserPromptEnabled")] public bool HookUserPromptEnabled { get; init; } = true;
-
-    [JsonPropertyName("screenshotEnabled")]
-    public bool ScreenshotEnabled { get; init; } = false;
-
-    [JsonPropertyName("screenshotHotkey")]
-    public string ScreenshotHotkey { get; init; } = "Ctrl+Q";
-
-    [JsonPropertyName("tripleCtrlEnabled")]
-    public bool TripleCtrlEnabled { get; init; } = true;
-
     [JsonPropertyName("startWithWindows")]
     public bool StartWithWindows { get; init; } = false;
 
-    [JsonPropertyName("screenshotLastColor")]
-    public string ScreenshotLastColor { get; init; } = "Red";
+    public const string DefaultPluginCatalogUrl = "https://raw.githubusercontent.com/sukeshchand/ProdToy/main/plugin-catalog.json";
 
-    [JsonPropertyName("screenshotLastThickness")]
-    public float ScreenshotLastThickness { get; init; } = 2f;
-
-    [JsonPropertyName("screenshotMaxUndo")]
-    public int ScreenshotMaxUndo { get; init; } = 30;
+    [JsonPropertyName("pluginCatalogUrl")]
+    public string PluginCatalogUrl { get; init; } = "";
 }
 
 static class AppSettings

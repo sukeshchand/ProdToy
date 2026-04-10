@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using Microsoft.Win32;
+using ProdToy.Sdk;
 
 namespace ProdToy;
 
@@ -21,10 +22,7 @@ class SettingsForm : Form
     public event Action<bool>? HistoryEnabledChanged;
     public event Action<bool>? SnoozeChanged;
     public event Action<bool>? ShowQuotesChanged;
-    public event Action<string>? ScreenshotHotkeyChanged;
     public event Action<string>? GlobalFontChanged;
-    public event Action<bool>? ScreenshotEnabledChanged;
-    public event Action<bool>? TripleCtrlChanged;
 
     public SettingsForm(PopupTheme currentTheme, DateTime snoozeUntil)
     {
@@ -71,7 +69,8 @@ class SettingsForm : Form
         y += 8;
 
         // --- TabControl (owner-drawn) ---
-        int tabCount = 6;
+        int pluginSettingsCount = PluginManager.GetAllSettingsPages().Count;
+        int tabCount = 7 + pluginSettingsCount; // General, Capture, Appearance, Claude CLI, Advanced, Plugins, About + plugin tabs
         int tabWidth = (contentWidth - 4) / tabCount;
         _tabControl = new ThemedTabControl(currentTheme)
         {
@@ -257,239 +256,12 @@ class SettingsForm : Form
         generalPage.Controls.Add(startupNote);
 
         // =============================================
-        // TAB 1: Screen Capture
+        // TAB 1: Appearance (was TAB 2, Screen Capture removed — now a plugin)
         // =============================================
-        var capturePage = CreateTabPage("Capture", currentTheme);
-        _tabControl.TabPages.Add(capturePage);
-
-        int sc = tp;
-
-        var captureSettings = AppSettings.Load();
-        bool captureEnabled = captureSettings.ScreenshotEnabled;
-
-        var enableCaptureLabel = CreateSectionLabel("SCREEN CAPTURE", tp, sc);
-        capturePage.Controls.Add(enableCaptureLabel);
-        sc += 26;
-
-        var captureHotkeyControls = new List<Control>();
-
-        var enableCaptureCheck = new CheckBox
-        {
-            Text = "Enable screen capture",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = currentTheme.TextPrimary,
-            BackColor = Color.Transparent,
-            Checked = captureEnabled,
-            AutoSize = true,
-            Location = new Point(tp, sc),
-            Cursor = Cursors.Hand,
-        };
-        capturePage.Controls.Add(enableCaptureCheck);
-        sc += 32;
-
-        capturePage.Controls.Add(CreateSeparator(tp, sc, tabInner));
-        sc += 14;
-
-        var captureShortcutLabel = CreateSectionLabel("SHORTCUT KEY", tp, sc);
-        capturePage.Controls.Add(captureShortcutLabel);
-        captureHotkeyControls.Add(captureShortcutLabel);
-        sc += 26;
-
-        var captureShortcutHint = new Label
-        {
-            Text = "Global hotkey to start screen capture:",
-            Font = new Font("Segoe UI", 9f),
-            ForeColor = currentTheme.TextPrimary,
-            AutoSize = true,
-            Location = new Point(tp, sc),
-            BackColor = Color.Transparent,
-        };
-        capturePage.Controls.Add(captureShortcutHint);
-        captureHotkeyControls.Add(captureShortcutHint);
-        sc += 24;
-
-        var currentHotkey = captureSettings.ScreenshotHotkey;
-        var hotkeyBox = new TextBox
-        {
-            Text = currentHotkey,
-            Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
-            ForeColor = currentTheme.Primary,
-            BackColor = currentTheme.BgHeader,
-            BorderStyle = BorderStyle.FixedSingle,
-            Size = new Size(260, 30),
-            Location = new Point(tp, sc),
-            ReadOnly = true,
-            TextAlign = HorizontalAlignment.Center,
-            Cursor = Cursors.Hand,
-        };
-
-        bool hotkeyRecording = false;
-        var hotkeyRecordButton = new RoundedButton
-        {
-            Text = "Change",
-            Font = new Font("Segoe UI", 8.5f),
-            Size = new Size(80, 30),
-            Location = new Point(tp + 268, sc),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = currentTheme.PrimaryDim,
-            ForeColor = currentTheme.TextSecondary,
-            Cursor = Cursors.Hand,
-        };
-        hotkeyRecordButton.FlatAppearance.BorderSize = 0;
-        hotkeyRecordButton.FlatAppearance.MouseOverBackColor = currentTheme.Primary;
-
-        var hotkeyClearButton = new RoundedButton
-        {
-            Text = "Clear",
-            Font = new Font("Segoe UI", 8.5f),
-            Size = new Size(60, 30),
-            Location = new Point(tp + 356, sc),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = currentTheme.PrimaryDim,
-            ForeColor = currentTheme.TextSecondary,
-            Cursor = Cursors.Hand,
-        };
-        hotkeyClearButton.FlatAppearance.BorderSize = 0;
-        hotkeyClearButton.FlatAppearance.MouseOverBackColor = currentTheme.Primary;
-
-        var hotkeyStatusLabel = new Label
-        {
-            Text = "",
-            Font = new Font("Segoe UI", 8.5f),
-            ForeColor = currentTheme.TextSecondary,
-            AutoSize = true,
-            Location = new Point(tp, sc + 38),
-            BackColor = Color.Transparent,
-        };
-
-        hotkeyRecordButton.Click += (_, _) =>
-        {
-            if (!hotkeyRecording)
-            {
-                hotkeyRecording = true;
-                hotkeyBox.Text = "Press a key combination...";
-                hotkeyBox.ForeColor = currentTheme.TextSecondary;
-                hotkeyRecordButton.Text = "Cancel";
-                hotkeyStatusLabel.Text = "Press modifier(s) + key, e.g. Ctrl+Shift+S";
-            }
-            else
-            {
-                hotkeyRecording = false;
-                hotkeyBox.Text = AppSettings.Load().ScreenshotHotkey;
-                hotkeyBox.ForeColor = currentTheme.Primary;
-                hotkeyRecordButton.Text = "Change";
-                hotkeyStatusLabel.Text = "";
-            }
-        };
-
-        hotkeyBox.KeyDown += (_, e) =>
-        {
-            if (!hotkeyRecording) return;
-            e.SuppressKeyPress = true;
-
-            // Ignore modifier-only presses
-            if (e.KeyCode is Keys.ControlKey or Keys.ShiftKey or Keys.Menu or Keys.LMenu
-                or Keys.RMenu or Keys.LControlKey or Keys.RControlKey or Keys.LShiftKey
-                or Keys.RShiftKey or Keys.LWin or Keys.RWin)
-                return;
-
-            // Require at least one modifier
-            if (!e.Control && !e.Shift && !e.Alt)
-            {
-                hotkeyStatusLabel.ForeColor = currentTheme.ErrorColor;
-                hotkeyStatusLabel.Text = "At least one modifier (Ctrl, Shift, Alt) is required";
-                return;
-            }
-
-            var parts = new List<string>();
-            if (e.Control) parts.Add("Ctrl");
-            if (e.Alt) parts.Add("Alt");
-            if (e.Shift) parts.Add("Shift");
-            parts.Add(e.KeyCode.ToString());
-
-            string hotkey = string.Join("+", parts);
-            hotkeyBox.Text = hotkey;
-            hotkeyBox.ForeColor = currentTheme.Primary;
-            hotkeyRecording = false;
-            hotkeyRecordButton.Text = "Change";
-
-            var settings = AppSettings.Load();
-            AppSettings.Save(settings with { ScreenshotHotkey = hotkey });
-            hotkeyStatusLabel.ForeColor = currentTheme.SuccessColor;
-            hotkeyStatusLabel.Text = "Hotkey saved — active now";
-            ScreenshotHotkeyChanged?.Invoke(hotkey);
-        };
-
-        hotkeyClearButton.Click += (_, _) =>
-        {
-            hotkeyRecording = false;
-            hotkeyBox.Text = "(none)";
-            hotkeyBox.ForeColor = currentTheme.TextSecondary;
-            hotkeyRecordButton.Text = "Change";
-
-            var settings = AppSettings.Load();
-            AppSettings.Save(settings with { ScreenshotHotkey = "" });
-            hotkeyStatusLabel.ForeColor = currentTheme.TextSecondary;
-            hotkeyStatusLabel.Text = "Hotkey cleared";
-            ScreenshotHotkeyChanged?.Invoke("");
-        };
-
-        if (string.IsNullOrEmpty(currentHotkey))
-        {
-            hotkeyBox.Text = "(none)";
-            hotkeyBox.ForeColor = currentTheme.TextSecondary;
-        }
-
-        capturePage.Controls.Add(hotkeyBox);
-        capturePage.Controls.Add(hotkeyRecordButton);
-        capturePage.Controls.Add(hotkeyClearButton);
-        capturePage.Controls.Add(hotkeyStatusLabel);
-        captureHotkeyControls.AddRange(new Control[] { hotkeyBox, hotkeyRecordButton, hotkeyClearButton, hotkeyStatusLabel });
-
-        // Set initial enabled state for hotkey controls
-        foreach (var ctrl in captureHotkeyControls)
-            ctrl.Enabled = captureEnabled;
-
-        enableCaptureCheck.CheckedChanged += (_, _) =>
-        {
-            bool enabled = enableCaptureCheck.Checked;
-            foreach (var ctrl in captureHotkeyControls)
-                ctrl.Enabled = enabled;
-
-            var s = AppSettings.Load();
-            AppSettings.Save(s with { ScreenshotEnabled = enabled });
-            ScreenshotEnabledChanged?.Invoke(enabled);
-        };
-
-        sc += 14;
-        capturePage.Controls.Add(CreateSeparator(tp, sc, tabInner));
-        sc += 14;
-
-        var tripleCtrlLabel = CreateSectionLabel("QUICK OPEN", tp, sc);
-        capturePage.Controls.Add(tripleCtrlLabel);
-        sc += 26;
-
-        var tripleCtrlCheck = new CheckBox
-        {
-            Text = "Triple Ctrl tap to open last screenshot editor",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = currentTheme.TextPrimary,
-            BackColor = Color.Transparent,
-            Checked = captureSettings.TripleCtrlEnabled,
-            AutoSize = true,
-            Location = new Point(tp, sc),
-            Cursor = Cursors.Hand,
-        };
-        tripleCtrlCheck.CheckedChanged += (_, _) =>
-        {
-            var settings = AppSettings.Load();
-            AppSettings.Save(settings with { TripleCtrlEnabled = tripleCtrlCheck.Checked });
-            TripleCtrlChanged?.Invoke(tripleCtrlCheck.Checked);
-        };
-        capturePage.Controls.Add(tripleCtrlCheck);
+        // (Screen Capture tab removed — now a plugin)
 
         // =============================================
-        // TAB 2: Appearance
+        // TAB 1: Appearance
         // =============================================
         var appearancePage = CreateTabPage("Appearance", currentTheme);
         _tabControl.TabPages.Add(appearancePage);
@@ -546,9 +318,9 @@ class SettingsForm : Form
         appearancePage.Controls.Add(_themePreview);
 
         // =============================================
-        // TAB 3: Claude CLI
+        // TAB 2: Notifications
         // =============================================
-        var claudePage = CreateTabPage("Claude CLI", currentTheme);
+        var claudePage = CreateTabPage("Notifications", currentTheme);
         _tabControl.TabPages.Add(claudePage);
 
         int cy = tp;
@@ -731,214 +503,8 @@ class SettingsForm : Form
         claudePage.Controls.Add(historyCheck);
         cy += 30;
 
-        // --- Hooks sub-group ---
-        cy += 4;
-        var hooksLabel = CreateSubSectionLabel("Hooks", tp, cy, currentTheme);
-        claudePage.Controls.Add(hooksLabel);
-        cy += 22;
+        // (Hooks and Status Line sections moved to Claude Integration plugin)
 
-        var hookSettings = AppSettings.Load();
-
-        var hookStopCheck = new CheckBox
-        {
-            Text = "On Stop — notify when Claude finishes a response",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = currentTheme.TextPrimary,
-            BackColor = Color.Transparent,
-            Checked = hookSettings.HookStopEnabled,
-            AutoSize = true,
-            Location = new Point(tp + 8, cy),
-            Cursor = Cursors.Hand,
-        };
-        hookStopCheck.CheckedChanged += (_, _) =>
-        {
-            var s = AppSettings.Load();
-            AppSettings.Save(s with { HookStopEnabled = hookStopCheck.Checked });
-            UpdateClaudeHook("Stop", null, hookStopCheck.Checked);
-        };
-        claudePage.Controls.Add(hookStopCheck);
-        cy += 24;
-
-        var hookNotifCheck = new CheckBox
-        {
-            Text = "On Notification — notify on permission/idle/question prompts",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = currentTheme.TextPrimary,
-            BackColor = Color.Transparent,
-            Checked = hookSettings.HookNotificationEnabled,
-            AutoSize = true,
-            Location = new Point(tp + 8, cy),
-            Cursor = Cursors.Hand,
-        };
-        hookNotifCheck.CheckedChanged += (_, _) =>
-        {
-            var s = AppSettings.Load();
-            AppSettings.Save(s with { HookNotificationEnabled = hookNotifCheck.Checked });
-            UpdateClaudeHook("Notification", "permission_prompt|idle_prompt|elicitation_dialog", hookNotifCheck.Checked);
-        };
-        claudePage.Controls.Add(hookNotifCheck);
-        cy += 24;
-
-        var hookPromptCheck = new CheckBox
-        {
-            Text = "On User Prompt — save question when you send a message",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = currentTheme.TextPrimary,
-            BackColor = Color.Transparent,
-            Checked = hookSettings.HookUserPromptEnabled,
-            AutoSize = true,
-            Location = new Point(tp + 8, cy),
-            Cursor = Cursors.Hand,
-        };
-        hookPromptCheck.CheckedChanged += (_, _) =>
-        {
-            var s = AppSettings.Load();
-            AppSettings.Save(s with { HookUserPromptEnabled = hookPromptCheck.Checked });
-            UpdateClaudeHook("UserPromptSubmit", null, hookPromptCheck.Checked);
-        };
-        claudePage.Controls.Add(hookPromptCheck);
-        cy += 30;
-
-        // --- Status Line group ---
-        claudePage.Controls.Add(CreateSeparator(tp, cy, tabInner));
-        cy += 10;
-
-        var statusLineLabel = CreateSectionLabel("STATUS LINE", tp, cy);
-        claudePage.Controls.Add(statusLineLabel);
-        cy += 26;
-
-        var slCheckboxes = new List<CheckBox>();
-
-        var statusLineCheck = new CheckBox
-        {
-            Text = "Enable Claude Code status line",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = currentTheme.TextPrimary,
-            BackColor = Color.Transparent,
-            Checked = ClaudeStatusLine.IsEnabled(),
-            AutoSize = true,
-            Location = new Point(tp, cy),
-            Cursor = Cursors.Hand,
-        };
-
-        var statusLineHint = new Label
-        {
-            Text = "Shows model, branch, context usage, edit stats in Claude CLI",
-            Font = new Font("Segoe UI", 8.5f),
-            ForeColor = currentTheme.TextSecondary,
-            AutoSize = true,
-            Location = new Point(tp + 2, cy + 22),
-            BackColor = Color.Transparent,
-        };
-
-        var statusLineStatus = new Label
-        {
-            Text = "",
-            Font = new Font("Segoe UI", 8.5f),
-            ForeColor = currentTheme.SuccessColor,
-            AutoSize = true,
-            Location = new Point(tp + 2, cy + 40),
-            BackColor = Color.Transparent,
-        };
-
-        statusLineCheck.CheckedChanged += (_, _) =>
-        {
-            try
-            {
-                if (statusLineCheck.Checked)
-                {
-                    ClaudeStatusLine.Enable();
-                    statusLineStatus.ForeColor = currentTheme.SuccessColor;
-                    statusLineStatus.Text = "Enabled — restart Claude Code to apply";
-                }
-                else
-                {
-                    ClaudeStatusLine.Disable();
-                    statusLineStatus.ForeColor = currentTheme.TextSecondary;
-                    statusLineStatus.Text = "Disabled — restart Claude Code to apply";
-                }
-                // Enable/disable sub-checkboxes
-                foreach (var slCb in slCheckboxes)
-                    slCb.Enabled = statusLineCheck.Checked;
-            }
-            catch (Exception ex)
-            {
-                statusLineStatus.ForeColor = currentTheme.ErrorColor;
-                statusLineStatus.Text = $"Error: {ex.Message}";
-            }
-        };
-
-        claudePage.Controls.Add(statusLineCheck);
-        claudePage.Controls.Add(statusLineHint);
-        claudePage.Controls.Add(statusLineStatus);
-        cy += 62;
-
-        // Status line item checkboxes
-        var slItems = new (string Label, string Setting, bool Default)[]
-        {
-            ("Model", "SlShowModel", true),
-            ("Directory", "SlShowDir", true),
-            ("Branch", "SlShowBranch", true),
-            ("Prompts", "SlShowPrompts", true),
-            ("Context %", "SlShowContext", true),
-            ("Duration", "SlShowDuration", true),
-            ("Mode", "SlShowMode", true),
-            ("Version", "SlShowVersion", true),
-            ("Edit Stats", "SlShowEditStats", true),
-        };
-
-        var slSettings = AppSettings.Load();
-        int colWidth = tabInner / 3;
-        for (int i = 0; i < slItems.Length; i++)
-        {
-            int col = i % 3;
-            int row = i / 3;
-            var item = slItems[i];
-
-            // Read current value via reflection
-            var prop = typeof(AppSettingsData).GetProperty(item.Setting);
-            bool isChecked = prop != null ? (bool)prop.GetValue(slSettings)! : item.Default;
-
-            bool slEnabled = statusLineCheck.Checked;
-            var cb = new CheckBox
-            {
-                Text = item.Label,
-                Font = new Font("Segoe UI", 8.5f),
-                ForeColor = currentTheme.TextPrimary,
-                BackColor = Color.Transparent,
-                Checked = isChecked,
-                Enabled = slEnabled,
-                AutoSize = true,
-                Location = new Point(tp + col * colWidth, cy + row * 22),
-                Cursor = Cursors.Hand,
-            };
-            slCheckboxes.Add(cb);
-            string settingName = item.Setting;
-            cb.CheckedChanged += (_, _) =>
-            {
-                var s = AppSettings.Load();
-                // Use reflection to set the property via with expression workaround
-                s = settingName switch
-                {
-                    "SlShowModel" => s with { SlShowModel = cb.Checked },
-                    "SlShowDir" => s with { SlShowDir = cb.Checked },
-                    "SlShowBranch" => s with { SlShowBranch = cb.Checked },
-                    "SlShowPrompts" => s with { SlShowPrompts = cb.Checked },
-                    "SlShowContext" => s with { SlShowContext = cb.Checked },
-                    "SlShowDuration" => s with { SlShowDuration = cb.Checked },
-                    "SlShowMode" => s with { SlShowMode = cb.Checked },
-                    "SlShowVersion" => s with { SlShowVersion = cb.Checked },
-                    "SlShowEditStats" => s with { SlShowEditStats = cb.Checked },
-                    _ => s,
-                };
-                AppSettings.Save(s);
-                ClaudeStatusLine.WriteConfig();
-            };
-            claudePage.Controls.Add(cb);
-        }
-        cy += (slItems.Length / 3 + 1) * 22 + 4;
-
-        // =============================================
         // TAB 4: Advanced
         // =============================================
         var advancedPage = CreateTabPage("Advanced", currentTheme);
@@ -985,7 +551,154 @@ class SettingsForm : Form
         advancedPage.Controls.Add(uninstallButton);
 
         // =============================================
-        // TAB 5: About
+        // TAB 5: Plugins
+        // =============================================
+        var pluginsPage = CreateTabPage("Plugins", currentTheme);
+        _tabControl.TabPages.Add(pluginsPage);
+        int py = tp;
+
+        var pluginsSectionLabel = CreateSectionLabel("INSTALLED PLUGINS", tp, py);
+        pluginsPage.Controls.Add(pluginsSectionLabel);
+
+        var browseCatalogButton = new RoundedButton
+        {
+            Text = "Browse Catalog",
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            Size = new Size(130, 28),
+            Location = new Point(tabInner - 130 + tp, py),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = currentTheme.Primary,
+            ForeColor = Color.White,
+            Cursor = Cursors.Hand,
+        };
+        browseCatalogButton.FlatAppearance.BorderSize = 0;
+        browseCatalogButton.FlatAppearance.MouseOverBackColor = currentTheme.PrimaryLight;
+        browseCatalogButton.Click += (_, _) =>
+        {
+            var catalogForm = new PluginCatalogForm(currentTheme);
+            catalogForm.Show(this);
+        };
+        pluginsPage.Controls.Add(browseCatalogButton);
+        py += 34;
+
+        var pluginsList = PluginManager.Plugins;
+        if (pluginsList.Count == 0)
+        {
+            var noPluginsLabel = new Label
+            {
+                Text = "No plugins installed.\n\nPlace plugin DLLs in:\n" + AppPaths.PluginsDir,
+                Font = new Font("Segoe UI", 9f),
+                ForeColor = currentTheme.TextSecondary,
+                AutoSize = true,
+                MaximumSize = new Size(tabInner, 0),
+                Location = new Point(tp, py),
+                BackColor = Color.Transparent,
+            };
+            pluginsPage.Controls.Add(noPluginsLabel);
+        }
+        else
+        {
+            foreach (var plugin in pluginsList)
+            {
+                var pluginPanel = new Panel
+                {
+                    Location = new Point(tp, py),
+                    Size = new Size(tabInner, 52),
+                    BackColor = Color.FromArgb(20, currentTheme.Primary),
+                };
+
+                var nameLabel = new Label
+                {
+                    Text = $"{plugin.Name} v{plugin.Version}",
+                    Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
+                    ForeColor = currentTheme.TextPrimary,
+                    AutoSize = true,
+                    Location = new Point(8, 4),
+                    BackColor = Color.Transparent,
+                };
+                pluginPanel.Controls.Add(nameLabel);
+
+                var descLabel = new Label
+                {
+                    Text = string.IsNullOrEmpty(plugin.Description) ? plugin.Id : plugin.Description,
+                    Font = new Font("Segoe UI", 8f),
+                    ForeColor = currentTheme.TextSecondary,
+                    AutoSize = true,
+                    Location = new Point(8, 24),
+                    BackColor = Color.Transparent,
+                };
+                pluginPanel.Controls.Add(descLabel);
+
+                if (plugin.LoadError != null)
+                {
+                    var errorLabel = new Label
+                    {
+                        Text = plugin.LoadError,
+                        Font = new Font("Segoe UI", 8f),
+                        ForeColor = currentTheme.ErrorColor,
+                        AutoSize = true,
+                        Location = new Point(8, 36),
+                        BackColor = Color.Transparent,
+                    };
+                    pluginPanel.Controls.Add(errorLabel);
+                    pluginPanel.Size = new Size(tabInner, 56);
+                }
+
+                var enableToggle = new CheckBox
+                {
+                    Text = "Enabled",
+                    Font = new Font("Segoe UI", 8.5f),
+                    ForeColor = currentTheme.TextSecondary,
+                    Checked = plugin.Enabled,
+                    AutoSize = true,
+                    Location = new Point(tabInner - 100, 14),
+                    BackColor = Color.Transparent,
+                };
+                var capturedPlugin = plugin;
+                enableToggle.CheckedChanged += (_, _) =>
+                {
+                    if (enableToggle.Checked)
+                        PluginManager.EnablePlugin(capturedPlugin.Id);
+                    else
+                        PluginManager.DisablePlugin(capturedPlugin.Id);
+                };
+                pluginPanel.Controls.Add(enableToggle);
+
+                pluginsPage.Controls.Add(pluginPanel);
+                py += pluginPanel.Height + 6;
+            }
+        }
+
+        // Dynamic plugin settings tabs (contributed by enabled plugins)
+        var pluginSettingsPages = PluginManager.GetAllSettingsPages();
+        foreach (var (pluginInfo, settingsPage) in pluginSettingsPages)
+        {
+            var pluginTabPage = CreateTabPage(settingsPage.TabTitle, currentTheme);
+            _tabControl.TabPages.Add(pluginTabPage);
+            try
+            {
+                var content = settingsPage.CreateContent();
+                content.Dock = DockStyle.Fill;
+                pluginTabPage.Controls.Add(content);
+            }
+            catch (Exception ex)
+            {
+                var errorLabel = new Label
+                {
+                    Text = $"Failed to load settings for {pluginInfo.Name}:\n{ex.Message}",
+                    Font = new Font("Segoe UI", 9f),
+                    ForeColor = currentTheme.ErrorColor,
+                    AutoSize = true,
+                    MaximumSize = new Size(tabInner, 0),
+                    Location = new Point(tp, tp),
+                    BackColor = Color.Transparent,
+                };
+                pluginTabPage.Controls.Add(errorLabel);
+            }
+        }
+
+        // =============================================
+        // TAB 6+: About
         // =============================================
         var aboutPage = CreateTabPage("About", currentTheme);
         _tabControl.TabPages.Add(aboutPage);
@@ -1502,117 +1215,6 @@ class SettingsForm : Form
             Location = new Point(x, y),
             Size = new Size(width, 1),
         };
-    }
-
-    /// <summary>
-    /// Adds or removes the ProdToy hook from a Claude Code hook event in settings.json.
-    /// </summary>
-    internal static void UpdateClaudeHook(string eventName, string? matcher, bool enabled)
-    {
-        try
-        {
-            string path = AppPaths.ClaudeSettingsFile;
-            if (!File.Exists(path)) return;
-
-            var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))?.AsObject();
-            if (root == null) return;
-
-            var hooksNode = root["hooks"]?.AsObject();
-            if (hooksNode == null) return;
-
-            if (hooksNode[eventName] is not System.Text.Json.Nodes.JsonArray eventArray) return;
-
-            if (!enabled)
-            {
-                // Remove ProdToy hook entries from this event
-                for (int i = eventArray.Count - 1; i >= 0; i--)
-                {
-                    if (eventArray[i] is not System.Text.Json.Nodes.JsonObject ruleSet) continue;
-                    if (ruleSet["hooks"] is not System.Text.Json.Nodes.JsonArray hooksArray) continue;
-
-                    for (int j = hooksArray.Count - 1; j >= 0; j--)
-                    {
-                        if (IsProdToyHookCommand(hooksArray[j]?["command"]?.GetValue<string>()))
-                            hooksArray.RemoveAt(j);
-                    }
-
-                    // Remove the rule set if no hooks remain
-                    if (hooksArray.Count == 0)
-                        eventArray.RemoveAt(i);
-                }
-
-                // Remove the event entirely if empty
-                if (eventArray.Count == 0)
-                    hooksNode.Remove(eventName);
-            }
-            else
-            {
-                // Re-add ProdToy hook if not already present
-                bool exists = false;
-                foreach (var ruleSet in eventArray)
-                {
-                    if (ruleSet?["hooks"] is System.Text.Json.Nodes.JsonArray hooksArray)
-                    {
-                        foreach (var hook in hooksArray)
-                        {
-                            if (IsProdToyHookCommand(hook?["command"]?.GetValue<string>()))
-                            { exists = true; break; }
-                        }
-                    }
-                    if (exists) break;
-                }
-
-                if (!exists)
-                {
-                    string hookCmd = $"powershell.exe -ExecutionPolicy Bypass -File \"{Path.Combine(AppPaths.ClaudeHooksDir, "Show-ProdToy.ps1")}\"";
-                    var hookEntry = new System.Text.Json.Nodes.JsonObject
-                    {
-                        ["type"] = "command",
-                        ["command"] = hookCmd,
-                    };
-
-                    // Find a matching rule set or create one
-                    bool added = false;
-                    foreach (var ruleSet in eventArray)
-                    {
-                        if (ruleSet is not System.Text.Json.Nodes.JsonObject ruleObj) continue;
-                        string? existingMatcher = ruleObj["matcher"]?.GetValue<string>();
-                        if (existingMatcher == matcher)
-                        {
-                            var hooksArray = ruleObj["hooks"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray();
-                            hooksArray.Add(System.Text.Json.Nodes.JsonNode.Parse(hookEntry.ToJsonString()));
-                            ruleObj["hooks"] = hooksArray;
-                            added = true;
-                            break;
-                        }
-                    }
-
-                    if (!added)
-                    {
-                        var newRuleSet = new System.Text.Json.Nodes.JsonObject();
-                        if (matcher != null) newRuleSet["matcher"] = matcher;
-                        newRuleSet["hooks"] = new System.Text.Json.Nodes.JsonArray
-                        {
-                            System.Text.Json.Nodes.JsonNode.Parse(hookEntry.ToJsonString())
-                        };
-                        eventArray.Add(newRuleSet);
-                    }
-                }
-            }
-
-            var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-            File.WriteAllText(path, root.ToJsonString(options), System.Text.Encoding.UTF8);
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"UpdateClaudeHook failed: {ex.Message}");
-        }
-    }
-
-    private static bool IsProdToyHookCommand(string? command)
-    {
-        if (string.IsNullOrEmpty(command)) return false;
-        return command.Contains("Show-ProdToy") || command.Contains("Show-DevToy");
     }
 
     private static void SetStartWithWindows(bool enabled)

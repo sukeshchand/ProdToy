@@ -66,6 +66,42 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# --- Build and package plugins ---
+$pluginProjects = @(
+    @{ Name = "ProdToy.Alarm";              Dir = "src\ProdToy.Plugins.Alarm" },
+    @{ Name = "ProdToy.Screenshot";         Dir = "src\ProdToy.Plugins.Screenshot" },
+    @{ Name = "ProdToy.ClaudeIntegration";  Dir = "src\ProdToy.Plugins.ClaudeIntegration" }
+)
+
+$pluginsReleaseDir = Join-Path $releaseDir "plugins"
+if (-not (Test-Path $pluginsReleaseDir)) { New-Item -ItemType Directory -Path $pluginsReleaseDir | Out-Null }
+
+foreach ($plugin in $pluginProjects) {
+    Write-Host "Building plugin: $($plugin.Name)..." -ForegroundColor Cyan
+    dotnet build -c Release $plugin.Dir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Plugin $($plugin.Name) build failed — skipping"
+        continue
+    }
+
+    $pluginOutDir = Join-Path $pluginsReleaseDir $plugin.Name
+    if (-not (Test-Path $pluginOutDir)) { New-Item -ItemType Directory -Path $pluginOutDir | Out-Null }
+
+    # Copy DLL and deps.json
+    $buildOut = Join-Path $plugin.Dir "bin\Release\net8.0-windows"
+    $dllName = "ProdToy.Plugins.$($plugin.Name -replace 'ProdToy\.', '')"
+    Copy-Item "$buildOut\$dllName.dll" $pluginOutDir -Force -ErrorAction SilentlyContinue
+    Copy-Item "$buildOut\$dllName.deps.json" $pluginOutDir -Force -ErrorAction SilentlyContinue
+
+    # Create zip for catalog distribution
+    $zipPath = Join-Path $pluginsReleaseDir "$($plugin.Name).zip"
+    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+    Compress-Archive -Path "$pluginOutDir\*" -DestinationPath $zipPath
+    Write-Host "  Packaged $($plugin.Name).zip" -ForegroundColor Gray
+}
+
+Write-Host ""
+
 # --- Generate metadata.json in release folder ---
 $metadata = @{
     version      = $newVersion
@@ -82,6 +118,16 @@ if ($DeployPath -and (Test-Path $DeployPath)) {
     Write-Host "Deploying to $DeployPath ..." -ForegroundColor Cyan
     Copy-Item "$releaseDir\ProdToy.exe" $DeployPath -Force
     Copy-Item $metadataPath $DeployPath -Force
+
+    # Deploy plugin zips for catalog
+    $deployPluginsDir = Join-Path $DeployPath "plugins"
+    if (-not (Test-Path $deployPluginsDir)) { New-Item -ItemType Directory -Path $deployPluginsDir | Out-Null }
+    $pluginZips = Get-ChildItem "$pluginsReleaseDir\*.zip" -ErrorAction SilentlyContinue
+    foreach ($zip in $pluginZips) {
+        Copy-Item $zip.FullName $deployPluginsDir -Force
+        Write-Host "  Deployed plugin: $($zip.Name)" -ForegroundColor Gray
+    }
+
     Write-Host "Deployed v$newVersion to $DeployPath" -ForegroundColor Green
 } elseif ($DeployPath) {
     Write-Warning "Deploy path '$DeployPath' does not exist. Skipping deploy."
@@ -91,3 +137,7 @@ Write-Host ""
 Write-Host "Published v$newVersion to $releaseDir\" -ForegroundColor Green
 Write-Host "  ProdToy.exe  $('{0:N0}' -f (Get-Item "$releaseDir\ProdToy.exe").Length) bytes" -ForegroundColor Gray
 Write-Host "  metadata.json" -ForegroundColor Gray
+$pluginZipCount = (Get-ChildItem "$pluginsReleaseDir\*.zip" -ErrorAction SilentlyContinue).Count
+if ($pluginZipCount -gt 0) {
+    Write-Host "  plugins/     $pluginZipCount plugin package(s)" -ForegroundColor Gray
+}

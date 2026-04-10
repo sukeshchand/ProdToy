@@ -37,6 +37,15 @@ static class AppPaths
     /// <summary>Alarms data: Root\alarms\</summary>
     public static string AlarmsDir { get; } = Path.Combine(Root, "alarms");
 
+    /// <summary>Plugins directory: Root\plugins\</summary>
+    public static string PluginsDir { get; } = Path.Combine(Root, "plugins");
+
+    /// <summary>Plugins state file: Root\plugins\plugins-state.json</summary>
+    public static string PluginsStateFile { get; } = Path.Combine(Root, "plugins", "plugins-state.json");
+
+    /// <summary>Logs directory: Root\logs\</summary>
+    public static string LogsDir { get; } = Path.Combine(Root, "logs");
+
     /// <summary>Claude hooks directory: %USERPROFILE%\.claude\hooks\</summary>
     public static string ClaudeHooksDir { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "hooks");

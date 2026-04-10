@@ -12,12 +12,7 @@ class PopupAppContext : ApplicationContext
     private readonly CancellationTokenSource _cts = new();
     private Icon _appIcon;
     private SettingsForm? _settingsForm;
-    private readonly GlobalHotkey _globalHotkey;
-    private readonly TripleCtrlDetector _tripleCtrl;
-    private readonly ToolStripItem _takeScreenshotItem;
-    private readonly ToolStripItem _editScreenshotItem;
-    private AlarmForm? _alarmForm;
-    private ScreenshotEditorForm? _editorForm;
+    private PluginHostImpl? _pluginHost;
 
     public PopupAppContext(string initialTitle, string initialMessage, string initialType, string sessionId = "", string cwd = "", bool startHidden = false)
     {
@@ -35,8 +30,6 @@ class PopupAppContext : ApplicationContext
             _popupForm.ShowPopup(initialTitle, initialMessage, initialType, sessionId, cwd);
 
         var trayMenu = BuildTrayMenu();
-        _takeScreenshotItem = trayMenu.Items[2];
-        _editScreenshotItem = trayMenu.Items[3];
 
         _trayIcon = new NotifyIcon
         {
@@ -47,28 +40,14 @@ class PopupAppContext : ApplicationContext
         };
         _trayIcon.DoubleClick += (_, _) => _popupForm.BringToForeground();
 
+        // Initialize plugin system
+        _pluginHost = new PluginHostImpl(_trayIcon, _popupForm);
+        PluginManager.Initialize(_pluginHost);
+
         Task.Run(() => PipeServerLoop(_cts.Token));
 
         // Exit when popup requests it (e.g. after update)
         _popupForm.ExitRequested += () => ExitApp();
-
-        // Register global screenshot hotkey (only if capture is enabled)
-        _globalHotkey = new GlobalHotkey();
-        _globalHotkey.HotkeyPressed += () => _popupForm.Invoke(TakeScreenshot);
-        var appSettings = AppSettings.Load();
-        if (appSettings.ScreenshotEnabled && !string.IsNullOrEmpty(appSettings.ScreenshotHotkey))
-            _globalHotkey.Register(appSettings.ScreenshotHotkey);
-
-        // Triple Ctrl tap → edit last screenshot (if enabled)
-        _tripleCtrl = new TripleCtrlDetector();
-        _tripleCtrl.TripleTapped += () =>
-        {
-            if (AppSettings.Load().TripleCtrlEnabled)
-                _popupForm.Invoke(EditLastScreenshot);
-        };
-
-        // Sync Claude hooks with ProdToy settings on startup
-        SyncClaudeHooks(appSettings);
 
         // Start update checker
         UpdateChecker.UpdateAvailable += metadata =>
@@ -77,88 +56,36 @@ class PopupAppContext : ApplicationContext
         };
         UpdateChecker.Start();
 
-        // Start alarm scheduler
-        if (AppSettings.Load().AlarmsEnabled)
-        {
-            AlarmNotifier.Initialize(_popupForm, _trayIcon);
-            AlarmScheduler.AlarmTriggered += AlarmNotifier.HandleAlarmTriggered;
-            AlarmStore.StartHistoryFlush();
-            AlarmScheduler.Start();
-        }
+        // Start all loaded plugins
+        PluginManager.StartAll();
     }
 
     private ContextMenuStrip BuildTrayMenu()
     {
-        bool captureEnabled = AppSettings.Load().ScreenshotEnabled;
         var menu = new ContextMenuStrip();
         menu.Items.Add("Show Last Notification", null, (_, _) => _popupForm.BringToForeground());
+
+        // Plugin-contributed menu items
+        var pluginItems = PluginManager.GetAllMenuItems();
+        if (pluginItems.Count > 0)
+        {
+            menu.Items.Add(new ToolStripSeparator());
+            foreach (var item in pluginItems)
+            {
+                if (item.IsSeparatorBefore)
+                    menu.Items.Add(new ToolStripSeparator());
+                var mi = new ToolStripMenuItem(item.Text);
+                mi.Click += (_, _) => item.OnClick();
+                mi.Visible = item.Visible;
+                menu.Items.Add(mi);
+            }
+        }
+
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Take Screenshot", null, (_, _) => TakeScreenshot());
-        menu.Items.Add("Edit Last Screenshot", null, (_, _) => EditLastScreenshot());
-        menu.Items[2].Visible = captureEnabled;
-        menu.Items[3].Visible = captureEnabled;
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Alarms...", null, (_, _) => ShowAlarmForm());
         menu.Items.Add("Settings...", null, (_, _) => ShowSettingsForm());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitApp());
         return menu;
-    }
-
-    private void EnsureEditor(Bitmap capturedImage)
-    {
-        if (_editorForm == null || _editorForm.IsDisposed)
-        {
-            _editorForm = new ScreenshotEditorForm(capturedImage);
-            _editorForm.BringToForeground();
-        }
-        else
-        {
-            _editorForm.LoadCapture(capturedImage);
-        }
-    }
-
-    private void EnsureEditor(string filePath)
-    {
-        if (_editorForm == null || _editorForm.IsDisposed)
-        {
-            _editorForm = new ScreenshotEditorForm(filePath);
-            _editorForm.BringToForeground();
-        }
-        else
-        {
-            _editorForm.LoadFile(filePath);
-        }
-    }
-
-    private void TakeScreenshot()
-    {
-        var overlay = new ScreenshotOverlay();
-        overlay.RegionCaptured += bitmap => EnsureEditor(bitmap);
-        overlay.Show();
-    }
-
-    private void EditLastScreenshot()
-    {
-        try
-        {
-            string dir = AppPaths.ScreenshotsDir;
-            if (!Directory.Exists(dir)) return;
-
-            var lastFile = Directory.GetFiles(dir, "*.png")
-                .Concat(Directory.GetFiles(dir, "*.jpg"))
-                .Concat(Directory.GetFiles(dir, "*.bmp"))
-                .OrderByDescending(File.GetCreationTime)
-                .FirstOrDefault();
-
-            if (lastFile == null) return;
-
-            EnsureEditor(lastFile);
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"EditLastScreenshot failed: {ex.Message}");
-        }
     }
 
     private void ShowSettingsForm()
@@ -204,31 +131,9 @@ class PopupAppContext : ApplicationContext
             UpdateTrayText();
         };
 
-        _settingsForm.ScreenshotEnabledChanged += enabled =>
-        {
-            _takeScreenshotItem.Visible = enabled;
-            _editScreenshotItem.Visible = enabled;
-            _globalHotkey.Unregister();
-            if (enabled)
-            {
-                var hk = AppSettings.Load().ScreenshotHotkey;
-                if (!string.IsNullOrEmpty(hk))
-                    _globalHotkey.Register(hk);
-            }
-        };
-
-        _settingsForm.ScreenshotHotkeyChanged += hotkey =>
-        {
-            _globalHotkey.Unregister();
-            if (AppSettings.Load().ScreenshotEnabled && !string.IsNullOrEmpty(hotkey))
-                _globalHotkey.Register(hotkey);
-        };
-
         _settingsForm.GlobalFontChanged += fontFamily =>
         {
             _popupForm.ApplyGlobalFont(fontFamily);
-            if (_alarmForm != null && !_alarmForm.IsDisposed)
-                ApplyFontToForm(_alarmForm, fontFamily);
         };
 
         _popupForm.SnoozeChanged += UpdateTrayText;
@@ -306,53 +211,12 @@ class PopupAppContext : ApplicationContext
         _trayIcon.ShowBalloonTip(5000, title, truncated, icon);
     }
 
-    private void ShowAlarmForm()
-    {
-        if (_alarmForm != null && !_alarmForm.IsDisposed)
-        {
-            _alarmForm.BringToFront();
-            _alarmForm.Activate();
-            return;
-        }
-
-        _alarmForm = new AlarmForm(_popupForm.CurrentTheme);
-        _alarmForm.FormClosed += (_, _) => _alarmForm = null;
-        var savedFont = AppSettings.Load().GlobalFont;
-        if (!string.IsNullOrEmpty(savedFont) && savedFont != "Segoe UI")
-            ApplyFontToForm(_alarmForm, savedFont);
-        _alarmForm.Show();
-    }
-
-    private static void SyncClaudeHooks(AppSettingsData settings)
-    {
-        try
-        {
-            SettingsForm.UpdateClaudeHook("Stop", null, settings.HookStopEnabled);
-            SettingsForm.UpdateClaudeHook("Notification", "permission_prompt|idle_prompt|elicitation_dialog", settings.HookNotificationEnabled);
-            SettingsForm.UpdateClaudeHook("UserPromptSubmit", null, settings.HookUserPromptEnabled);
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"SyncClaudeHooks failed: {ex.Message}");
-        }
-    }
-
     private void ExitApp()
     {
         _cts.Cancel();
+        PluginManager.StopAll();
         UpdateChecker.Stop();
-        AlarmScheduler.Stop();
-        AlarmStore.StopHistoryFlush();
-        AlarmNotifier.Cleanup();
-        _globalHotkey.Dispose();
-        _tripleCtrl.Dispose();
-        _alarmForm?.Close();
         _settingsForm?.Close();
-        if (_editorForm != null && !_editorForm.IsDisposed)
-        {
-            _editorForm.Dispose();
-            _editorForm = null;
-        }
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _appIcon.Dispose();
