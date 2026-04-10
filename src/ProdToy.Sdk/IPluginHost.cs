@@ -58,4 +58,7 @@ public interface IPluginHost
 
     /// <summary>When the current snooze expires.</summary>
     DateTime SnoozeUntil { get; }
+
+    /// <summary>Write/regenerate the Claude Code hook script to disk. Called by plugins that need it.</summary>
+    void EnsureHookScript();
 }

@@ -74,6 +74,8 @@ sealed class PluginHostImpl : IPluginHost
 
     public DateTime SnoozeUntil => _popupForm.SnoozeUntil;
 
+    public void EnsureHookScript() => Updater.EnsureHookScript(Application.ExecutablePath);
+
     public IDisposable? RegisterTripleCtrl(Action callback)
     {
         var detector = new TripleCtrlDetector();

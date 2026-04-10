@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.262",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.279",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -85,16 +85,7 @@ public class ClaudeIntegrationPlugin : IPlugin
     {
         try
         {
-            // The hook script needs the host exe path
-            string exePath = Path.Combine(_context.Host.AppRootPath, "ProdToy.exe");
-            if (!File.Exists(exePath))
-                exePath = Application.ExecutablePath;
-
-            // Delegate to host's Updater which has the script template
-            // For now, just verify the file exists
-            string scriptPath = Path.Combine(ClaudePaths.ClaudeHooksDir, "Show-ProdToy.ps1");
-            if (!File.Exists(scriptPath))
-                _context.Log("Hook script missing — will be created by host on next startup");
+            _context.Host.EnsureHookScript();
         }
         catch (Exception ex)
         {
