@@ -7,8 +7,18 @@ class PluginCatalogForm : Form
     private readonly PopupTheme _theme;
     private readonly ListView _listView;
     private readonly Label _statusLabel;
-    private readonly RoundedButton _actionButton;
     private readonly RoundedButton _refreshButton;
+
+    /// <summary>Fired after any install/update/uninstall so the parent can refresh.</summary>
+    public event Action? PluginsChanged;
+
+    // Column indices
+    private const int ColName = 0;
+    private const int ColDescription = 1;
+    private const int ColInstalled = 2;
+    private const int ColAvailable = 3;
+    private const int ColStatus = 4;
+    private const int ColAction = 5;
 
     public PluginCatalogForm(PopupTheme theme)
     {
@@ -18,8 +28,8 @@ class PluginCatalogForm : Form
         MaximizeBox = true;
         MinimizeBox = true;
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(750, 500);
-        MinimumSize = new Size(550, 350);
+        Size = new Size(820, 520);
+        MinimumSize = new Size(650, 380);
         ShowInTaskbar = true;
         BackColor = theme.BgDark;
         ForeColor = theme.TextPrimary;
@@ -82,19 +92,26 @@ class PluginCatalogForm : Form
             ForeColor = theme.TextPrimary,
             BorderStyle = BorderStyle.FixedSingle,
             Location = new Point(pad, y),
-            Size = new Size(ClientSize.Width - pad * 2, ClientSize.Height - y - 80),
+            Size = new Size(ClientSize.Width - pad * 2, ClientSize.Height - y - 50),
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+            OwnerDraw = true,
         };
-        _listView.Columns.Add("Plugin", 180);
-        _listView.Columns.Add("Description", 220);
-        _listView.Columns.Add("Installed", 80);
-        _listView.Columns.Add("Available", 80);
+        _listView.Columns.Add("Plugin", 140);
+        _listView.Columns.Add("Description", 210);
+        _listView.Columns.Add("Installed", 75);
+        _listView.Columns.Add("Available", 75);
         _listView.Columns.Add("Status", 100);
-        _listView.SelectedIndexChanged += (_, _) => UpdateActionButton();
+        _listView.Columns.Add("Action", 100);
+
+        _listView.DrawColumnHeader += OnDrawColumnHeader;
+        _listView.DrawSubItem += OnDrawSubItem;
+        _listView.MouseClick += OnListMouseClick;
+        _listView.MouseMove += OnListMouseMove;
+
         Controls.Add(_listView);
 
-        // Bottom bar
-        int bottomY = ClientSize.Height - 50;
+        // Bottom status
+        int bottomY = ClientSize.Height - 35;
 
         _statusLabel = new Label
         {
@@ -102,31 +119,12 @@ class PluginCatalogForm : Form
             Font = new Font("Segoe UI", 9f),
             ForeColor = theme.TextSecondary,
             AutoSize = true,
-            Location = new Point(pad, bottomY + 8),
+            Location = new Point(pad, bottomY),
             Anchor = AnchorStyles.Left | AnchorStyles.Bottom,
             BackColor = Color.Transparent,
         };
         Controls.Add(_statusLabel);
 
-        _actionButton = new RoundedButton
-        {
-            Text = "Install",
-            Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
-            Size = new Size(120, 34),
-            Location = new Point(ClientSize.Width - pad - 120, bottomY + 2),
-            Anchor = AnchorStyles.Right | AnchorStyles.Bottom,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = theme.Primary,
-            ForeColor = Color.White,
-            Cursor = Cursors.Hand,
-            Enabled = false,
-        };
-        _actionButton.FlatAppearance.BorderSize = 0;
-        _actionButton.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
-        _actionButton.Click += async (_, _) => await PerformAction();
-        Controls.Add(_actionButton);
-
-        // Load on show
         Shown += async (_, _) => await LoadCatalog();
     }
 
@@ -137,7 +135,6 @@ class PluginCatalogForm : Form
         _refreshButton.Enabled = false;
 
         var catalog = await PluginCatalog.FetchCatalogAsync();
-
         _listView.Items.Clear();
         var installed = PluginManager.Plugins;
 
@@ -156,33 +153,41 @@ class PluginCatalogForm : Form
             string installedVer = local?.Version ?? "";
             string status;
             Color statusColor;
+            string action;
+            Color actionColor;
 
             if (local == null)
             {
                 status = "Not installed";
                 statusColor = _theme.TextSecondary;
+                action = "Install";
+                actionColor = _theme.Primary;
             }
             else if (IsNewerVersion(entry.Version, local.Version))
             {
                 status = "Update available";
                 statusColor = _theme.Primary;
+                action = "Update";
+                actionColor = _theme.Primary;
             }
             else
             {
-                status = "Up to date";
+                status = "Installed";
                 statusColor = _theme.SuccessColor;
+                action = "Uninstall";
+                actionColor = _theme.ErrorColor;
             }
 
-            var item = new ListViewItem(entry.Name)
-            {
-                Tag = entry,
-            };
+            var item = new ListViewItem(entry.Name) { Tag = entry };
             item.SubItems.Add(entry.Description);
             item.SubItems.Add(installedVer);
             item.SubItems.Add(entry.Version);
             item.SubItems.Add(status);
+            item.SubItems.Add(action);
+
             item.UseItemStyleForSubItems = false;
-            item.SubItems[4].ForeColor = statusColor;
+            item.SubItems[ColStatus].ForeColor = statusColor;
+            item.SubItems[ColAction].ForeColor = actionColor;
 
             _listView.Items.Add(item);
         }
@@ -191,71 +196,109 @@ class PluginCatalogForm : Form
         _refreshButton.Enabled = true;
     }
 
-    private void UpdateActionButton()
+    // --- Owner-draw: render Action column as underlined link ---
+
+    private void OnDrawColumnHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
     {
-        if (_listView.SelectedItems.Count == 0)
-        {
-            _actionButton.Enabled = false;
-            _actionButton.Text = "Install";
-            return;
-        }
-
-        var entry = (CatalogEntry)_listView.SelectedItems[0].Tag;
-        var local = PluginManager.Plugins.FirstOrDefault(p =>
-            p.Id.Equals(entry.Id, StringComparison.OrdinalIgnoreCase));
-
-        if (local == null)
-        {
-            _actionButton.Text = "Install";
-            _actionButton.BackColor = _theme.Primary;
-        }
-        else if (IsNewerVersion(entry.Version, local.Version))
-        {
-            _actionButton.Text = "Update";
-            _actionButton.BackColor = _theme.Primary;
-        }
-        else
-        {
-            _actionButton.Text = "Reinstall";
-            _actionButton.BackColor = _theme.PrimaryDim;
-        }
-
-        _actionButton.Enabled = true;
+        e.DrawDefault = true;
     }
 
-    private async Task PerformAction()
+    private void OnDrawSubItem(object? sender, DrawListViewSubItemEventArgs e)
     {
-        if (_listView.SelectedItems.Count == 0) return;
-
-        var entry = (CatalogEntry)_listView.SelectedItems[0].Tag;
-        var local = PluginManager.Plugins.FirstOrDefault(p =>
-            p.Id.Equals(entry.Id, StringComparison.OrdinalIgnoreCase));
-
-        _actionButton.Enabled = false;
-        _statusLabel.ForeColor = _theme.TextSecondary;
-
-        if (local != null && IsNewerVersion(entry.Version, local.Version))
+        if (e.ColumnIndex == ColAction)
         {
-            // Update
-            _statusLabel.Text = $"Updating {entry.Name}...";
-            var progress = new Progress<int>(p => _statusLabel.Text = $"Updating {entry.Name}... {p}%");
-            var (success, message) = await PluginCatalog.UpdatePluginAsync(entry.Id, progress);
-            _statusLabel.Text = message;
-            _statusLabel.ForeColor = success ? _theme.SuccessColor : _theme.ErrorColor;
+            // Draw action as underlined link text
+            e.DrawBackground();
+            string text = e.SubItem?.Text ?? "";
+            Color color = e.SubItem?.ForeColor ?? _theme.TextPrimary;
+            using var font = new Font(e.SubItem?.Font ?? _listView.Font, FontStyle.Underline);
+            var bounds = e.Bounds;
+            bounds.X += 4;
+            TextRenderer.DrawText(e.Graphics!, text, font, bounds, color,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
         }
         else
         {
-            // Install or reinstall
-            _statusLabel.Text = $"Installing {entry.Name}...";
-            var progress = new Progress<int>(p => _statusLabel.Text = $"Installing {entry.Name}... {p}%");
-            var (success, message) = await PluginCatalog.InstallFromCatalogAsync(entry, progress);
-            _statusLabel.Text = message;
-            _statusLabel.ForeColor = success ? _theme.SuccessColor : _theme.ErrorColor;
+            e.DrawDefault = true;
+        }
+    }
+
+    private void OnListMouseMove(object? sender, MouseEventArgs e)
+    {
+        var hit = _listView.HitTest(e.Location);
+        if (hit.SubItem != null && hit.Item != null)
+        {
+            int colIndex = hit.Item.SubItems.IndexOf(hit.SubItem);
+            _listView.Cursor = colIndex == ColAction ? Cursors.Hand : Cursors.Default;
+        }
+        else
+        {
+            _listView.Cursor = Cursors.Default;
+        }
+    }
+
+    private async void OnListMouseClick(object? sender, MouseEventArgs e)
+    {
+        var hit = _listView.HitTest(e.Location);
+        if (hit.SubItem == null || hit.Item == null) return;
+
+        int colIndex = hit.Item.SubItems.IndexOf(hit.SubItem);
+        if (colIndex != ColAction) return;
+
+        var entry = (CatalogEntry)hit.Item.Tag;
+        string action = hit.SubItem.Text;
+
+        await PerformAction(entry, action);
+    }
+
+    private async Task PerformAction(CatalogEntry entry, string action)
+    {
+        _refreshButton.Enabled = false;
+        _statusLabel.ForeColor = _theme.TextSecondary;
+
+        switch (action)
+        {
+            case "Install":
+            {
+                _statusLabel.Text = $"Installing {entry.Name}...";
+                var (success, message) = PluginCatalog.InstallPlugin(entry);
+                _statusLabel.Text = message;
+                _statusLabel.ForeColor = success ? _theme.SuccessColor : _theme.ErrorColor;
+                break;
+            }
+            case "Update":
+            {
+                _statusLabel.Text = $"Updating {entry.Name}...";
+                // Uninstall old, install new
+                PluginManager.UninstallPlugin(entry.Id);
+                var (success, message) = PluginCatalog.InstallPlugin(entry);
+                _statusLabel.Text = success ? $"Updated {entry.Name} to v{entry.Version}" : message;
+                _statusLabel.ForeColor = success ? _theme.SuccessColor : _theme.ErrorColor;
+                break;
+            }
+            case "Uninstall":
+            {
+                var confirm = MessageBox.Show(this,
+                    $"Uninstall {entry.Name}?\n\nPlugin data will be deleted.",
+                    "Confirm Uninstall",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2);
+
+                if (confirm != DialogResult.Yes)
+                {
+                    _refreshButton.Enabled = true;
+                    return;
+                }
+
+                var (success, message) = PluginCatalog.UninstallPlugin(entry.Id, entry.Name);
+                _statusLabel.Text = message;
+                _statusLabel.ForeColor = success ? _theme.SuccessColor : _theme.ErrorColor;
+                break;
+            }
         }
 
-        // Refresh the list
+        PluginsChanged?.Invoke();
         await LoadCatalog();
-        _actionButton.Enabled = true;
     }
 
     private static bool IsNewerVersion(string catalogVersion, string installedVersion)

@@ -5,23 +5,26 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <AssemblyName>ProdToy.Plugins.Screenshot</AssemblyName>
-    <RootNamespace>ProdToy.Plugins.Screenshot</RootNamespace>
+    <AssemblyName>ProdToy.Plugins.ClaudeIntegration</AssemblyName>
+    <RootNamespace>ProdToy.Plugins.ClaudeIntegration</RootNamespace>
     <EnableDynamicLoading>true</EnableDynamicLoading>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ProdToy.Sdk\ProdToy.Sdk.csproj">
+    <ProjectReference Include="..\..\ProdToy.Sdk\ProdToy.Sdk.csproj">
       <Private>false</Private>
       <ExcludeAssets>runtime</ExcludeAssets>
     </ProjectReference>
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Scripts\context-bar.ps1" LogicalName="ProdToy.Plugins.ClaudeIntegration.Scripts.context-bar.ps1" />
+  </ItemGroup>
+
   <!-- Copy plugin DLL to user's plugins directory after build -->
   <Target Name="DeployPlugin" AfterTargets="Build">
     <PropertyGroup>
-      <PluginDeployDir>$(USERPROFILE)\.prod-toy\plugins\ProdToy.Screenshot\</PluginDeployDir>
+      <PluginDeployDir>$(USERPROFILE)\.prod-toy\plugins\ProdToy.Plugin.ClaudeIntegration\</PluginDeployDir>
     </PropertyGroup>
     <MakeDir Directories="$(PluginDeployDir)" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" SkipUnchangedFiles="true" ContinueOnError="true" />

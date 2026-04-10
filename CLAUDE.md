@@ -94,9 +94,10 @@ src/
     Theme/                              PopupTheme record + 12 built-in themes
     Controls/                           RoundedButton, ColorPickerPopup
     Data/                               ResponseHistory (daily JSON)
-  ProdToy.Plugins.Alarm/               Alarm plugin
-  ProdToy.Plugins.Screenshot/          Screenshot plugin
-  ProdToy.Plugins.ClaudeIntegration/   Claude integration plugin
+  Plugins/
+    ProdToy.Plugins.Alarm/             Alarm plugin
+    ProdToy.Plugins.Screenshot/        Screenshot plugin
+    ProdToy.Plugins.ClaudeIntegration/ Claude integration plugin
 ```
 
 ### Plugin System
@@ -119,13 +120,13 @@ Plugin lifecycle: `Initialize(context)` → `Start()` → (running) → `Stop()`
   settings.json                         Host settings
   plugins/
     plugins-state.json                  Enable/disable state
-    ProdToy.Alarm/
+    ProdToy.Plugin.Alarm/
       ProdToy.Plugins.Alarm.dll
       data/settings.json
-    ProdToy.Screenshot/
+    ProdToy.Plugin.Screenshot/
       ProdToy.Plugins.Screenshot.dll
       data/settings.json, screenshots/
-    ProdToy.ClaudeIntegration/
+    ProdToy.Plugin.ClaudeIntegration/
       ProdToy.Plugins.ClaudeIntegration.dll
       data/settings.json
   history/claude/chats/                 Response history (host-managed)

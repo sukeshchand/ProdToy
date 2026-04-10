@@ -47,9 +47,9 @@ jobs:
       - name: Build Plugins
         if: steps.check_tag.outputs.EXISTS == 'false'
         run: |
-          dotnet build -c Release src/ProdToy.Plugins.Alarm
-          dotnet build -c Release src/ProdToy.Plugins.Screenshot
-          dotnet build -c Release src/ProdToy.Plugins.ClaudeIntegration
+          dotnet build -c Release src/Plugins/ProdToy.Plugins.Alarm
+          dotnet build -c Release src/Plugins/ProdToy.Plugins.Screenshot
+          dotnet build -c Release src/Plugins/ProdToy.Plugins.ClaudeIntegration
 
       - name: Assemble Bundle
         if: steps.check_tag.outputs.EXISTS == 'false'
@@ -61,14 +61,14 @@ jobs:
           Copy-Item "release/ProdToy.exe" $staging
 
           $plugins = @(
-            @{ Id="ProdToy.Alarm";              Dll="ProdToy.Plugins.Alarm" },
-            @{ Id="ProdToy.Screenshot";         Dll="ProdToy.Plugins.Screenshot" },
-            @{ Id="ProdToy.ClaudeIntegration";  Dll="ProdToy.Plugins.ClaudeIntegration" }
+            @{ Id="ProdToy.Plugin.Alarm";              Dll="ProdToy.Plugins.Alarm" },
+            @{ Id="ProdToy.Plugin.Screenshot";         Dll="ProdToy.Plugins.Screenshot" },
+            @{ Id="ProdToy.Plugin.ClaudeIntegration";  Dll="ProdToy.Plugins.ClaudeIntegration" }
           )
           foreach ($p in $plugins) {
             $dest = "$staging/plugins/$($p.Id)"
             New-Item -ItemType Directory -Path $dest -Force | Out-Null
-            $src = "src/$($p.Dll)/bin/Release/net8.0-windows"
+            $src = "src/Plugins/$($p.Dll)/bin/Release/net8.0-windows"
             Copy-Item "$src/$($p.Dll).dll" $dest
             Copy-Item "$src/$($p.Dll).deps.json" $dest -ErrorAction SilentlyContinue
           }

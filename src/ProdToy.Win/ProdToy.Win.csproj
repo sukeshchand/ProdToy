@@ -11,9 +11,9 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <Version>1.0.234</Version>
-    <FileVersion>1.0.234.0</FileVersion>
-    <AssemblyVersion>1.0.234.0</AssemblyVersion>
+    <Version>1.0.244</Version>
+    <FileVersion>1.0.244.0</FileVersion>
+    <AssemblyVersion>1.0.244.0</AssemblyVersion>
     <Product>ProdToy</Product>
     <Company>ProdToy</Company>
     <Description>Productivity toolkit for Windows</Description>

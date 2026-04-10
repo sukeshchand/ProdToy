@@ -108,11 +108,56 @@ static class PluginManager
     }
 
     /// <summary>
+    /// Discover a newly installed plugin by ID, load, initialize, and start it.
+    /// Called after copying plugin DLL to the plugins directory.
+    /// </summary>
+    public static bool DiscoverAndLoad(string pluginId)
+    {
+        // Check if already known
+        var existing = _plugins.Find(p => p.Id.Equals(pluginId, StringComparison.OrdinalIgnoreCase));
+        if (existing != null)
+        {
+            // Already loaded — just enable if disabled
+            if (!existing.Enabled)
+                return EnablePlugin(pluginId);
+            return true;
+        }
+
+        // Discover from the plugins directory
+        string pluginDir = Path.Combine(AppPaths.PluginsDir, pluginId);
+        if (!Directory.Exists(pluginDir)) return false;
+
+        var info = DiscoverPlugin(pluginDir);
+        if (info == null) return false;
+
+        info.Enabled = true;
+        _plugins.Add(info);
+        LoadAndInitialize(info);
+
+        if (info.Instance != null)
+        {
+            try
+            {
+                info.Instance.Start();
+            }
+            catch (Exception ex)
+            {
+                info.LoadError = $"Start failed: {ex.Message}";
+                Debug.WriteLine($"Plugin {info.Id} Start failed: {ex}");
+                LogPluginError(info.Id, "Start", ex);
+            }
+        }
+
+        SaveEnabledState();
+        return info.Instance != null;
+    }
+
+    /// <summary>
     /// Enable a disabled plugin at runtime (load + init + start).
     /// </summary>
     public static bool EnablePlugin(string pluginId)
     {
-        var info = _plugins.Find(p => p.Id == pluginId);
+        var info = _plugins.Find(p => p.Id.Equals(pluginId, StringComparison.OrdinalIgnoreCase));
         if (info == null || info.Enabled) return false;
 
         info.Enabled = true;
@@ -141,7 +186,7 @@ static class PluginManager
     /// </summary>
     public static bool DisablePlugin(string pluginId)
     {
-        var info = _plugins.Find(p => p.Id == pluginId);
+        var info = _plugins.Find(p => p.Id.Equals(pluginId, StringComparison.OrdinalIgnoreCase));
         if (info == null || !info.Enabled) return false;
 
         info.Enabled = false;
@@ -176,7 +221,7 @@ static class PluginManager
     /// </summary>
     public static bool UninstallPlugin(string pluginId)
     {
-        var info = _plugins.Find(p => p.Id == pluginId);
+        var info = _plugins.Find(p => p.Id.Equals(pluginId, StringComparison.OrdinalIgnoreCase));
         if (info == null) return false;
 
         if (info.Enabled)
@@ -184,15 +229,26 @@ static class PluginManager
 
         _plugins.Remove(info);
 
-        try
+        // Force GC to release assembly file locks from the unloaded context
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        // Retry delete — DLL may take a moment to unlock after GC
+        for (int attempt = 0; attempt < 3; attempt++)
         {
-            if (Directory.Exists(info.PluginDirectory))
-                Directory.Delete(info.PluginDirectory, recursive: true);
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Failed to delete plugin dir: {ex.Message}");
-            return false;
+            try
+            {
+                if (Directory.Exists(info.PluginDirectory))
+                    Directory.Delete(info.PluginDirectory, recursive: true);
+                break;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Delete attempt {attempt + 1} failed: {ex.Message}");
+                if (attempt < 2)
+                    Thread.Sleep(500);
+            }
         }
 
         SaveEnabledState();

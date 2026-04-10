@@ -12,7 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ProdToy.Sdk\ProdToy.Sdk.csproj">
+    <ProjectReference Include="..\..\ProdToy.Sdk\ProdToy.Sdk.csproj">
       <Private>false</Private>
       <ExcludeAssets>runtime</ExcludeAssets>
     </ProjectReference>
@@ -21,7 +21,7 @@
   <!-- Copy plugin DLL to user's plugins directory after build -->
   <Target Name="DeployPlugin" AfterTargets="Build">
     <PropertyGroup>
-      <PluginDeployDir>$(USERPROFILE)\.prod-toy\plugins\ProdToy.Alarm\</PluginDeployDir>
+      <PluginDeployDir>$(USERPROFILE)\.prod-toy\plugins\ProdToy.Plugin.Alarm\</PluginDeployDir>
     </PropertyGroup>
     <MakeDir Directories="$(PluginDeployDir)" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" SkipUnchangedFiles="true" ContinueOnError="true" />

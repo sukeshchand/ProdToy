@@ -5,7 +5,8 @@ using System.Text.Json;
 namespace ProdToy;
 
 /// <summary>
-/// Fetches plugin catalog from a remote URL, downloads and installs plugins.
+/// Plugin catalog: fetches available plugins, installs from update path, uninstalls.
+/// Uses the same UpdateLocation as the host updater for plugin source.
 /// </summary>
 static class PluginCatalog
 {
@@ -13,22 +14,51 @@ static class PluginCatalog
     private static List<CatalogEntry>? _cachedCatalog;
 
     /// <summary>
-    /// Fetches the catalog manifest from the configured or default URL.
+    /// Returns the resolved update location (local path or HTTP URL).
     /// </summary>
-    public static async Task<List<CatalogEntry>> FetchCatalogAsync(string? catalogUrl = null)
+    private static string GetUpdateLocation()
+    {
+        var settings = AppSettings.Load();
+        return UpdateChecker.ResolveUpdateLocation(settings.UpdateLocation);
+    }
+
+    private static bool IsHttpUrl(string location) =>
+        location.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+        || location.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Fetches the catalog from the update location.
+    /// Local path: reads {UpdateLocation}/plugin-catalog.json
+    /// HTTP: fetches from configured catalog URL or default GitHub URL
+    /// </summary>
+    public static async Task<List<CatalogEntry>> FetchCatalogAsync()
     {
         try
         {
-            string url = catalogUrl;
-            if (string.IsNullOrEmpty(url))
+            string location = GetUpdateLocation();
+
+            string json;
+            if (IsHttpUrl(location))
             {
+                // For HTTP, use dedicated catalog URL
                 var settings = AppSettings.Load();
-                url = string.IsNullOrEmpty(settings.PluginCatalogUrl)
+                string catalogUrl = string.IsNullOrEmpty(settings.PluginCatalogUrl)
                     ? AppSettingsData.DefaultPluginCatalogUrl
                     : settings.PluginCatalogUrl;
+                json = await _http.GetStringAsync(catalogUrl);
+            }
+            else
+            {
+                // Local/network: read plugin-catalog.json from update path
+                string catalogPath = Path.Combine(location, "plugin-catalog.json");
+                if (!File.Exists(catalogPath))
+                {
+                    _cachedCatalog = new List<CatalogEntry>();
+                    return _cachedCatalog;
+                }
+                json = await File.ReadAllTextAsync(catalogPath);
             }
 
-            string json = await _http.GetStringAsync(url);
             var manifest = JsonSerializer.Deserialize<PluginCatalogManifest>(json);
             _cachedCatalog = manifest?.Plugins ?? new List<CatalogEntry>();
             return _cachedCatalog;
@@ -41,131 +71,59 @@ static class PluginCatalog
     }
 
     /// <summary>
-    /// Returns the last fetched catalog without making a network call.
+    /// Installs a plugin by copying from the update location's plugins directory,
+    /// then loads and starts it via PluginManager.
     /// </summary>
-    public static List<CatalogEntry> GetCachedCatalog() => _cachedCatalog ?? new List<CatalogEntry>();
-
-    /// <summary>
-    /// Downloads a plugin zip from the catalog and installs it.
-    /// </summary>
-    public static async Task<(bool Success, string Message)> InstallFromCatalogAsync(
-        CatalogEntry entry, IProgress<int>? progress = null)
+    public static (bool Success, string Message) InstallPlugin(CatalogEntry entry)
     {
         try
         {
-            // Validate host version compatibility
+            // Validate host version
             if (!string.IsNullOrEmpty(entry.MinHostVersion))
             {
                 if (!IsVersionCompatible(AppVersion.Current, entry.MinHostVersion))
-                    return (false, $"Requires ProdToy v{entry.MinHostVersion} or later (current: v{AppVersion.Current})");
+                    return (false, $"Requires ProdToy v{entry.MinHostVersion}+");
             }
 
+            string location = GetUpdateLocation();
+            string sourceDir = Path.Combine(location, "plugins", entry.Id);
+
+            if (!Directory.Exists(sourceDir))
+                return (false, $"Plugin source not found: {sourceDir}");
+
+            // Copy to install directory
             string destDir = Path.Combine(AppPaths.PluginsDir, entry.Id);
+            Directory.CreateDirectory(destDir);
+            foreach (var file in Directory.GetFiles(sourceDir))
+                File.Copy(file, Path.Combine(destDir, Path.GetFileName(file)), overwrite: true);
 
-            // Download to temp
-            progress?.Report(10);
-            string tempPath = Path.Combine(Path.GetTempPath(), $"prodtoy_plugin_{entry.Id}.zip");
+            // Discover, load, initialize, and start the plugin
+            PluginManager.DiscoverAndLoad(entry.Id);
 
-            using (var response = await _http.GetAsync(entry.DownloadUrl, HttpCompletionOption.ResponseHeadersRead))
-            {
-                response.EnsureSuccessStatusCode();
-                using var stream = await response.Content.ReadAsStreamAsync();
-                using var fileStream = File.Create(tempPath);
-
-                long totalBytes = response.Content.Headers.ContentLength ?? -1;
-                long bytesRead = 0;
-                var buffer = new byte[8192];
-                int read;
-                while ((read = await stream.ReadAsync(buffer)) > 0)
-                {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, read));
-                    bytesRead += read;
-                    if (totalBytes > 0)
-                        progress?.Report(10 + (int)(70.0 * bytesRead / totalBytes));
-                }
-            }
-
-            progress?.Report(80);
-
-            // If it's a zip, extract; if it's a single DLL, just copy
-            if (tempPath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
-                IsZipFile(tempPath))
-            {
-                if (Directory.Exists(destDir))
-                    Directory.Delete(destDir, recursive: true);
-                Directory.CreateDirectory(destDir);
-                ZipFile.ExtractToDirectory(tempPath, destDir);
-            }
-            else
-            {
-                // Assume it's a single DLL
-                Directory.CreateDirectory(destDir);
-                string destDll = Path.Combine(destDir, Path.GetFileName(entry.DownloadUrl));
-                File.Copy(tempPath, destDll, overwrite: true);
-            }
-
-            // Clean up temp
-            try { File.Delete(tempPath); } catch { }
-
-            progress?.Report(100);
             return (true, $"Installed {entry.Name} v{entry.Version}");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Plugin install from catalog failed: {ex}");
+            Debug.WriteLine($"Plugin install failed: {ex}");
             return (false, $"Install failed: {ex.Message}");
         }
     }
 
     /// <summary>
-    /// Checks if any installed plugins have updates available in the catalog.
+    /// Uninstalls a plugin: stops, unloads, and deletes from disk.
     /// </summary>
-    public static async Task<List<(PluginInfo Installed, CatalogEntry Available)>> CheckForUpdatesAsync()
+    public static (bool Success, string Message) UninstallPlugin(string pluginId, string pluginName)
     {
-        var catalog = _cachedCatalog ?? await FetchCatalogAsync();
-        var updates = new List<(PluginInfo, CatalogEntry)>();
-
-        foreach (var installed in PluginManager.Plugins)
+        try
         {
-            var catalogEntry = catalog.FirstOrDefault(c =>
-                c.Id.Equals(installed.Id, StringComparison.OrdinalIgnoreCase));
-
-            if (catalogEntry != null && IsNewerVersion(catalogEntry.Version, installed.Version))
-                updates.Add((installed, catalogEntry));
+            PluginManager.UninstallPlugin(pluginId);
+            return (true, $"Uninstalled {pluginName}");
         }
-
-        return updates;
-    }
-
-    /// <summary>
-    /// Updates an installed plugin to the latest catalog version.
-    /// </summary>
-    public static async Task<(bool Success, string Message)> UpdatePluginAsync(
-        string pluginId, IProgress<int>? progress = null)
-    {
-        var catalog = _cachedCatalog ?? await FetchCatalogAsync();
-        var entry = catalog.FirstOrDefault(c => c.Id.Equals(pluginId, StringComparison.OrdinalIgnoreCase));
-
-        if (entry == null)
-            return (false, "Plugin not found in catalog");
-
-        // Disable the plugin before updating
-        PluginManager.DisablePlugin(pluginId);
-
-        var result = await InstallFromCatalogAsync(entry, progress);
-
-        // Re-enable after install
-        if (result.Success)
-            PluginManager.EnablePlugin(pluginId);
-
-        return result;
-    }
-
-    private static bool IsNewerVersion(string catalogVersion, string installedVersion)
-    {
-        if (Version.TryParse(catalogVersion, out var cv) && Version.TryParse(installedVersion, out var iv))
-            return cv > iv;
-        return string.Compare(catalogVersion, installedVersion, StringComparison.Ordinal) > 0;
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Plugin uninstall failed: {ex}");
+            return (false, $"Uninstall failed: {ex.Message}");
+        }
     }
 
     private static bool IsVersionCompatible(string hostVersion, string minRequired)
@@ -175,16 +133,10 @@ static class PluginCatalog
         return true;
     }
 
-    private static bool IsZipFile(string path)
+    public static bool IsNewerVersion(string catalogVersion, string installedVersion)
     {
-        try
-        {
-            using var fs = File.OpenRead(path);
-            var header = new byte[4];
-            if (fs.Read(header, 0, 4) == 4)
-                return header[0] == 0x50 && header[1] == 0x4B && header[2] == 0x03 && header[3] == 0x04;
-        }
-        catch { }
-        return false;
+        if (Version.TryParse(catalogVersion, out var cv) && Version.TryParse(installedVersion, out var iv))
+            return cv > iv;
+        return string.Compare(catalogVersion, installedVersion, StringComparison.Ordinal) > 0;
     }
 }

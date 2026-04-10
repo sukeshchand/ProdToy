@@ -68,9 +68,9 @@ if ($LASTEXITCODE -ne 0) {
 
 # --- Build and package plugins ---
 $pluginProjects = @(
-    @{ Name = "ProdToy.Alarm";              Dir = "src\ProdToy.Plugins.Alarm" },
-    @{ Name = "ProdToy.Screenshot";         Dir = "src\ProdToy.Plugins.Screenshot" },
-    @{ Name = "ProdToy.ClaudeIntegration";  Dir = "src\ProdToy.Plugins.ClaudeIntegration" }
+    @{ Name = "ProdToy.Plugin.Alarm";              Dir = "src\Plugins\ProdToy.Plugins.Alarm" },
+    @{ Name = "ProdToy.Plugin.Screenshot";         Dir = "src\Plugins\ProdToy.Plugins.Screenshot" },
+    @{ Name = "ProdToy.Plugin.ClaudeIntegration";  Dir = "src\Plugins\ProdToy.Plugins.ClaudeIntegration" }
 )
 
 $pluginsReleaseDir = Join-Path $releaseDir "plugins"

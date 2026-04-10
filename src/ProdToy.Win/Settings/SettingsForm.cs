@@ -573,101 +573,29 @@ class SettingsForm : Form
         };
         browseCatalogButton.FlatAppearance.BorderSize = 0;
         browseCatalogButton.FlatAppearance.MouseOverBackColor = currentTheme.PrimaryLight;
+        PluginCatalogForm? openCatalog = null;
         browseCatalogButton.Click += (_, _) =>
         {
-            var catalogForm = new PluginCatalogForm(currentTheme);
-            catalogForm.Show(this);
+            // Singleton: bring existing to front if already open
+            if (openCatalog != null && !openCatalog.IsDisposed)
+            {
+                openCatalog.BringToFront();
+                openCatalog.Activate();
+                return;
+            }
+
+            openCatalog = new PluginCatalogForm(currentTheme);
+            openCatalog.PluginsChanged += () => RebuildPluginList(pluginsPage, currentTheme, tp, tabInner);
+            openCatalog.FormClosed += (_, _) =>
+            {
+                RebuildPluginList(pluginsPage, currentTheme, tp, tabInner);
+                openCatalog = null;
+            };
+            openCatalog.Show(this);
         };
         pluginsPage.Controls.Add(browseCatalogButton);
-        py += 34;
 
-        var pluginsList = PluginManager.Plugins;
-        if (pluginsList.Count == 0)
-        {
-            var noPluginsLabel = new Label
-            {
-                Text = "No plugins installed.\n\nPlace plugin DLLs in:\n" + AppPaths.PluginsDir,
-                Font = new Font("Segoe UI", 9f),
-                ForeColor = currentTheme.TextSecondary,
-                AutoSize = true,
-                MaximumSize = new Size(tabInner, 0),
-                Location = new Point(tp, py),
-                BackColor = Color.Transparent,
-            };
-            pluginsPage.Controls.Add(noPluginsLabel);
-        }
-        else
-        {
-            foreach (var plugin in pluginsList)
-            {
-                var pluginPanel = new Panel
-                {
-                    Location = new Point(tp, py),
-                    Size = new Size(tabInner, 52),
-                    BackColor = Color.FromArgb(20, currentTheme.Primary),
-                };
-
-                var nameLabel = new Label
-                {
-                    Text = $"{plugin.Name} v{plugin.Version}",
-                    Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
-                    ForeColor = currentTheme.TextPrimary,
-                    AutoSize = true,
-                    Location = new Point(8, 4),
-                    BackColor = Color.Transparent,
-                };
-                pluginPanel.Controls.Add(nameLabel);
-
-                var descLabel = new Label
-                {
-                    Text = string.IsNullOrEmpty(plugin.Description) ? plugin.Id : plugin.Description,
-                    Font = new Font("Segoe UI", 8f),
-                    ForeColor = currentTheme.TextSecondary,
-                    AutoSize = true,
-                    Location = new Point(8, 24),
-                    BackColor = Color.Transparent,
-                };
-                pluginPanel.Controls.Add(descLabel);
-
-                if (plugin.LoadError != null)
-                {
-                    var errorLabel = new Label
-                    {
-                        Text = plugin.LoadError,
-                        Font = new Font("Segoe UI", 8f),
-                        ForeColor = currentTheme.ErrorColor,
-                        AutoSize = true,
-                        Location = new Point(8, 36),
-                        BackColor = Color.Transparent,
-                    };
-                    pluginPanel.Controls.Add(errorLabel);
-                    pluginPanel.Size = new Size(tabInner, 56);
-                }
-
-                var enableToggle = new CheckBox
-                {
-                    Text = "Enabled",
-                    Font = new Font("Segoe UI", 8.5f),
-                    ForeColor = currentTheme.TextSecondary,
-                    Checked = plugin.Enabled,
-                    AutoSize = true,
-                    Location = new Point(tabInner - 100, 14),
-                    BackColor = Color.Transparent,
-                };
-                var capturedPlugin = plugin;
-                enableToggle.CheckedChanged += (_, _) =>
-                {
-                    if (enableToggle.Checked)
-                        PluginManager.EnablePlugin(capturedPlugin.Id);
-                    else
-                        PluginManager.DisablePlugin(capturedPlugin.Id);
-                };
-                pluginPanel.Controls.Add(enableToggle);
-
-                pluginsPage.Controls.Add(pluginPanel);
-                py += pluginPanel.Height + 6;
-            }
-        }
+        RebuildPluginList(pluginsPage, currentTheme, tp, tabInner);
 
         // Dynamic plugin settings tabs (contributed by enabled plugins)
         var pluginSettingsPages = PluginManager.GetAllSettingsPages();
@@ -1026,6 +954,112 @@ class SettingsForm : Form
         var savedGlobalFont = AppSettings.Load().GlobalFont;
         if (!string.IsNullOrEmpty(savedGlobalFont) && savedGlobalFont != "Segoe UI")
             ApplyGlobalFont(savedGlobalFont);
+    }
+
+    private static void RebuildPluginList(TabPage pluginsPage, PopupTheme theme, int tp, int tabInner)
+    {
+        // Remove old dynamic plugin controls (tagged with "plugin-item")
+        // Collect first, then dispose — Dispose() removes from parent automatically
+        var toRemove = new List<Control>();
+        foreach (Control c in pluginsPage.Controls)
+        {
+            if (c.Tag is string tag && tag == "plugin-item")
+                toRemove.Add(c);
+        }
+        foreach (var c in toRemove)
+            c.Dispose();
+
+        int py = tp + 34; // below section label + browse button
+
+        var pluginsList = PluginManager.Plugins;
+        if (pluginsList.Count == 0)
+        {
+            var noPluginsLabel = new Label
+            {
+                Text = "No plugins installed.\n\nPlace plugin DLLs in:\n" + AppPaths.PluginsDir,
+                Font = new Font("Segoe UI", 9f),
+                ForeColor = theme.TextSecondary,
+                AutoSize = true,
+                MaximumSize = new Size(tabInner, 0),
+                Location = new Point(tp, py),
+                BackColor = Color.Transparent,
+                Tag = "plugin-item",
+            };
+            pluginsPage.Controls.Add(noPluginsLabel);
+        }
+        else
+        {
+            foreach (var plugin in pluginsList)
+            {
+                var pluginPanel = new Panel
+                {
+                    Location = new Point(tp, py),
+                    Size = new Size(tabInner, 52),
+                    BackColor = Color.FromArgb(20, theme.Primary),
+                    Tag = "plugin-item",
+                };
+
+                var nameLabel = new Label
+                {
+                    Text = $"{plugin.Name} v{plugin.Version}",
+                    Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
+                    ForeColor = theme.TextPrimary,
+                    AutoSize = true,
+                    Location = new Point(8, 4),
+                    BackColor = Color.Transparent,
+                };
+                pluginPanel.Controls.Add(nameLabel);
+
+                var descLabel = new Label
+                {
+                    Text = string.IsNullOrEmpty(plugin.Description) ? plugin.Id : plugin.Description,
+                    Font = new Font("Segoe UI", 8f),
+                    ForeColor = theme.TextSecondary,
+                    AutoSize = true,
+                    Location = new Point(8, 24),
+                    BackColor = Color.Transparent,
+                };
+                pluginPanel.Controls.Add(descLabel);
+
+                if (plugin.LoadError != null)
+                {
+                    var errorLabel = new Label
+                    {
+                        Text = plugin.LoadError,
+                        Font = new Font("Segoe UI", 8f),
+                        ForeColor = theme.ErrorColor,
+                        AutoSize = true,
+                        Location = new Point(8, 36),
+                        BackColor = Color.Transparent,
+                    };
+                    pluginPanel.Controls.Add(errorLabel);
+                    pluginPanel.Size = new Size(tabInner, 56);
+                }
+
+                var enableToggle = new CheckBox
+                {
+                    Text = "Enabled",
+                    Font = new Font("Segoe UI", 8.5f),
+                    ForeColor = theme.TextSecondary,
+                    Checked = plugin.Enabled,
+                    AutoSize = true,
+                    Location = new Point(tabInner - 100, 14),
+                    BackColor = Color.Transparent,
+                };
+                var capturedPlugin = plugin;
+                enableToggle.CheckedChanged += (_, _) =>
+                {
+                    if (enableToggle.Checked)
+                        PluginManager.EnablePlugin(capturedPlugin.Id);
+                    else
+                        PluginManager.DisablePlugin(capturedPlugin.Id);
+                };
+                pluginPanel.Controls.Add(enableToggle);
+
+                pluginsPage.Controls.Add(pluginPanel);
+                py += pluginPanel.Height + 6;
+            }
+        }
     }
 
     private static TabPage CreateTabPage(string text, PopupTheme theme)
