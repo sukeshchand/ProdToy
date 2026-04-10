@@ -21,22 +21,30 @@ public class ClaudeIntegrationPlugin : IPlugin
     {
         var settings = _context.LoadSettings<ClaudePluginSettings>();
 
-        // Ensure hook script exists on disk (critical after updates or fresh install)
+        // Always re-apply everything — hooks/scripts may have been removed externally
+        // Ensure hook script exists on disk
         EnsureHookScript();
 
-        // Verify and sync all Claude hooks with plugin settings
+        // Force re-apply all Claude hooks (writes entries even if they already exist)
         ClaudeHookManager.UpdateClaudeHook("Stop", null, settings.HookStopEnabled);
         ClaudeHookManager.UpdateClaudeHook("Notification",
             "permission_prompt|idle_prompt|elicitation_dialog", settings.HookNotificationEnabled);
         ClaudeHookManager.UpdateClaudeHook("UserPromptSubmit", null, settings.HookUserPromptEnabled);
 
-        // Verify and sync status line
-        if (ClaudeStatusLine.IsEnabled())
+        // Force re-apply status line (always re-enable + rewrite config if setting says enabled)
+        if (settings.SlEnabled)
+        {
+            ClaudeStatusLine.Enable();
             ClaudeStatusLine.WriteConfig(settings);
+        }
+        else
+        {
+            if (ClaudeStatusLine.IsEnabled())
+                ClaudeStatusLine.Disable();
+        }
 
-        // Sync auto-title if enabled
-        if (settings.AutoTitleToFolder)
-            ClaudeHookManager.SetAutoTitleHook(true);
+        // Force re-apply auto-title
+        ClaudeHookManager.SetAutoTitleHook(settings.AutoTitleToFolder);
 
         // Cleanup legacy hooks
         ClaudeHookManager.CleanupOldHook();
@@ -342,7 +350,7 @@ public class ClaudeIntegrationPlugin : IPlugin
             Font = new Font("Segoe UI", 9.5f),
             ForeColor = theme.TextPrimary,
             BackColor = Color.Transparent,
-            Checked = ClaudeStatusLine.IsEnabled(),
+            Checked = settings.SlEnabled,
             AutoSize = true,
             Location = new Point(pad, y),
             Cursor = Cursors.Hand,
@@ -362,6 +370,9 @@ public class ClaudeIntegrationPlugin : IPlugin
         {
             try
             {
+                var s = _context.LoadSettings<ClaudePluginSettings>();
+                _context.SaveSettings(s with { SlEnabled = slEnableCheck.Checked });
+
                 if (slEnableCheck.Checked)
                 {
                     ClaudeStatusLine.Enable();

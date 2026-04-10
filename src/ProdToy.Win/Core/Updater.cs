@@ -28,7 +28,7 @@ static class Updater
             string updateExe = Path.Combine(installDir, "ProdToy.update.exe");
             string stagingPluginsDir = Path.Combine(installDir, "_update_plugins");
             string scriptPath = Path.Combine(installDir, "_update.ps1");
-            string pluginsInstallDir = AppPaths.PluginsDir;
+            string pluginsInstallDir = AppPaths.PluginsBinDir;
             int currentPid = Environment.ProcessId;
 
             // Step 1: Get new exe and plugins to local staging

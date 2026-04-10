@@ -326,7 +326,7 @@ class SettingsForm : Form
 
         var browseCatalogButton = new RoundedButton
         {
-            Text = "Browse Catalog",
+            Text = "Plugin Store",
             Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
             Size = new Size(130, 28),
             Location = new Point(tabInner - 130 + tp, py),

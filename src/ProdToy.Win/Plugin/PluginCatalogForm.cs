@@ -23,7 +23,7 @@ class PluginCatalogForm : Form
     public PluginCatalogForm(PopupTheme theme)
     {
         _theme = theme;
-        Text = "Plugin Catalog";
+        Text = "Plugin Store";
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true;
         MinimizeBox = true;
@@ -42,7 +42,7 @@ class PluginCatalogForm : Form
 
         var titleLabel = new Label
         {
-            Text = "Plugin Catalog",
+            Text = "Plugin Store",
             Font = new Font("Segoe UI Semibold", 16f, FontStyle.Bold),
             ForeColor = theme.TextPrimary,
             AutoSize = true,

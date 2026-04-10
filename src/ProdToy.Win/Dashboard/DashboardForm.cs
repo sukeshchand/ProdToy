@@ -69,16 +69,6 @@ class DashboardForm : Form
         };
         _contentPanel.Controls.Add(titleLabel);
 
-        var versionLabel = new Label
-        {
-            Text = $"v{AppVersion.Current}",
-            Font = new Font("Segoe UI", 9f),
-            ForeColor = _theme.TextSecondary,
-            AutoSize = true,
-            Location = new Point(Pad + 140, y + 10),
-            BackColor = Color.Transparent,
-        };
-        _contentPanel.Controls.Add(versionLabel);
         y += 42;
 
         var accentLine = new Panel
@@ -149,8 +139,22 @@ class DashboardForm : Form
         _contentPanel.Controls.Add(closeBtn);
         y += 24;
 
+        // Version label bottom right
+        y += 4;
+        var versionLabel = new Label
+        {
+            Text = $"v{AppVersion.Current}",
+            Font = new Font("Segoe UI", 7.5f),
+            ForeColor = Color.FromArgb(80, _theme.TextSecondary),
+            AutoSize = true,
+            BackColor = Color.Transparent,
+        };
+        versionLabel.Location = new Point(FormWidth - Pad - versionLabel.PreferredWidth, y);
+        _contentPanel.Controls.Add(versionLabel);
+        y += 16;
+
         // Resize form to fit content
-        int totalHeight = y + Pad / 2;
+        int totalHeight = y;
         _contentPanel.Size = new Size(FormWidth, totalHeight);
         ClientSize = new Size(FormWidth, totalHeight);
     }

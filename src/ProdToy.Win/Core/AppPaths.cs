@@ -37,8 +37,14 @@ static class AppPaths
     /// <summary>Alarms data: Root\alarms\</summary>
     public static string AlarmsDir { get; } = Path.Combine(Root, "alarms");
 
-    /// <summary>Plugins directory: Root\plugins\</summary>
+    /// <summary>Plugins root directory: Root\plugins\</summary>
     public static string PluginsDir { get; } = Path.Combine(Root, "plugins");
+
+    /// <summary>Plugin DLLs: Root\plugins\bin\</summary>
+    public static string PluginsBinDir { get; } = Path.Combine(Root, "plugins", "bin");
+
+    /// <summary>Plugin data (survives uninstall): Root\plugins\data\</summary>
+    public static string PluginsDataDir { get; } = Path.Combine(Root, "plugins", "data");
 
     /// <summary>Plugins state file: Root\plugins\plugins-state.json</summary>
     public static string PluginsStateFile { get; } = Path.Combine(Root, "plugins", "plugins-state.json");

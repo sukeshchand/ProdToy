@@ -75,7 +75,126 @@ public class ScreenshotPlugin : IPlugin
         new("Edit Last Screenshot", EditLastScreenshot, Priority: 101),
     ];
 
-    public SettingsPageContribution? GetSettingsPage() => null;
+    public SettingsPageContribution? GetSettingsPage() =>
+        new("Screenshot", () => BuildSettingsPanel(), TabOrder: 100);
+
+    private Control BuildSettingsPanel()
+    {
+        var theme = _context.Host.CurrentTheme;
+        var settings = _context.LoadSettings<ScreenshotPluginSettings>();
+
+        var panel = new Panel
+        {
+            AutoScroll = true,
+            Dock = DockStyle.Fill,
+            BackColor = theme.BgDark,
+        };
+
+        int pad = 16;
+        int y = pad;
+
+        // --- SCREEN CAPTURE section ---
+        var captureLabel = new Label
+        {
+            Text = "SCREEN CAPTURE",
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            ForeColor = theme.Primary,
+            AutoSize = true,
+            Location = new Point(pad, y),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(captureLabel);
+        y += 26;
+
+        var enableCheck = new CheckBox
+        {
+            Text = "Enable screen capture",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            BackColor = Color.Transparent,
+            Checked = settings.ScreenshotEnabled,
+            AutoSize = true,
+            Location = new Point(pad + 8, y),
+            Cursor = Cursors.Hand,
+        };
+        enableCheck.CheckedChanged += (_, _) =>
+        {
+            var s = _context.LoadSettings<ScreenshotPluginSettings>();
+            _context.SaveSettings(s with { ScreenshotEnabled = enableCheck.Checked });
+        };
+        panel.Controls.Add(enableCheck);
+        y += 30;
+
+        // --- SHORTCUT KEY section ---
+        var hotkeyLabel = new Label
+        {
+            Text = "SHORTCUT KEY",
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            ForeColor = theme.Primary,
+            AutoSize = true,
+            Location = new Point(pad, y),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(hotkeyLabel);
+        y += 26;
+
+        var hotkeyHint = new Label
+        {
+            Text = $"Current hotkey: {(string.IsNullOrEmpty(settings.ScreenshotHotkey) ? "(none)" : settings.ScreenshotHotkey)}",
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = theme.TextPrimary,
+            AutoSize = true,
+            Location = new Point(pad + 8, y),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(hotkeyHint);
+        y += 24;
+
+        var hotkeyNote = new Label
+        {
+            Text = "Restart app after changing hotkey to apply.",
+            Font = new Font("Segoe UI", 8f),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(pad + 8, y),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(hotkeyNote);
+        y += 24;
+
+        // --- QUICK OPEN section ---
+        var tripleCtrlLabel = new Label
+        {
+            Text = "QUICK OPEN",
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            ForeColor = theme.Primary,
+            AutoSize = true,
+            Location = new Point(pad, y),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(tripleCtrlLabel);
+        y += 26;
+
+        var tripleCtrlCheck = new CheckBox
+        {
+            Text = "Triple Ctrl tap to open last screenshot editor",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            BackColor = Color.Transparent,
+            Checked = settings.TripleCtrlEnabled,
+            AutoSize = true,
+            Location = new Point(pad + 8, y),
+            Cursor = Cursors.Hand,
+        };
+        tripleCtrlCheck.CheckedChanged += (_, _) =>
+        {
+            var s = _context.LoadSettings<ScreenshotPluginSettings>();
+            _context.SaveSettings(s with { TripleCtrlEnabled = tripleCtrlCheck.Checked });
+        };
+        panel.Controls.Add(tripleCtrlCheck);
+
+        return panel;
+    }
 
     private void TakeScreenshot()
     {

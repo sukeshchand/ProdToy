@@ -91,8 +91,8 @@ static class PluginCatalog
             if (!Directory.Exists(sourceDir))
                 return (false, $"Plugin source not found: {sourceDir}");
 
-            // Copy to install directory
-            string destDir = Path.Combine(AppPaths.PluginsDir, entry.Id);
+            // Copy to install directory (plugins/bin/{id}/)
+            string destDir = Path.Combine(AppPaths.PluginsBinDir, entry.Id);
             Directory.CreateDirectory(destDir);
             foreach (var file in Directory.GetFiles(sourceDir))
                 File.Copy(file, Path.Combine(destDir, Path.GetFileName(file)), overwrite: true);

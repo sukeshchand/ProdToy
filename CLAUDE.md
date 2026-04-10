@@ -107,7 +107,7 @@ Plugins are DLLs placed in `~/.prod-toy/plugins/{PluginId}/`. Each plugin:
 - Implements `IPlugin` with `[Plugin]` attribute
 - Is loaded in its own `AssemblyLoadContext` (collectible, isolatable)
 - Can contribute tray menu items and settings tabs
-- Has its own data directory at `~/.prod-toy/plugins/{PluginId}/data/`
+- Has its own data directory at `~/.prod-toy/plugins/data/{PluginId}/` (survives uninstall/reinstall)
 - Has its own `settings.json` independent of host settings
 
 Plugin lifecycle: `Initialize(context)` → `Start()` → (running) → `Stop()` → `Dispose()`
@@ -120,15 +120,20 @@ Plugin lifecycle: `Initialize(context)` → `Start()` → (running) → `Stop()`
   settings.json                         Host settings
   plugins/
     plugins-state.json                  Enable/disable state
-    ProdToy.Plugin.Alarm/
-      ProdToy.Plugins.Alarm.dll
-      data/settings.json
-    ProdToy.Plugin.Screenshot/
-      ProdToy.Plugins.Screenshot.dll
-      data/settings.json, screenshots/
-    ProdToy.Plugin.ClaudeIntegration/
-      ProdToy.Plugins.ClaudeIntegration.dll
-      data/settings.json
+    bin/                                Plugin DLLs (deleted on uninstall)
+      ProdToy.Plugin.Alarm/
+        ProdToy.Plugins.Alarm.dll
+      ProdToy.Plugin.Screenshot/
+        ProdToy.Plugins.Screenshot.dll
+      ProdToy.Plugin.ClaudeIntegration/
+        ProdToy.Plugins.ClaudeIntegration.dll
+    data/                               Plugin data (survives uninstall)
+      ProdToy.Plugin.Alarm/
+        settings.json
+      ProdToy.Plugin.Screenshot/
+        settings.json, screenshots/
+      ProdToy.Plugin.ClaudeIntegration/
+        settings.json
   history/claude/chats/                 Response history (host-managed)
   scripts/                             Status line script (plugin-managed)
   logs/plugins.log                     Plugin error log

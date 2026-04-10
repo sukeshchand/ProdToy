@@ -360,7 +360,7 @@ class SetupForm : Form
                 string sourcePluginsDir = Path.Combine(sourceDir, "plugins");
                 if (Directory.Exists(sourcePluginsDir))
                 {
-                    string destPluginsDir = AppPaths.PluginsDir;
+                    string destPluginsDir = AppPaths.PluginsBinDir;
                     Directory.CreateDirectory(destPluginsDir);
                     int pluginCount = 0;
                     foreach (var pluginDir in Directory.GetDirectories(sourcePluginsDir))

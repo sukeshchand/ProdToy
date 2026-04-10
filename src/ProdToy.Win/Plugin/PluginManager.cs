@@ -27,17 +27,17 @@ static class PluginManager
     {
         _host = host;
 
-        string pluginsDir = AppPaths.PluginsDir;
-        if (!Directory.Exists(pluginsDir))
+        string pluginsBinDir = AppPaths.PluginsBinDir;
+        if (!Directory.Exists(pluginsBinDir))
         {
-            Directory.CreateDirectory(pluginsDir);
+            Directory.CreateDirectory(pluginsBinDir);
             return;
         }
 
         var enabledState = LoadEnabledState();
 
-        // Each subdirectory under plugins/ is a plugin
-        foreach (var dir in Directory.GetDirectories(pluginsDir))
+        // Each subdirectory under plugins/bin/ is a plugin
+        foreach (var dir in Directory.GetDirectories(pluginsBinDir))
         {
             var info = DiscoverPlugin(dir);
             if (info == null) continue;
@@ -127,7 +127,7 @@ static class PluginManager
         }
 
         // Discover from the plugins directory
-        string pluginDir = Path.Combine(AppPaths.PluginsDir, pluginId);
+        string pluginDir = Path.Combine(AppPaths.PluginsBinDir, pluginId);
         if (!Directory.Exists(pluginDir)) return false;
 
         var info = DiscoverPlugin(pluginDir);
@@ -270,8 +270,8 @@ static class PluginManager
             if (pluginType == null || attr == null)
                 return false;
 
-            // Copy to plugins directory
-            string destDir = Path.Combine(AppPaths.PluginsDir, attr.Id);
+            // Copy to plugins bin directory
+            string destDir = Path.Combine(AppPaths.PluginsBinDir, attr.Id);
             Directory.CreateDirectory(destDir);
 
             string sourceDir = Path.GetDirectoryName(sourceDllPath)!;

@@ -24,7 +24,7 @@
   <!-- Copy plugin DLL to user's plugins directory after build -->
   <Target Name="DeployPlugin" AfterTargets="Build">
     <PropertyGroup>
-      <PluginDeployDir>$(USERPROFILE)\.prod-toy\plugins\ProdToy.Plugin.ClaudeIntegration\</PluginDeployDir>
+      <PluginDeployDir>$(USERPROFILE)\.prod-toy\plugins\bin\ProdToy.Plugin.ClaudeIntegration\</PluginDeployDir>
     </PropertyGroup>
     <MakeDir Directories="$(PluginDeployDir)" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" SkipUnchangedFiles="true" ContinueOnError="true" />
