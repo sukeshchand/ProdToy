@@ -3,16 +3,17 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace ProdToy;
+namespace ProdToy.Setup;
 
 static class Uninstaller
 {
     public record UninstallResult(bool Success, string Message);
 
     /// <summary>
-    /// Removes hook script and settings entries immediately.
-    /// Writes a cleanup batch script that deletes exe files after the process exits.
-    /// The caller must launch the batch script and then exit the application.
+    /// Removes hook script, settings entries, registry entries. Writes a cleanup
+    /// batch script that the caller must launch before exiting — the batch waits
+    /// for this process to terminate, then deletes the exe files.
+    /// Plugin DATA under plugins/data/ is preserved.
     /// </summary>
     public static UninstallResult Run(out string? cleanupBatPath)
     {
@@ -23,6 +24,7 @@ static class Uninstaller
         string settingsPath = AppPaths.ClaudeSettingsFile;
         string runningExe = Application.ExecutablePath;
         string toolsExe = AppPaths.ExePath;
+        string toolsSetupExe = AppPaths.SetupExePath;
 
         try
         {
@@ -30,15 +32,15 @@ static class Uninstaller
             string ps1Path = Path.Combine(hooksDir, "Show-ProdToy.ps1");
             if (File.Exists(ps1Path))
             {
-                File.Delete(ps1Path);
-                log.AppendLine($"Removed hook script: {ps1Path}");
+                try { File.Delete(ps1Path); log.AppendLine($"Removed hook script: {ps1Path}"); }
+                catch (Exception ex) { log.AppendLine($"Warning: could not remove hook script: {ex.Message}"); }
             }
             else
             {
                 log.AppendLine("Hook script not found (already removed).");
             }
 
-            // Step 2: Remove ProdToy hooks from settings.json
+            // Step 2: Remove ProdToy hook entries from Claude settings.json
             if (File.Exists(settingsPath))
             {
                 RemoveHooksFromSettings(settingsPath);
@@ -46,10 +48,10 @@ static class Uninstaller
             }
             else
             {
-                log.AppendLine("Settings file not found (no hooks to remove).");
+                log.AppendLine("Claude settings file not found (no hooks to remove).");
             }
 
-            // Step 3: Remove from Windows "Apps & Features"
+            // Step 3: Unregister from Windows Apps & Features
             try
             {
                 AppRegistry.Unregister();
@@ -57,7 +59,7 @@ static class Uninstaller
             }
             catch (Exception ex)
             {
-                log.AppendLine($"Note: Could not remove Apps & Features entry: {ex.Message}");
+                log.AppendLine($"Warning: could not remove Apps & Features entry: {ex.Message}");
             }
 
             // Step 3b: Remove "Start with Windows" registry entry
@@ -70,21 +72,21 @@ static class Uninstaller
             }
             catch (Exception ex)
             {
-                log.AppendLine($"Note: Could not remove startup entry: {ex.Message}");
+                log.AppendLine($"Warning: could not remove startup entry: {ex.Message}");
             }
 
-            // Step 4: Build a cleanup batch script that waits for this process to exit,
-            // then deletes the exe(s) and their folders (if empty).
+            // Step 4: Build cleanup batch that deletes exe files after this process exits.
             var batLines = new StringBuilder();
             batLines.AppendLine("@echo off");
-            // Wait for the running process to exit
             batLines.AppendLine($"taskkill /f /pid {Environment.ProcessId} >nul 2>&1");
             batLines.AppendLine("timeout /t 2 /nobreak >nul");
 
-            // Collect unique paths to delete
+            // Collect unique paths to delete: both the running installer and the
+            // installed copies of the host and installer in .prod-toy.
             var exePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (File.Exists(runningExe)) exePaths.Add(runningExe);
-            if (File.Exists(toolsExe)) exePaths.Add(toolsExe);
+            if (File.Exists(runningExe))    exePaths.Add(runningExe);
+            if (File.Exists(toolsExe))      exePaths.Add(toolsExe);
+            if (File.Exists(toolsSetupExe)) exePaths.Add(toolsSetupExe);
 
             var dirsToClean = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var exe in exePaths)
@@ -94,20 +96,22 @@ static class Uninstaller
                 dirsToClean.Add(Path.GetDirectoryName(exe)!);
             }
 
-            // Remove directories if empty after exe deletion
+            // Remove plugin DLL dir (bin) so stale DLLs don't linger; data survives.
+            batLines.AppendLine($"rmdir /s /q \"{AppPaths.PluginsBinDir}\" >nul 2>&1");
+
+            // Try to remove each exe's containing dir if empty (rmdir without /s).
             foreach (var dir in dirsToClean)
             {
                 batLines.AppendLine($"rmdir /q \"{dir}\" >nul 2>&1");
             }
 
-            // Self-delete the batch script
             batLines.AppendLine("del /f /q \"%~f0\" >nul 2>&1");
 
             cleanupBatPath = Path.Combine(Path.GetTempPath(), "prodtoy_uninstall.cmd");
             File.WriteAllText(cleanupBatPath, batLines.ToString(), Encoding.ASCII);
 
             log.AppendLine();
-            log.Append("ProdToy has been uninstalled. Please restart any running Claude Code instances.");
+            log.Append("ProdToy has been uninstalled. Your settings, history, screenshots, and plugin data are preserved.");
 
             return new UninstallResult(true, log.ToString());
         }
@@ -118,9 +122,6 @@ static class Uninstaller
         }
     }
 
-    /// <summary>
-    /// Launches the cleanup batch script (hidden window) so it can delete files after app exit.
-    /// </summary>
     public static void LaunchCleanupScript(string batPath)
     {
         Process.Start(new ProcessStartInfo
@@ -139,18 +140,15 @@ static class Uninstaller
         var root = JsonNode.Parse(json);
         if (root?["hooks"] is not JsonObject hooksNode) return;
 
-        // Process each hook event (Stop, Notification, UserPromptSubmit, etc.)
         var eventNames = hooksNode.Select(kv => kv.Key).ToList();
         foreach (var eventName in eventNames)
         {
             if (hooksNode[eventName] is not JsonArray eventArray) continue;
 
-            // Iterate rule sets in reverse so we can safely remove
             for (int i = eventArray.Count - 1; i >= 0; i--)
             {
                 if (eventArray[i]?["hooks"] is not JsonArray hooksArray) continue;
 
-                // Remove any hook entries that reference Show-ProdToy
                 for (int j = hooksArray.Count - 1; j >= 0; j--)
                 {
                     string? command = hooksArray[j]?["command"]?.GetValue<string>();
@@ -160,27 +158,24 @@ static class Uninstaller
                     }
                 }
 
-                // If the rule set has no hooks left, remove the entire rule set
                 if (hooksArray.Count == 0)
                 {
                     eventArray.RemoveAt(i);
                 }
             }
 
-            // If the event has no rule sets left, remove the event
             if (eventArray.Count == 0)
             {
                 hooksNode.Remove(eventName);
             }
         }
 
-        // If hooks object is empty, remove it entirely
         if (hooksNode.Count == 0)
         {
             root.AsObject().Remove("hooks");
         }
 
         var options = new JsonSerializerOptions { WriteIndented = true };
-        File.WriteAllText(settingsPath, root.ToJsonString(options), System.Text.Encoding.UTF8);
+        File.WriteAllText(settingsPath, root.ToJsonString(options), Encoding.UTF8);
     }
 }

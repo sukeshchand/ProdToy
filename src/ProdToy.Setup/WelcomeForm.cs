@@ -1,6 +1,7 @@
 using System.Drawing;
+using System.Runtime.InteropServices;
 
-namespace ProdToy;
+namespace ProdToy.Setup;
 
 class WelcomeForm : Form
 {
@@ -8,8 +9,9 @@ class WelcomeForm : Form
 
     public WelcomeForm(bool isUpdate)
     {
+        string version = Installer.ReadBundledVersion();
         string heading = isUpdate
-            ? $"ProdToy updated to version {AppVersion.Current}"
+            ? $"ProdToy updated to version {version}"
             : "ProdToy installed successfully";
 
         Text = isUpdate ? "ProdToy - Updated" : "ProdToy - Welcome";
@@ -22,7 +24,6 @@ class WelcomeForm : Form
         BackColor = _theme.BgDark;
         Icon = SystemIcons.Information;
 
-        // --- Header ---
         var headerPanel = new Panel
         {
             Dock = DockStyle.Top,
@@ -49,16 +50,14 @@ class WelcomeForm : Form
 
         headerPanel.Controls.AddRange(new Control[] { titleLabel, accentLine });
 
-        // --- Feature list ---
         var features = new[]
         {
             "Rich popup notifications for Claude Code task completions, errors, and questions",
             "Response history with session filtering and date navigation",
-            "Screenshot editor with annotations, crop, mask, and rotation",
+            "Screenshot editor with annotations, crop, mask, rotation, and zoom",
             "Global hotkey for instant screen capture",
             "Alarm scheduling with popup and Windows notifications",
             "Auto-update from configured update location",
-            "7 built-in themes with live preview",
             "System tray integration with quick access to all features",
             "Configurable Claude Code hooks (Stop, Notification, UserPromptSubmit)",
             "Custom status line for Claude CLI",
@@ -97,7 +96,6 @@ class WelcomeForm : Form
 
         y += 12;
 
-        // --- OK button ---
         var okButton = new RoundedButton
         {
             Text = "OK",
@@ -120,12 +118,16 @@ class WelcomeForm : Form
 
         Shown += (_, _) =>
         {
-            NativeMethods.ShowWindow(Handle, NativeMethods.SW_RESTORE);
-            NativeMethods.SetForegroundWindow(Handle);
+            ShowWindow(Handle, SW_RESTORE);
+            SetForegroundWindow(Handle);
             BringToFront();
             Activate();
         };
 
         AcceptButton = okButton;
     }
+
+    private const int SW_RESTORE = 9;
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }

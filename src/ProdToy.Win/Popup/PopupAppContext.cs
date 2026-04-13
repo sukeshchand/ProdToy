@@ -23,8 +23,9 @@ class PopupAppContext : ApplicationContext
         // Hook script is managed by the Claude Integration plugin's Start()/Stop()
         // No host-level hook management — plugins own their external integrations
 
-        // Keep Windows "Apps & Features" entry current after updates
-        AppRegistry.Register();
+        // Keep Windows "Apps & Features" DisplayVersion in sync after auto-updates.
+        // Register/Unregister are ProdToySetup.exe's job.
+        AppRegistry.SyncDisplayVersion();
 
         _popupForm = new PopupForm(theme);
         if (!startHidden)

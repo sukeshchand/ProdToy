@@ -2,32 +2,28 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <AssemblyName>ProdToy</AssemblyName>
+    <AssemblyName>ProdToySetup</AssemblyName>
+    <RootNamespace>ProdToy.Setup</RootNamespace>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <Version>1.0.279</Version>
-    <FileVersion>1.0.279.0</FileVersion>
-    <AssemblyVersion>1.0.279.0</AssemblyVersion>
-    <Product>ProdToy</Product>
+    <Version>1.0.284</Version>
+    <FileVersion>1.0.284.0</FileVersion>
+    <AssemblyVersion>1.0.284.0</AssemblyVersion>
+    <Product>ProdToy Setup</Product>
     <Company>ProdToy</Company>
-    <Description>Productivity toolkit for Windows</Description>
+    <Description>Installer for ProdToy</Description>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <EmbeddedResource Include="Scripts\Show-ProdToy.ps1"
+                      LogicalName="ProdToy.Setup.Scripts.Show-ProdToy.ps1" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\ProdToy.Sdk\ProdToy.Sdk.csproj" />
-  </ItemGroup>
-
-  <!-- Exclude XML doc files and PDB from publish output -->
   <PropertyGroup>
     <PublishDir>..\..\release\</PublishDir>
     <PublishDocumentationFiles>false</PublishDocumentationFiles>

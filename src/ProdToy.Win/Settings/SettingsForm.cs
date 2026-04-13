@@ -689,8 +689,37 @@ class SettingsForm : Form
         };
         uninstallLink.LinkClicked += (_, _) =>
         {
-            using var uninstallForm = new UninstallForm();
-            uninstallForm.ShowDialog(this);
+            // Uninstall lives in ProdToySetup.exe now. If it's next to the host
+            // exe in the install dir, launch it with --uninstall. Fall back to a
+            // helpful message if Setup isn't where we expect it.
+            string setupExe = AppPaths.SetupExePath;
+            if (File.Exists(setupExe))
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = setupExe,
+                        Arguments = "--uninstall",
+                        UseShellExecute = true,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this,
+                        $"Could not launch installer:\n{ex.Message}",
+                        "Uninstall", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            else
+            {
+                MessageBox.Show(this,
+                    $"ProdToySetup.exe was not found at:\n{setupExe}\n\n" +
+                    "Run the installer you originally used to install ProdToy, " +
+                    "then click Uninstall from it.",
+                    "Uninstall",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
         };
         _aboutPage.Controls.Add(uninstallLink);
 

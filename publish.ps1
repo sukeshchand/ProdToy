@@ -40,9 +40,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$versionFile = "src\ProdToy.Win\Core\AppVersion.cs"
-$projectDir  = "src\ProdToy.Win"
-$releaseDir  = "release"
+$versionFile      = "src\ProdToy.Win\Core\AppVersion.cs"
+$setupVersionFile = "src\ProdToy.Setup\Common\AppVersion.cs"
+$projectDir       = "src\ProdToy.Win"
+$setupProjectDir  = "src\ProdToy.Setup"
+$releaseDir       = "release"
 
 # --- Read current version ---
 $content = Get-Content $versionFile -Raw
@@ -67,6 +69,14 @@ if (-not $SkipVersionBump) {
 } else {
     $newVersion = $currentVersion
     Write-Host "Skipping host version bump, staying at: $newVersion" -ForegroundColor Yellow
+}
+
+# --- Sync Setup project's AppVersion.cs to match host ---
+if (Test-Path $setupVersionFile) {
+    $setupContent = Get-Content $setupVersionFile -Raw
+    $setupContent = $setupContent -replace 'Current\s*=\s*"\d+\.\d+\.\d+"', "Current = ""$newVersion"""
+    Set-Content $setupVersionFile $setupContent -NoNewline
+    Write-Host "Synced ProdToy.Setup AppVersion to: $newVersion" -ForegroundColor Green
 }
 
 # --- Build host ---
@@ -186,6 +196,21 @@ Write-Host "Packaging host zip..." -ForegroundColor Cyan
 $hostZipPath = Join-Path $releaseDir "ProdToy.zip"
 Compress-Archive -Path (Join-Path $releaseDir "ProdToy.exe") -DestinationPath $hostZipPath -Force
 
+# --- Build the installer (ProdToySetup.exe) ---
+Write-Host "Publishing installer..." -ForegroundColor Cyan
+if (Test-Path "$releaseDir\ProdToySetup.exe") {
+    Remove-Item "$releaseDir\ProdToySetup.exe" -Force
+}
+dotnet publish -c Release $setupProjectDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "dotnet publish (Setup) failed"
+    exit 1
+}
+if (-not (Test-Path (Join-Path $releaseDir "ProdToySetup.exe"))) {
+    Write-Error "ProdToySetup.exe was not produced by dotnet publish"
+    exit 1
+}
+
 # --- Generate metadata.json ---
 $metadataObject = [ordered]@{
     version      = $newVersion
@@ -225,6 +250,11 @@ if ($DeployPath -and (Test-Path $DeployPath)) {
     Copy-Item $metadataPath $DeployPath -Force
     Copy-Item $hostZipPath  $DeployPath -Force
 
+    $setupExePath = Join-Path $releaseDir "ProdToySetup.exe"
+    if (Test-Path $setupExePath) {
+        Copy-Item $setupExePath $DeployPath -Force
+    }
+
     foreach ($zip in (Get-ChildItem "$pluginsReleaseDir\*.zip" -ErrorAction SilentlyContinue)) {
         Copy-Item $zip.FullName $deployPluginsDir -Force
     }
@@ -238,11 +268,16 @@ if ($DeployPath -and (Test-Path $DeployPath)) {
 Write-Host ""
 Write-Host "Published v$newVersion to $releaseDir\" -ForegroundColor Green
 $hostZipSize = '{0:N0}' -f (Get-Item $hostZipPath).Length
-Write-Host "  ProdToy.zip   $hostZipSize bytes" -ForegroundColor Gray
+Write-Host "  ProdToy.zip      $hostZipSize bytes" -ForegroundColor Gray
+$setupExeLocalPath = Join-Path $releaseDir "ProdToySetup.exe"
+if (Test-Path $setupExeLocalPath) {
+    $setupExeSize = '{0:N0}' -f (Get-Item $setupExeLocalPath).Length
+    Write-Host "  ProdToySetup.exe $setupExeSize bytes" -ForegroundColor Gray
+}
 Write-Host "  metadata.json" -ForegroundColor Gray
 $pluginZipCount = (Get-ChildItem "$pluginsReleaseDir\*.zip" -ErrorAction SilentlyContinue).Count
 if ($pluginZipCount -gt 0) {
-    Write-Host "  plugins/      $pluginZipCount plugin package(s)" -ForegroundColor Gray
+    Write-Host "  plugins/         $pluginZipCount plugin package(s)" -ForegroundColor Gray
 }
 foreach ($entry in $pluginManifestEntries) {
     Write-Host "    $($entry.id) v$($entry.version)" -ForegroundColor DarkGray

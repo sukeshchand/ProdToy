@@ -1,7 +1,8 @@
 using System.Diagnostics;
 using System.Drawing;
+using System.Runtime.InteropServices;
 
-namespace ProdToy;
+namespace ProdToy.Setup;
 
 class UninstallForm : Form
 {
@@ -11,8 +12,13 @@ class UninstallForm : Form
     private readonly RoundedButton _cancelButton;
     private readonly Label _statusLabel;
 
+    private string? _cleanupBatPath;
+    private bool _uninstalled;
+
     public UninstallForm()
     {
+        string displayedVersion = AppRegistry.GetInstalledVersion() ?? AppVersion.Current;
+
         Text = "ProdToy - Uninstall";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -61,12 +67,11 @@ class UninstallForm : Form
 
         headerPanel.Controls.AddRange(new Control[] { titleLabel, descLabel, accentLine });
 
-        // --- Info labels ---
         int y = 106;
 
         var versionLabel = new Label
         {
-            Text = $"Version:  {AppVersion.Current}",
+            Text = $"Version:  {displayedVersion}",
             Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
             ForeColor = Color.FromArgb(96, 165, 250),
             AutoSize = true,
@@ -88,7 +93,7 @@ class UninstallForm : Form
 
         var noteLabel = new Label
         {
-            Text = "Your response history and settings will be kept.",
+            Text = "Your response history, settings, and plugin data will be kept.",
             Font = new Font("Segoe UI", 9f),
             ForeColor = _theme.TextSecondary,
             AutoSize = true,
@@ -97,7 +102,6 @@ class UninstallForm : Form
         };
         y += 28;
 
-        // --- Status label ---
         _statusLabel = new Label
         {
             Text = "",
@@ -109,7 +113,6 @@ class UninstallForm : Form
             BackColor = Color.Transparent,
         };
 
-        // --- Buttons ---
         int buttonY = y + 44;
         int formWidth = 480;
 
@@ -162,8 +165,8 @@ class UninstallForm : Form
 
         Shown += (_, _) =>
         {
-            NativeMethods.ShowWindow(Handle, NativeMethods.SW_RESTORE);
-            NativeMethods.SetForegroundWindow(Handle);
+            ShowWindow(Handle, SW_RESTORE);
+            SetForegroundWindow(Handle);
             BringToFront();
             Activate();
         };
@@ -181,7 +184,6 @@ class UninstallForm : Form
         {
             var result = await Task.Run(() =>
             {
-                // Kill running ProdToy instances (except this one)
                 int currentPid = Environment.ProcessId;
                 foreach (var proc in Process.GetProcessesByName("ProdToy"))
                 {
@@ -207,8 +209,6 @@ class UninstallForm : Form
                 _statusLabel.ForeColor = _theme.SuccessColor;
                 _cancelButton.Enabled = true;
                 _cancelButton.Text = "Close";
-                _cancelButton.Click -= CancelClose;
-                _cancelButton.Click += (_, _) => FinishAndExit();
                 _uninstalled = true;
             }
             else
@@ -231,11 +231,6 @@ class UninstallForm : Form
         }
     }
 
-    private string? _cleanupBatPath;
-    private bool _uninstalled;
-
-    private void CancelClose(object? sender, EventArgs e) => Close();
-
     private void FinishAndExit()
     {
         if (_cleanupBatPath != null)
@@ -249,4 +244,8 @@ class UninstallForm : Form
         if (_uninstalled)
             FinishAndExit();
     }
+
+    private const int SW_RESTORE = 9;
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }

@@ -13,6 +13,9 @@ static class AppPaths
     /// <summary>Executable install location: Root\ProdToy.exe</summary>
     public static string ExePath { get; } = Path.Combine(Root, "ProdToy.exe");
 
+    /// <summary>Installer exe location (used by Settings → Uninstall): Root\ProdToySetup.exe</summary>
+    public static string SetupExePath { get; } = Path.Combine(Root, "ProdToySetup.exe");
+
     /// <summary>Settings file: Root\settings.json</summary>
     public static string SettingsFile { get; } = Path.Combine(Root, "settings.json");
 

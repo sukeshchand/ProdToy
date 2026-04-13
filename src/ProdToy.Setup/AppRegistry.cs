@@ -1,20 +1,19 @@
 using System.Diagnostics;
 using Microsoft.Win32;
 
-namespace ProdToy;
+namespace ProdToy.Setup;
 
 /// <summary>
 /// Manages Windows "Apps &amp; Features" registration via the Uninstall registry key.
 /// All operations target HKEY_CURRENT_USER (no elevation required).
+/// UninstallString points at ProdToySetup.exe so Windows Add/Remove invokes the
+/// installer in uninstall mode.
 /// </summary>
 static class AppRegistry
 {
     private const string UninstallKeyPath =
         @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\ProdToy";
 
-    /// <summary>
-    /// Returns true if ProdToy is registered in Windows "Apps &amp; Features".
-    /// </summary>
     public static bool IsRegistered()
     {
         try
@@ -29,9 +28,6 @@ static class AppRegistry
         }
     }
 
-    /// <summary>
-    /// Returns the installed DisplayVersion from the registry, or null if not registered.
-    /// </summary>
     public static string? GetInstalledVersion()
     {
         try
@@ -46,9 +42,6 @@ static class AppRegistry
         }
     }
 
-    /// <summary>
-    /// Returns the InstallLocation from the registry, or null if not registered.
-    /// </summary>
     public static string? GetInstallLocation()
     {
         try
@@ -64,20 +57,20 @@ static class AppRegistry
     }
 
     /// <summary>
-    /// Creates or updates the registry key that makes ProdToy appear in
-    /// Windows "Apps &amp; Features". Idempotent — safe to call on every startup.
+    /// Creates or updates the ProdToy entry in Windows "Apps &amp; Features".
+    /// UninstallString invokes ProdToySetup.exe --uninstall.
     /// </summary>
-    public static void Register()
+    public static void Register(string version)
     {
         try
         {
             using var key = Registry.CurrentUser.CreateSubKey(UninstallKeyPath);
-            string uninstallCmd = $"\"{AppPaths.ExePath}\" --uninstall";
+            string uninstallCmd = $"\"{AppPaths.SetupExePath}\" --uninstall";
 
             key.SetValue("DisplayName", "ProdToy");
             key.SetValue("UninstallString", uninstallCmd);
             key.SetValue("QuietUninstallString", uninstallCmd);
-            key.SetValue("DisplayVersion", AppVersion.Current);
+            key.SetValue("DisplayVersion", version);
             key.SetValue("Publisher", "ProdToy");
             key.SetValue("InstallLocation", AppPaths.Root);
             key.SetValue("DisplayIcon", AppPaths.ExePath);
@@ -102,9 +95,6 @@ static class AppRegistry
         }
     }
 
-    /// <summary>
-    /// Removes the registry key so ProdToy no longer appears in "Apps &amp; Features".
-    /// </summary>
     public static void Unregister()
     {
         try

@@ -16,26 +16,16 @@ static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        // Handle --uninstall (triggered by Windows "Apps & Features" or CLI)
-        if (args.Any(a => a.Equals("--uninstall", StringComparison.OrdinalIgnoreCase)))
-        {
-            RunUninstall();
-            return;
-        }
-
-        // No arguments → determine mode from registry + location
+        // No arguments → run if installed, otherwise point user at the installer.
         if (args.Length == 0)
         {
-            if (AppRegistry.IsRegistered())
+            if (AppRegistry.IsRegistered() && IsRunningFromInstallDir())
             {
-                if (IsRunningFromInstallDir())
-                    RunInstalledInstance();
-                else
-                    Application.Run(new SetupForm(repair: true));
+                RunInstalledInstance();
             }
             else
             {
-                Application.Run(new SetupForm());
+                ShowInstallerRequiredMessage();
             }
             return;
         }
@@ -106,9 +96,19 @@ static class Program
         Application.Run(new PopupAppContext(title, message, type, sessionId, cwd));
     }
 
-    private static void RunUninstall()
+    /// <summary>
+    /// Shown when the host exe is launched from outside its install dir and no
+    /// registry entry exists. Setup lives in ProdToySetup.exe now — direct the
+    /// user there rather than trying to self-install.
+    /// </summary>
+    private static void ShowInstallerRequiredMessage()
     {
-        Application.Run(new UninstallForm());
+        MessageBox.Show(
+            "ProdToy is not installed on this machine.\n\n" +
+            "Please run ProdToySetup.exe to install.",
+            "ProdToy",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
     }
 
     private static void RunInstalledInstance()
@@ -121,14 +121,17 @@ static class Program
             return;
         }
 
-        // Check if we just came back from an auto-update (show welcome)
+        // Keep the Apps & Features DisplayVersion in sync with the running exe.
+        // After an auto-update swap, this refreshes the value so "Installed updates"
+        // in Windows Settings matches AppVersion.Current.
+        AppRegistry.SyncDisplayVersion();
+
+        // Check if we just came back from an auto-update (start hidden, no welcome dialog).
         string updateMarker = Path.Combine(AppPaths.Root, "_updated.marker");
         bool justUpdated = File.Exists(updateMarker);
         if (justUpdated)
         {
             try { File.Delete(updateMarker); } catch { }
-            using var welcome = new WelcomeForm(isUpdate: true);
-            welcome.ShowDialog();
         }
 
         // Check if launched from setup (welcome already shown, just start hidden)
