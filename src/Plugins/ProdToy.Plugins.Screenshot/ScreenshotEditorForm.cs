@@ -138,6 +138,12 @@ class ScreenshotEditorForm : Form
         _canvas.CanvasResizeRequested += _ => _canvasContainer.SyncCanvasSize();
         _canvas.ToolAutoSwitched += () => _toolbar.Invalidate();
 
+        // Toolbar zoom label reads live zoom; toolbar refreshes on every zoom change.
+        // Recentering is done by whatever triggered the zoom (wheel scrolls to anchor cursor,
+        // toolbar buttons recenter explicitly), so we only repaint the toolbar here.
+        _toolbar.ZoomProvider = () => _canvas.Zoom;
+        _canvas.ZoomChanged += () => _toolbar.Invalidate();
+
         // Auto-save on every undo/redo action and canvas change
         _autoSaveTimer = new System.Windows.Forms.Timer { Interval = 300 };
         _autoSaveTimer.Tick += (_, _) => { _autoSaveTimer.Stop(); AutoSaveNow(); };
@@ -246,6 +252,11 @@ class ScreenshotEditorForm : Form
 
         _toolbar.SaveAsRequested += DoSaveAs;
         _toolbar.CancelRequested += () => Close();
+
+        _toolbar.ZoomInRequested += () => { _canvas.ZoomInStep(); _canvasContainer.CenterCanvas(); };
+        _toolbar.ZoomOutRequested += () => { _canvas.ZoomOutStep(); _canvasContainer.CenterCanvas(); };
+        _toolbar.ZoomResetRequested += () => { _canvas.ResetZoom(); _canvasContainer.CenterCanvas(); };
+        _toolbar.ZoomFitRequested += () => { _canvas.FitToContainer(_canvasContainer.ClientSize); _canvasContainer.CenterCanvas(); };
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -256,6 +267,11 @@ class ScreenshotEditorForm : Form
         if (e.Control && e.KeyCode == Keys.C) { DoCopy(); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.Z) { _session.UndoRedo.Undo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.Y) { _session.UndoRedo.Redo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); e.Handled = true; return; }
+        // Zoom shortcuts (work with both =/+ on top row and numpad +)
+        if (e.Control && (e.KeyCode == Keys.Oemplus || e.KeyCode == Keys.Add)) { _canvas.ZoomInStep(); _canvasContainer.CenterCanvas(); e.Handled = true; return; }
+        if (e.Control && (e.KeyCode == Keys.OemMinus || e.KeyCode == Keys.Subtract)) { _canvas.ZoomOutStep(); _canvasContainer.CenterCanvas(); e.Handled = true; return; }
+        if (e.Control && e.KeyCode == Keys.D0) { _canvas.ResetZoom(); _canvasContainer.CenterCanvas(); e.Handled = true; return; }
+        if (e.Control && e.KeyCode == Keys.D9) { _canvas.FitToContainer(_canvasContainer.ClientSize); _canvasContainer.CenterCanvas(); e.Handled = true; return; }
         // Skip Delete/Escape and single-key shortcuts while editing text
         bool isEditingText = _session.Annotations.Any(a => a is TextObject { IsEditing: true });
 

@@ -4,7 +4,7 @@
     {
       "id": "ProdToy.Plugin.Alarm",
       "name": "Alarms",
-      "version": "1.0.279",
+      "version": "1.0.280",
       "description": "Schedule recurring alarms with popup and sound notifications",
       "author": "ProdToy",
       "downloadUrl": "",
@@ -14,7 +14,7 @@
     {
       "id": "ProdToy.Plugin.Screenshot",
       "name": "Screenshot",
-      "version": "1.0.279",
+      "version": "1.0.280",
       "description": "Screen capture and annotation editor",
       "author": "ProdToy",
       "downloadUrl": "",
@@ -24,7 +24,7 @@
     {
       "id": "ProdToy.Plugin.ClaudeIntegration",
       "name": "Claude Integration",
-      "version": "1.0.279",
+      "version": "1.0.280",
       "description": "Claude Code hooks, status line, and auto-title integration",
       "author": "ProdToy",
       "downloadUrl": "",

@@ -33,7 +33,8 @@ class CanvasContainer : Panel
             true);
 
         BackColor = Color.FromArgb(30, 30, 30);
-        AutoScroll = false;
+        // AutoScroll on so a zoomed-in canvas larger than the container can be panned.
+        AutoScroll = true;
 
         Controls.Add(_canvas);
         CenterCanvas();
@@ -53,7 +54,8 @@ class CanvasContainer : Panel
     {
         if (_canvas.Session != null)
         {
-            _canvas.Size = new Size(_canvas.Session.CanvasSize.Width, _canvas.Session.CanvasSize.Height);
+            // SetLogicalSize internally applies the current zoom to the display size.
+            _canvas.SetLogicalSize(_canvas.Session.CanvasSize.Width, _canvas.Session.CanvasSize.Height);
         }
         CenterCanvas();
     }
@@ -61,9 +63,42 @@ class CanvasContainer : Panel
     /// <summary>Recenter the canvas within this container.</summary>
     public void CenterCanvas()
     {
+        // ClientSize already accounts for scrollbars when AutoScroll is on.
         int x = Math.Max(0, (ClientSize.Width - _canvas.Width) / 2);
         int y = Math.Max(0, (ClientSize.Height - _canvas.Height) / 2);
         _canvas.Location = new Point(x, y);
+        Invalidate();
+    }
+
+    /// <summary>
+    /// Called from ScreenshotCanvas.OnMouseWheel after a zoom change. Recenters when
+    /// the canvas fits, or scrolls so the logical point under the cursor stays under
+    /// the cursor (display coords cursorX/cursorY are relative to the canvas control).
+    /// </summary>
+    public void AdjustScrollForZoom(ScreenshotCanvas canvas, int cursorX, int cursorY, float newDispX, float newDispY)
+    {
+        if (canvas.Width <= ClientSize.Width && canvas.Height <= ClientSize.Height)
+        {
+            // Fits — just recenter.
+            AutoScrollPosition = new Point(0, 0);
+            CenterCanvas();
+            return;
+        }
+
+        // Compute target child-Location so that newDispX,newDispY (in canvas-control
+        // coords) lands at the cursor's screen position relative to the container's client area.
+        // Cursor position relative to the *container* viewport:
+        Point cursorInContainer = canvas.PointToScreen(new Point(cursorX, cursorY));
+        cursorInContainer = PointToClient(cursorInContainer);
+
+        int targetCanvasLeft = cursorInContainer.X - (int)Math.Round(newDispX);
+        int targetCanvasTop = cursorInContainer.Y - (int)Math.Round(newDispY);
+
+        // For AutoScroll, child Location ≈ AutoScrollPosition + child's "natural" position.
+        // The simplest path: directly set AutoScrollPosition (note: AutoScroll inverts sign).
+        int desiredScrollX = -targetCanvasLeft;
+        int desiredScrollY = -targetCanvasTop;
+        AutoScrollPosition = new Point(desiredScrollX, desiredScrollY);
         Invalidate();
     }
 
@@ -88,7 +123,8 @@ class CanvasContainer : Panel
         g.DrawRectangle(borderPen, cr.X - 1, cr.Y - 1, cr.Width + 1, cr.Height + 1);
 
         // Draw resize handles (on the actual canvas, not the preview) — hide during crop
-        if (!_isResizingCanvas && !_canvas.IsCropActive)
+        // and hide when zoomed (handle drag math assumes 1:1).
+        if (!_isResizingCanvas && !_canvas.IsCropActive && Math.Abs(_canvas.Zoom - 1.0f) < 0.0001f)
         {
             DrawResizeHandles(g, cr);
         }
@@ -154,6 +190,8 @@ class CanvasContainer : Panel
 
     private HandlePosition HitTestHandle(Point pt)
     {
+        // Handles are not interactive while zoomed.
+        if (Math.Abs(_canvas.Zoom - 1.0f) > 0.0001f) return HandlePosition.None;
         var handles = GetHandleRects(_canvas.Bounds);
         for (int i = 0; i < handles.Length; i++)
         {
@@ -261,7 +299,7 @@ class CanvasContainer : Panel
                 session.UndoRedo.Execute(action);
             }
 
-            _canvas.Size = new Size(newW, newH);
+            _canvas.SetLogicalSize(newW, newH);
             CenterCanvas();
             return;
         }

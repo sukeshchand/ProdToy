@@ -35,6 +35,13 @@ class ScreenshotToolbar : Control
     public event Action<float>? FontSizeChanged;
     public event Action? BorderToggled;
     public event Action? BorderPopupRequested;
+    public event Action? ZoomInRequested;
+    public event Action? ZoomOutRequested;
+    public event Action? ZoomResetRequested;
+    public event Action? ZoomFitRequested;
+
+    /// <summary>Provides the current zoom value (1.0 = 100%) for the toolbar label.</summary>
+    public Func<float>? ZoomProvider { get; set; }
 
     public ScreenshotToolbar()
     {
@@ -105,6 +112,16 @@ class ScreenshotToolbar : Control
 
         // Font size (only relevant for text tool)
         AddFontSizeSelector();
+        AddSeparator();
+
+        // Zoom group
+        AddSeparator();
+        AddButton("zoomout", "\uE71F", "Zoom Out (Ctrl+-)", () => ZoomOutRequested?.Invoke());
+        _items.Add(new ToolbarZoomLabel(
+            () => ZoomProvider?.Invoke() ?? 1f,
+            () => ZoomResetRequested?.Invoke()));
+        AddButton("zoomin", "\uE8A3", "Zoom In (Ctrl+=)", () => ZoomInRequested?.Invoke());
+        AddButton("zoomfit", "\uE9A6", "Fit to Window (Ctrl+9)", () => ZoomFitRequested?.Invoke());
         AddSeparator();
 
         // Actions
@@ -656,6 +673,47 @@ class ScreenshotToolbar : Control
                     return;
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Read-only zoom percentage label. Click resets to 100%.
+    /// Reads live zoom via a getter callback so the toolbar repaints reflect changes.
+    /// </summary>
+    class ToolbarZoomLabel : ToolbarItem
+    {
+        private readonly Func<float> _zoomGetter;
+        private readonly Action _onClickReset;
+
+        public ToolbarZoomLabel(Func<float> zoomGetter, Action onClickReset)
+        {
+            _zoomGetter = zoomGetter;
+            _onClickReset = onClickReset;
+        }
+
+        public override int GetWidth() => 44;
+
+        public override void Render(Graphics g, Rectangle rect, bool hover, EditorSession? session)
+        {
+            float z = _zoomGetter();
+            int pct = (int)Math.Round(z * 100);
+            string label = pct + "%";
+
+            if (hover)
+            {
+                using var hb = new SolidBrush(Color.FromArgb(40, 255, 255, 255));
+                g.FillRectangle(hb, rect);
+            }
+
+            var font = FontPool.Get("Segoe UI", 9f, FontStyle.Bold);
+            using var brush = new SolidBrush(Color.FromArgb(220, 220, 220, 230));
+            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            g.DrawString(label, font, brush, rect, sf);
+        }
+
+        public override void HandleClick(Point pt, Rectangle rect, EditorSession? session)
+        {
+            _onClickReset();
         }
     }
 }

@@ -2,7 +2,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Screenshot;
 
-[Plugin("ProdToy.Plugin.Screenshot", "Screenshot", "1.0.279",
+[Plugin("ProdToy.Plugin.Screenshot", "Screenshot", "1.0.280",
     Description = "Screen capture and annotation editor",
     Author = "ProdToy",
     MenuPriority = 100)]

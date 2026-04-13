@@ -1,4 +1,4 @@
-
+﻿
 <#
 .SYNOPSIS
     Publishes ProdToy and optionally deploys to a network update location.
@@ -87,11 +87,18 @@ foreach ($plugin in $pluginProjects) {
     $pluginOutDir = Join-Path $pluginsReleaseDir $plugin.Name
     if (-not (Test-Path $pluginOutDir)) { New-Item -ItemType Directory -Path $pluginOutDir | Out-Null }
 
-    # Copy DLL and deps.json
+    # Copy DLL and deps.json. The DLL name is the project directory leaf
+    # (e.g. src\Plugins\ProdToy.Plugins.Screenshot → ProdToy.Plugins.Screenshot.dll).
     $buildOut = Join-Path $plugin.Dir "bin\Release\net8.0-windows"
-    $dllName = "ProdToy.Plugins.$($plugin.Name -replace 'ProdToy\.', '')"
-    Copy-Item "$buildOut\$dllName.dll" $pluginOutDir -Force -ErrorAction SilentlyContinue
-    Copy-Item "$buildOut\$dllName.deps.json" $pluginOutDir -Force -ErrorAction SilentlyContinue
+    $dllName = Split-Path -Leaf $plugin.Dir
+    $dllSrc = Join-Path $buildOut "$dllName.dll"
+    $depsSrc = Join-Path $buildOut "$dllName.deps.json"
+    if (-not (Test-Path $dllSrc)) {
+        Write-Warning "Plugin DLL not found: $dllSrc — skipping copy"
+        continue
+    }
+    Copy-Item $dllSrc $pluginOutDir -Force
+    if (Test-Path $depsSrc) { Copy-Item $depsSrc $pluginOutDir -Force }
 
     # Create zip for catalog distribution
     $zipPath = Join-Path $pluginsReleaseDir "$($plugin.Name).zip"
@@ -147,9 +154,11 @@ if ($DeployPath -and (Test-Path $DeployPath)) {
 
 Write-Host ""
 Write-Host "Published v$newVersion to $releaseDir\" -ForegroundColor Green
-Write-Host "  ProdToy.exe  $('{0:N0}' -f (Get-Item "$releaseDir\ProdToy.exe").Length) bytes" -ForegroundColor Gray
+$exeSize = '{0:N0}' -f (Get-Item (Join-Path $releaseDir 'ProdToy.exe')).Length
+Write-Host "  ProdToy.exe  $exeSize bytes" -ForegroundColor Gray
 Write-Host "  metadata.json" -ForegroundColor Gray
 $pluginZipCount = (Get-ChildItem "$pluginsReleaseDir\*.zip" -ErrorAction SilentlyContinue).Count
 if ($pluginZipCount -gt 0) {
     Write-Host "  plugins/     $pluginZipCount plugin package(s)" -ForegroundColor Gray
 }
+

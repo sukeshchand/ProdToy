@@ -49,6 +49,20 @@ class ScreenshotCanvas : Control
     private PointF[] _cropCorners = new PointF[4]; // TL, TR, BR, BL
     private int _dragCornerIndex = -1; // -1=none, 0-3=corner, 4-7=midpoint, 8=move all
 
+    // Zoom state — view transform only, never persisted, never undoable.
+    // Mouse events arrive in display pixels; we divide by _zoom to get logical
+    // coordinates that match what OnPaint draws under ScaleTransform(_zoom).
+    private float _zoom = 1.0f;
+    private int _logicalWidth;
+    private int _logicalHeight;
+    public const float MinZoom = 0.1f;
+    public const float MaxZoom = 8.0f;
+
+    public float Zoom => _zoom;
+    public Size LogicalSize => new(_logicalWidth, _logicalHeight);
+
+    public event Action? ZoomChanged;
+
     public event Action? CanvasChanged;
     public event Action? SelectionChanged;
     public event Action? ToolAutoSwitched;
@@ -113,9 +127,10 @@ class ScreenshotCanvas : Control
             }
 
             // Calculate drop position in canvas coordinates
+            // PointToClient returns display pixels; divide by zoom to get logical coords.
             var clientPt = PointToClient(new Point(e.X, e.Y));
-            float dropX = Math.Max(0, clientPt.X);
-            float dropY = Math.Max(0, clientPt.Y);
+            float dropX = Math.Max(0, clientPt.X / _zoom);
+            float dropY = Math.Max(0, clientPt.Y / _zoom);
 
             // Check if canvas needs to expand to fit the dropped image
             float neededW = dropX + img.Width;
@@ -126,7 +141,7 @@ class ScreenshotCanvas : Control
                     Math.Max(_session.CanvasSize.Width, (int)neededW),
                     Math.Max(_session.CanvasSize.Height, (int)neededH));
                 _session.CanvasSize = newSize;
-                Size = new Size(newSize.Width, newSize.Height);
+                SetLogicalSize(newSize.Width, newSize.Height);
                 CanvasResizeRequested?.Invoke(newSize);
             }
 
@@ -165,8 +180,70 @@ class ScreenshotCanvas : Control
         set
         {
             _session = value;
+            if (_session != null)
+            {
+                _logicalWidth = _session.CanvasSize.Width;
+                _logicalHeight = _session.CanvasSize.Height;
+                ApplyZoomToControlSize();
+            }
             Invalidate();
         }
+    }
+
+    /// <summary>Set logical (image-space) canvas size. Display size becomes logical * zoom.</summary>
+    public void SetLogicalSize(int width, int height)
+    {
+        _logicalWidth = width;
+        _logicalHeight = height;
+        ApplyZoomToControlSize();
+        Invalidate();
+    }
+
+    private void ApplyZoomToControlSize()
+    {
+        int dispW = Math.Max(1, (int)Math.Round(_logicalWidth * _zoom));
+        int dispH = Math.Max(1, (int)Math.Round(_logicalHeight * _zoom));
+        if (Size.Width != dispW || Size.Height != dispH)
+            Size = new Size(dispW, dispH);
+    }
+
+    /// <summary>Set zoom level. Clamps to [MinZoom, MaxZoom]. Does not raise event if unchanged.</summary>
+    public void SetZoom(float newZoom)
+    {
+        newZoom = Math.Clamp(newZoom, MinZoom, MaxZoom);
+        if (Math.Abs(newZoom - _zoom) < 0.0001f) return;
+        _zoom = newZoom;
+        ApplyZoomToControlSize();
+        Invalidate();
+        ZoomChanged?.Invoke();
+    }
+
+    public void ResetZoom() => SetZoom(1.0f);
+
+    /// <summary>Fit logical canvas inside the given container client size, with a small margin.</summary>
+    public void FitToContainer(Size containerSize)
+    {
+        if (_logicalWidth <= 0 || _logicalHeight <= 0) return;
+        const int margin = 24;
+        float availW = Math.Max(1, containerSize.Width - margin * 2);
+        float availH = Math.Max(1, containerSize.Height - margin * 2);
+        float fit = Math.Min(availW / _logicalWidth, availH / _logicalHeight);
+        SetZoom(fit);
+    }
+
+    private static readonly float[] ZoomSnaps =
+        { 0.1f, 0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f, 4f, 6f, 8f };
+
+    public void ZoomInStep()
+    {
+        foreach (var s in ZoomSnaps)
+            if (s > _zoom + 0.0001f) { SetZoom(s); return; }
+    }
+
+    public void ZoomOutStep()
+    {
+        for (int i = ZoomSnaps.Length - 1; i >= 0; i--)
+            if (ZoomSnaps[i] < _zoom - 0.0001f) { SetZoom(ZoomSnaps[i]); return; }
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -183,9 +260,16 @@ class ScreenshotCanvas : Control
             return;
         }
 
+        // Apply zoom transform — everything below draws in LOGICAL coordinates.
+        // Logical canvas size is _logicalWidth × _logicalHeight regardless of zoom.
+        if (Math.Abs(_zoom - 1.0f) > 0.0001f)
+            g.ScaleTransform(_zoom, _zoom);
+
+        var logicalRect = new Rectangle(0, 0, _logicalWidth, _logicalHeight);
+
         // Fill with canvas background color
         using (var bgBrush = new SolidBrush(_session.CanvasBackgroundColor))
-            g.FillRectangle(bgBrush, ClientRectangle);
+            g.FillRectangle(bgBrush, logicalRect);
 
         // Draw the original image at its offset (shifts when canvas expands left/top)
         var imgOff = _session.ImageOffset;
@@ -231,7 +315,7 @@ class ScreenshotCanvas : Control
 
             // Dim area outside the quad using GraphicsPath clipping
             using var dimPath = new GraphicsPath();
-            dimPath.AddRectangle(new RectangleF(0, 0, ClientSize.Width, ClientSize.Height));
+            dimPath.AddRectangle(new RectangleF(0, 0, _logicalWidth, _logicalHeight));
             dimPath.AddPolygon(cc);
             using var dimBrush = new SolidBrush(Color.FromArgb(120, 0, 0, 0));
             g.FillPath(dimBrush, dimPath);
@@ -319,10 +403,10 @@ class ScreenshotCanvas : Control
             {
                 // Semi-transparent overlay outside selection
                 using var dimBrush = new SolidBrush(Color.FromArgb(60, 0, 0, 0));
-                g.FillRectangle(dimBrush, 0, 0, ClientSize.Width, rect.Y);
-                g.FillRectangle(dimBrush, 0, rect.Bottom, ClientSize.Width, ClientSize.Height - rect.Bottom);
+                g.FillRectangle(dimBrush, 0, 0, _logicalWidth, rect.Y);
+                g.FillRectangle(dimBrush, 0, rect.Bottom, _logicalWidth, _logicalHeight - rect.Bottom);
                 g.FillRectangle(dimBrush, 0, rect.Y, rect.X, rect.Height);
-                g.FillRectangle(dimBrush, rect.Right, rect.Y, ClientSize.Width - rect.Right, rect.Height);
+                g.FillRectangle(dimBrush, rect.Right, rect.Y, _logicalWidth - rect.Right, rect.Height);
 
                 // Dashed selection border
                 using var borderPen = new Pen(Color.FromArgb(200, 80, 160, 255), 1.5f);
@@ -359,7 +443,10 @@ class ScreenshotCanvas : Control
         if (_session == null) return;
         float t = _session.BorderThickness;
         float half = t / 2;
-        var rect = new RectangleF(half, half, ClientSize.Width - t, ClientSize.Height - t);
+        // Border draws inside the zoom transform → use logical dimensions.
+        float lw = _logicalWidth;
+        float lh = _logicalHeight;
+        var rect = new RectangleF(half, half, lw - t, lh - t);
 
         using var pen = new Pen(_session.BorderColor, t);
         switch (_session.BorderStyle)
@@ -380,8 +467,8 @@ class ScreenshotCanvas : Control
             case CanvasBorderStyle.Double:
                 pen.Width = Math.Max(1f, t / 3);
                 float gap = t / 2;
-                g.DrawRectangle(pen, half, half, ClientSize.Width - t, ClientSize.Height - t);
-                g.DrawRectangle(pen, half + gap, half + gap, ClientSize.Width - t - gap * 2, ClientSize.Height - t - gap * 2);
+                g.DrawRectangle(pen, half, half, lw - t, lh - t);
+                g.DrawRectangle(pen, half + gap, half + gap, lw - t - gap * 2, lh - t - gap * 2);
                 break;
             case CanvasBorderStyle.Shadow:
                 pen.DashStyle = DashStyle.Solid;
@@ -401,7 +488,7 @@ class ScreenshotCanvas : Control
     {
         if (_session == null) return;
 
-        // Right-click context menu
+        // Right-click context menu — Location stays in display pixels for popup positioning.
         if (e.Button == MouseButtons.Right)
         {
             ShowCanvasContextMenu(e.Location);
@@ -410,12 +497,16 @@ class ScreenshotCanvas : Control
 
         if (e.Button != MouseButtons.Left) return;
         Focus();
-        var pt = new PointF(e.X, e.Y);
+        // Convert display pixels → logical canvas coordinates so all hit-testing,
+        // drawing, and selection work in the unscaled coordinate space.
+        var pt = new PointF(e.X / _zoom, e.Y / _zoom);
+        // Hit-test tolerance in logical pixels (keeps ~6 display-px feel at any zoom).
+        float tol = 6f / _zoom;
 
         // If editing text, commit on click outside
         if (_editingText != null)
         {
-            if (!_editingText.HitTest(pt, 6f))
+            if (!_editingText.HitTest(pt, tol))
                 CommitTextEdit();
         }
 
@@ -459,14 +550,15 @@ class ScreenshotCanvas : Control
             ApplyCrop();
             return;
         }
-        var pt = new PointF(e.X, e.Y);
+        var pt = new PointF(e.X / _zoom, e.Y / _zoom);
+        float tol = 6f / _zoom;
 
         // Double-click on a TextObject in Select mode → re-enter text editing
         if (_session.CurrentTool == AnnotationTool.Select)
         {
             for (int i = _session.Annotations.Count - 1; i >= 0; i--)
             {
-                if (_session.Annotations[i] is TextObject txt && txt.HitTest(pt, 6f))
+                if (_session.Annotations[i] is TextObject txt && txt.HitTest(pt, tol))
                 {
                     _isMoving = false;
                     StartTextEdit(txt);
@@ -481,7 +573,7 @@ class ScreenshotCanvas : Control
     protected override void OnMouseMove(MouseEventArgs e)
     {
         if (_session == null) return;
-        var pt = new PointF(e.X, e.Y);
+        var pt = new PointF(e.X / _zoom, e.Y / _zoom);
 
         if (_isCropDragging || _dragCornerIndex >= 0)
         {
@@ -681,6 +773,41 @@ class ScreenshotCanvas : Control
         }
     }
 
+    /// <summary>
+    /// Ctrl+Wheel zooms toward the cursor: the logical point under the cursor
+    /// stays under the cursor after the zoom change. Achieved by adjusting the
+    /// container scroll offset by the delta of (logical_pt × new_zoom - logical_pt × old_zoom).
+    /// </summary>
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        if ((ModifierKeys & Keys.Control) != Keys.Control)
+        {
+            base.OnMouseWheel(e);
+            return;
+        }
+
+        // logical point under cursor BEFORE zoom
+        float logicalX = e.X / _zoom;
+        float logicalY = e.Y / _zoom;
+
+        float oldZoom = _zoom;
+        float factor = e.Delta > 0 ? 1.2f : 1f / 1.2f;
+        SetZoom(_zoom * factor);
+        if (Math.Abs(_zoom - oldZoom) < 0.0001f) return;
+
+        // After SetZoom, control size has been updated. Tell the container to
+        // shift its scroll position so the same logical point lands under the cursor.
+        // We expose the desired delta through an event-friendly hook on the container,
+        // but the simplest path is: move our Location by (-deltaX, -deltaY) where
+        // delta is how much the cursor's logical point now maps to in display px.
+        if (Parent is CanvasContainer container)
+        {
+            float newDispX = logicalX * _zoom;
+            float newDispY = logicalY * _zoom;
+            container.AdjustScrollForZoom(this, e.X, e.Y, newDispX, newDispY);
+        }
+    }
+
     // --- Key handling for text editing ---
     protected override bool IsInputKey(Keys keyData) => true;
 
@@ -871,7 +998,7 @@ class ScreenshotCanvas : Control
             shiftedAnnotations, "rect", corners);
         _session.UndoRedo.Execute(action);
 
-        Size = new Size(rw, rh);
+        SetLogicalSize(rw, rh);
         Invalidate();
         CanvasChanged?.Invoke();
     }
@@ -1078,7 +1205,7 @@ class ScreenshotCanvas : Control
             shiftedAnnotations, "perspective", (PointF[])_cropCorners.Clone());
         _session.UndoRedo.Execute(action);
 
-        Size = new Size(w, h);
+        SetLogicalSize(w, h);
         Invalidate();
         CanvasChanged?.Invoke();
     }
@@ -1510,10 +1637,11 @@ class ScreenshotCanvas : Control
     {
         if (_session == null) return;
 
+        float tol = 6f / _zoom;
         // Check if clicking an existing text object
         for (int i = _session.Annotations.Count - 1; i >= 0; i--)
         {
-            if (_session.Annotations[i] is TextObject existing && existing.HitTest(pt, 6f))
+            if (_session.Annotations[i] is TextObject existing && existing.HitTest(pt, tol))
             {
                 StartTextEdit(existing);
                 return;
@@ -1589,6 +1717,7 @@ class ScreenshotCanvas : Control
 
     private void UpdateCursor(PointF pt)
     {
+        float tol = 6f / _zoom;
         if (_session?.SelectedObject != null)
         {
             var handle = _session.SelectedObject.HitTestHandle(pt);
@@ -1598,7 +1727,7 @@ class ScreenshotCanvas : Control
                 HandlePosition.TopRight or HandlePosition.BottomLeft => Cursors.SizeNESW,
                 HandlePosition.TopCenter or HandlePosition.BottomCenter => Cursors.SizeNS,
                 HandlePosition.MiddleLeft or HandlePosition.MiddleRight => Cursors.SizeWE,
-                _ => _session.SelectedObject.HitTest(pt, 6f) ? Cursors.SizeAll : Cursors.Default,
+                _ => _session.SelectedObject.HitTest(pt, tol) ? Cursors.SizeAll : Cursors.Default,
             };
         }
         else
@@ -1607,7 +1736,7 @@ class ScreenshotCanvas : Control
             bool overObj = false;
             for (int i = _session!.Annotations.Count - 1; i >= 0; i--)
             {
-                if (_session.Annotations[i].HitTest(pt, 6f))
+                if (_session.Annotations[i].HitTest(pt, tol))
                 {
                     overObj = true;
                     break;
