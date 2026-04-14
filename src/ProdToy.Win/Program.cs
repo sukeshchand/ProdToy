@@ -16,6 +16,11 @@ static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            Log.Error("Unhandled domain exception", e.ExceptionObject as Exception);
+        Application.ThreadException += (_, e) =>
+            Log.Error("Unhandled UI thread exception", e.Exception);
+
         // No arguments → run if installed, otherwise point user at the installer.
         if (args.Length == 0)
         {
@@ -120,6 +125,8 @@ static class Program
             SendToPipe("ProdToy", "ProdToy is ready.", NotificationType.Info);
             return;
         }
+
+        Log.Info($"ProdToy v{AppVersion.Current} starting");
 
         // Keep the Apps & Features DisplayVersion in sync with the running exe.
         // After an auto-update swap, this refreshes the value so "Installed updates"

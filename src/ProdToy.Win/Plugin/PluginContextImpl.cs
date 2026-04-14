@@ -108,17 +108,5 @@ sealed class PluginContextImpl : IPluginContext
     }
 
     private void WriteLog(string level, string message)
-    {
-        try
-        {
-            Directory.CreateDirectory(AppPaths.LogsDir);
-            string logPath = Path.Combine(AppPaths.LogsDir, "plugins.log");
-            string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{level}] [{Metadata.Id}] {message}";
-            File.AppendAllText(logPath, line + Environment.NewLine);
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Plugin log write failed: {ex.Message}");
-        }
-    }
+        => global::ProdToy.Log.Tagged(level, Metadata.Id, message);
 }
