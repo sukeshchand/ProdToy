@@ -10,12 +10,105 @@ namespace ProdToy.Plugins.ClaudeIntegration;
 public class ClaudeIntegrationPlugin : IPlugin
 {
     private IPluginContext _context = null!;
+    private IDisposable? _notifyHandlerReg;
+    private IDisposable? _saveQuestionHandlerReg;
+    private IDisposable? _popupReg;
+    private ChatHistory _chatHistory = null!;
+    private ChatPopupForm? _chatPopup;
 
     public void Initialize(IPluginContext context)
     {
         _context = context;
-        ClaudePaths.Initialize(context.Host.AppRootPath);
+        ClaudePaths.Initialize(context.DataDirectory);
+
+        // Phase 3: chat history lives in the plugin's data dir. Migrate
+        // legacy host-owned day files once, then use the plugin-owned store
+        // from here on. Legacy originals are left in place so the host's
+        // still-running ResponseHistory can keep reading them during the
+        // parallel-run window (Phases 3–4).
+        _chatHistory = new ChatHistory(
+            context.DataDirectory,
+            () => context.LoadSettings<ClaudePluginSettings>().HistoryEnabled);
+
+        try
+        {
+            var settings = context.LoadSettings<ClaudePluginSettings>();
+            if (!settings.HistoryMigratedFromHost)
+            {
+                string legacyDir = Path.Combine(context.Host.AppRootPath, "history", "claude", "chats");
+                int copied = _chatHistory.MigrateFromLegacy(legacyDir);
+                context.SaveSettings(settings with { HistoryMigratedFromHost = true });
+                context.Log($"Chat history migrated from host: {copied} day file(s) copied from {legacyDir}");
+            }
+        }
+        catch (Exception ex)
+        {
+            context.LogError("Chat history legacy migration failed", ex);
+        }
+
+        // Phase 2+3: routed pipe handlers. claude.notify → write to plugin
+        // history, then show via generic notifications. claude.save-question
+        // → plugin-owned SaveQuestion.
+        _notifyHandlerReg = context.Host.RegisterPipeHandler("claude.notify", OnNotifyCommand);
+        _saveQuestionHandlerReg = context.Host.RegisterPipeHandler("claude.save-question", OnSaveQuestionCommand);
     }
+
+    private void OnNotifyCommand(PipeCommand cmd)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(cmd.PayloadJson)) return;
+            var payload = System.Text.Json.JsonSerializer.Deserialize<NotifyPayload>(cmd.PayloadJson);
+            if (payload == null) return;
+
+            string title = payload.title ?? "ProdToy";
+            string message = payload.message ?? "";
+            string type = payload.type ?? "info";
+            string sessionId = payload.sessionId ?? "";
+            string cwd = payload.cwd ?? "";
+
+            // Phase 3: write the response into plugin-owned history.
+            _chatHistory.SaveResponse(title, message, type, sessionId, cwd);
+
+            // Phase 8: snooze, notifications-enabled, and notification-mode
+            // gates now live entirely inside ChatPopupForm.ShowPopup(), which
+            // reads ClaudePluginSettings directly. No host-side facility.
+            EnsureChatPopup();
+            _chatPopup?.ShowPopup(title, message, type, sessionId, cwd);
+        }
+        catch (Exception ex)
+        {
+            _context.LogError("claude.notify handler failed", ex);
+        }
+    }
+
+    private void EnsureChatPopup()
+    {
+        if (_chatPopup != null) return;
+        _chatPopup = new ChatPopupForm(_context, _chatHistory);
+        _popupReg = _context.Host.RegisterPopup(_chatPopup);
+    }
+
+    private void OnSaveQuestionCommand(PipeCommand cmd)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(cmd.PayloadJson)) return;
+            var payload = System.Text.Json.JsonSerializer.Deserialize<SaveQuestionPayload>(cmd.PayloadJson);
+            if (payload == null) return;
+            _chatHistory.SaveQuestion(
+                payload.question ?? "",
+                payload.sessionId ?? "",
+                payload.cwd ?? "");
+        }
+        catch (Exception ex)
+        {
+            _context.LogError("claude.save-question handler failed", ex);
+        }
+    }
+
+    private sealed record NotifyPayload(string? title, string? message, string? type, string? sessionId, string? cwd);
+    private sealed record SaveQuestionPayload(string? question, string? sessionId, string? cwd);
 
     public void Start()
     {
@@ -54,6 +147,17 @@ public class ClaudeIntegrationPlugin : IPlugin
 
     public void Stop()
     {
+        _notifyHandlerReg?.Dispose();
+        _notifyHandlerReg = null;
+        _saveQuestionHandlerReg?.Dispose();
+        _saveQuestionHandlerReg = null;
+        _popupReg?.Dispose();
+        _popupReg = null;
+
+        try { _chatPopup?.Close(); } catch { }
+        try { _chatPopup?.Dispose(); } catch { }
+        _chatPopup = null;
+
         // Remove ALL ProdToy hooks and integrations from Claude
         try
         {
@@ -83,13 +187,30 @@ public class ClaudeIntegrationPlugin : IPlugin
 
     private void EnsureHookScript()
     {
+        // Phase 5: the plugin owns the PS1 template. Extract the embedded
+        // resource and substitute {{EXE_PATH}} with the running host exe
+        // path so the hook script can find the host.
         try
         {
-            _context.Host.EnsureHookScript();
+            Directory.CreateDirectory(ClaudePaths.ClaudeHooksDir);
+            string ps1Path = Path.Combine(ClaudePaths.ClaudeHooksDir, "Show-ProdToy.ps1");
+
+            var assembly = typeof(ClaudeIntegrationPlugin).Assembly;
+            using var stream = assembly.GetManifestResourceStream(
+                "ProdToy.Plugins.ClaudeIntegration.Scripts.Show-ProdToy.ps1");
+            if (stream == null)
+                throw new InvalidOperationException("Embedded Show-ProdToy.ps1 not found.");
+            using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+            string template = reader.ReadToEnd();
+
+            string exePath = Path.Combine(_context.Host.AppRootPath, "ProdToy.exe");
+            string content = template.Replace("{{EXE_PATH}}", exePath);
+
+            File.WriteAllText(ps1Path, content, System.Text.Encoding.UTF8);
         }
         catch (Exception ex)
         {
-            _context.LogError("Failed to ensure hook script", ex);
+            _context.LogError("Failed to write hook script", ex);
         }
     }
 
@@ -108,13 +229,34 @@ public class ClaudeIntegrationPlugin : IPlugin
 
     public IReadOnlyList<MenuContribution> GetMenuItems() =>
     [
-        new("Show Last Notification", () => _context.Host.ShowNotificationPopup(), Priority: 50),
+        new("Show Last Notification", ShowLastNotification, Priority: 50, Icon: "\uD83D\uDCE8"),
     ];
 
     public IReadOnlyList<MenuContribution> GetDashboardItems() =>
     [
-        new("Last Notification", () => _context.Host.ShowNotificationPopup(), Priority: 50),
+        new("Last Notification", ShowLastNotification, Priority: 50, Icon: "\uD83D\uDCE8"),
     ];
+
+    private void ShowLastNotification()
+    {
+        // Phase 8: the plugin owns its popup entirely. There's no generic
+        // notification facility to fall back on — just bring the chat
+        // popup forward (creating it lazily if needed) and show the last
+        // entry from plugin-owned history.
+        _context.Host.InvokeOnUI(() =>
+        {
+            EnsureChatPopup();
+            var latest = _chatHistory.GetLatest();
+            if (latest != null)
+            {
+                _chatPopup!.ShowPopup(latest.Title, latest.Message, latest.Type, latest.SessionId, latest.Cwd);
+            }
+            else
+            {
+                _chatPopup!.BringToForeground();
+            }
+        });
+    }
 
     public SettingsPageContribution? GetSettingsPage() =>
         new("Claude CLI", () => BuildSettingsPanel(), TabOrder: 200);
@@ -123,7 +265,6 @@ public class ClaudeIntegrationPlugin : IPlugin
     {
         var theme = _context.Host.CurrentTheme;
         var settings = _context.LoadSettings<ClaudePluginSettings>();
-        var hostSettings = HostSettings.Load(_context.Host.AppRootPath);
 
         var panel = new Panel
         {
@@ -136,7 +277,7 @@ public class ClaudeIntegrationPlugin : IPlugin
         int y = pad;
         int contentWidth = 700;
 
-        // --- NOTIFICATIONS section ---
+        // --- NOTIFICATIONS section (Phase 8 — all plugin-owned) ---
         var notifSectionLabel = new Label
         {
             Text = "NOTIFICATIONS",
@@ -149,7 +290,7 @@ public class ClaudeIntegrationPlugin : IPlugin
         panel.Controls.Add(notifSectionLabel);
         y += 26;
 
-        bool notifEnabled = hostSettings.NotificationsEnabled;
+        bool notifEnabled = settings.NotificationsEnabled;
         var notifSubControls = new List<Control>();
 
         var notifEnabledCheck = new CheckBox
@@ -193,11 +334,11 @@ public class ClaudeIntegrationPlugin : IPlugin
         };
         foreach (var mode in notifModes)
             notifModeCombo.Items.Add(mode);
-        notifModeCombo.SelectedItem = notifModes.Contains(hostSettings.NotificationMode) ? hostSettings.NotificationMode : "Popup";
+        notifModeCombo.SelectedItem = notifModes.Contains(settings.NotificationMode) ? settings.NotificationMode : "Popup";
         notifModeCombo.SelectedIndexChanged += (_, _) =>
         {
-            var hs = HostSettings.Load(_context.Host.AppRootPath);
-            HostSettings.Save(_context.Host.AppRootPath, hs with { NotificationMode = notifModeCombo.SelectedItem?.ToString() ?? "Popup" });
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { NotificationMode = notifModeCombo.SelectedItem?.ToString() ?? "Popup" });
         };
         panel.Controls.Add(notifModeCombo);
         notifSubControls.Add(notifModeCombo);
@@ -209,7 +350,7 @@ public class ClaudeIntegrationPlugin : IPlugin
             Font = new Font("Segoe UI", 9.5f),
             ForeColor = theme.TextPrimary,
             BackColor = Color.Transparent,
-            Checked = hostSettings.ShowQuotes,
+            Checked = settings.ShowQuotes,
             Enabled = notifEnabled,
             AutoSize = true,
             Location = new Point(pad + 8, y),
@@ -217,19 +358,19 @@ public class ClaudeIntegrationPlugin : IPlugin
         };
         quotesCheck.CheckedChanged += (_, _) =>
         {
-            var hs = HostSettings.Load(_context.Host.AppRootPath);
-            HostSettings.Save(_context.Host.AppRootPath, hs with { ShowQuotes = quotesCheck.Checked });
-            _context.Host.NotifyShowQuotesChanged(quotesCheck.Checked);
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { ShowQuotes = quotesCheck.Checked });
+            _chatPopup?.SetShowQuotes(quotesCheck.Checked);
         };
         panel.Controls.Add(quotesCheck);
         notifSubControls.Add(quotesCheck);
         y += 28;
 
-        bool isSnoozed = _context.Host.IsSnoozed;
+        bool isSnoozed = settings.SnoozeUntil > DateTime.Now;
         var snoozeCheck = new CheckBox
         {
             Text = isSnoozed
-                ? $"Snoozed ({Math.Max(1, (int)(_context.Host.SnoozeUntil - DateTime.Now).TotalMinutes)} min left)"
+                ? $"Snoozed ({Math.Max(1, (int)(settings.SnoozeUntil - DateTime.Now).TotalMinutes)} min left)"
                 : "Snooze notifications (30 min)",
             Font = new Font("Segoe UI", 9.5f),
             ForeColor = theme.TextPrimary,
@@ -242,40 +383,40 @@ public class ClaudeIntegrationPlugin : IPlugin
         };
         snoozeCheck.CheckedChanged += (_, _) =>
         {
-            if (snoozeCheck.Checked)
-                _context.Host.Snooze();
-            else
-                _context.Host.Unsnooze();
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            var until = snoozeCheck.Checked ? DateTime.Now.AddMinutes(30) : DateTime.MinValue;
+            _context.SaveSettings(s with { SnoozeUntil = until });
         };
         panel.Controls.Add(snoozeCheck);
         notifSubControls.Add(snoozeCheck);
 
         notifEnabledCheck.CheckedChanged += (_, _) =>
         {
-            var hs = HostSettings.Load(_context.Host.AppRootPath);
-            HostSettings.Save(_context.Host.AppRootPath, hs with { NotificationsEnabled = notifEnabledCheck.Checked });
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { NotificationsEnabled = notifEnabledCheck.Checked });
             foreach (var ctrl in notifSubControls)
                 ctrl.Enabled = notifEnabledCheck.Checked;
         };
         y += 28;
 
         // --- CHATS section ---
+        // Phase 5: HistoryEnabled is plugin-owned. ChatHistory reads this
+        // flag as its gate; we no longer touch host settings.json for it.
         var historyCheck = new CheckBox
         {
             Text = "Save chat history",
             Font = new Font("Segoe UI", 9.5f),
             ForeColor = theme.TextPrimary,
             BackColor = Color.Transparent,
-            Checked = hostSettings.HistoryEnabled,
+            Checked = _context.LoadSettings<ClaudePluginSettings>().HistoryEnabled,
             AutoSize = true,
             Location = new Point(pad + 8, y),
             Cursor = Cursors.Hand,
         };
         historyCheck.CheckedChanged += (_, _) =>
         {
-            var hs = HostSettings.Load(_context.Host.AppRootPath);
-            HostSettings.Save(_context.Host.AppRootPath, hs with { HistoryEnabled = historyCheck.Checked });
-            _context.Host.NotifyHistoryEnabledChanged(historyCheck.Checked);
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { HistoryEnabled = historyCheck.Checked });
         };
         panel.Controls.Add(historyCheck);
         y += 34;

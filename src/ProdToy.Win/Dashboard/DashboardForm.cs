@@ -94,8 +94,7 @@ class DashboardForm : Form
             int col = 0;
             foreach (var item in items)
             {
-                string icon = GetIconForAction(item.Text);
-                y = AddTile(item.Text, "", icon, _theme.PrimaryDim, item.OnClick, col, y);
+                y = AddTile(item.Text, "", item.Icon, _theme.PrimaryDim, item.OnClick, col, y);
                 col++;
                 if (col >= TilesPerRow)
                 {
@@ -259,19 +258,6 @@ class DashboardForm : Form
         if (itemsInRow > 0)
             return y + TileHeight + TileGap;
         return y;
-    }
-
-    private static string GetIconForAction(string actionText)
-    {
-        return actionText.ToLowerInvariant() switch
-        {
-            "last notification" or "show last notification" => "\uD83D\uDCE8",
-            "take screenshot" => "\uD83D\uDCF7",
-            "edit last screenshot" => "\u270F\uFE0F",
-            "alarms..." or "alarms" => "\u23F0",
-            "alarm history" => "\uD83D\uDCCB",
-            _ => "\uD83D\uDD0C",
-        };
     }
 
     private static GraphicsPath GetRoundedRect(Rectangle rect, int radius)

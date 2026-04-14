@@ -35,70 +35,60 @@ static class Program
             return;
         }
 
-        string title = "ProdToy";
-        string message = "Task completed.";
-        string type = NotificationType.Info;
-        string? messageFile = null;
-        string? saveQuestion = null;
-        string sessionId = "";
-        string cwd = "";
+        // Phase 5: generic envelope args are the only CLI shape the host
+        // recognizes. Claude-specific flags (--title/--message/--session-id/
+        // --save-question) are handled entirely by the plugin via its
+        // registered pipe commands (claude.notify / claude.save-question).
+        string? envelopeCommand = null;
+        string? envelopePayload = null;
+        string? envelopePayloadFile = null;
 
         for (int i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
             {
-                case "--title" or "-t" when i + 1 < args.Length:
-                    title = args[++i];
+                case "--command" when i + 1 < args.Length:
+                    envelopeCommand = args[++i];
                     break;
-                case "--message" or "-m" when i + 1 < args.Length:
-                    message = args[++i];
+                case "--payload" when i + 1 < args.Length:
+                    envelopePayload = args[++i];
                     break;
-                case "--message-file" when i + 1 < args.Length:
-                    messageFile = args[++i];
+                case "--payload-file" when i + 1 < args.Length:
+                    envelopePayloadFile = args[++i];
                     break;
-                case "--save-question" when i + 1 < args.Length:
-                    saveQuestion = args[++i];
-                    break;
-                case "--type" when i + 1 < args.Length:
-                    type = args[++i].ToLowerInvariant();
-                    break;
-                case "--session-id" when i + 1 < args.Length:
-                    sessionId = args[++i];
-                    break;
-                case "--cwd" when i + 1 < args.Length:
-                    cwd = args[++i];
+                case "--plugin" when i + 1 < args.Length:
+                    // Reserved for future multi-plugin routing; currently informational.
+                    _ = args[++i];
                     break;
             }
         }
 
-        // Save question to history and exit (UserPromptSubmit hook)
-        if (saveQuestion != null)
+        if (string.IsNullOrEmpty(envelopeCommand))
         {
-            // Read from file if it's a file path (validate it's within safe directories)
-            if (File.Exists(saveQuestion) && IsPathSafe(saveQuestion))
-                saveQuestion = File.ReadAllText(saveQuestion, Encoding.UTF8);
-            ResponseHistory.SaveQuestion(saveQuestion.Replace("\\n", "\n").Replace("\\t", "\t").Trim(), sessionId, cwd);
+            // No recognized args — treat like a no-arg launch.
+            if (AppRegistry.IsRegistered() && IsRunningFromInstallDir())
+                RunInstalledInstance();
+            else
+                ShowInstallerRequiredMessage();
             return;
         }
 
-        // Read message from file if specified (avoids command-line length limits)
-        if (messageFile != null && File.Exists(messageFile) && IsPathSafe(messageFile))
-            message = File.ReadAllText(messageFile, Encoding.UTF8);
-
-        message = message.Replace("\\n", "\n").Replace("\\t", "\t");
-
-        // Save response to history (completes pending question entry)
-        ResponseHistory.SaveResponse(title, message, type, sessionId, cwd);
-
-        using var mutex = new Mutex(true, MutexName, out bool isNewInstance);
-
-        if (!isNewInstance)
+        string? payloadJson = envelopePayload;
+        if (payloadJson == null && envelopePayloadFile != null
+            && File.Exists(envelopePayloadFile) && IsPathSafe(envelopePayloadFile))
         {
-            SendToPipe(title, message, type, sessionId, cwd);
+            payloadJson = File.ReadAllText(envelopePayloadFile, Encoding.UTF8);
+        }
+
+        using var envelopeMutex = new Mutex(true, MutexName, out bool isFirstForEnvelope);
+        if (!isFirstForEnvelope)
+        {
+            SendEnvelopeToPipe(envelopeCommand, payloadJson);
             return;
         }
 
-        Application.Run(new PopupAppContext(title, message, type, sessionId, cwd));
+        // No host running — start one and deliver the envelope once it's up.
+        Application.Run(new PopupAppContext(envelopeCommand, payloadJson));
     }
 
     /// <summary>
@@ -147,13 +137,13 @@ static class Program
         if (File.Exists(hiddenMarker))
             try { File.Delete(hiddenMarker); } catch { }
 
-        // Load last history entry or show a default welcome
-        var latest = ResponseHistory.GetLatest();
-        string title = latest?.Title ?? "ProdToy";
-        string message = latest?.Message ?? "No notifications yet. ProdToy will notify you here.";
-        string type = latest?.Type ?? NotificationType.Info;
-        string sessionId = latest?.SessionId ?? "";
-        string cwd = latest?.Cwd ?? "";
+        // Phase 5: the host no longer knows about Claude chat history. On a
+        // no-args launch, show a generic welcome. Plugins that care about
+        // surfacing their last notification can do so from their own
+        // dashboard tiles.
+        string title = "ProdToy";
+        string message = "No notifications yet. ProdToy will notify you here.";
+        string type = NotificationType.Info;
 
         // If we came back from an update, the PS1 is polling for either
         // _update_ok.marker (we're healthy) or _update_fail.marker (we died
@@ -166,7 +156,7 @@ static class Program
         PopupAppContext? ctx = null;
         try
         {
-            ctx = new PopupAppContext(title, message, type, sessionId, cwd, startHidden: startHidden);
+            ctx = new PopupAppContext(title, message, type, startHidden: startHidden);
 
             if (justUpdated)
             {
@@ -278,6 +268,25 @@ static class Program
         catch (Exception ex)
         {
             Debug.WriteLine($"SendToPipe failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Sends a routed envelope {command, payload} to the running host's
+    /// pipe. The host's PipeRouter dispatches to the plugin that registered
+    /// the matching command name.</summary>
+    internal static void SendEnvelopeToPipe(string command, string? payloadJson)
+    {
+        try
+        {
+            using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out);
+            client.Connect(3000);
+            var envelope = JsonSerializer.Serialize(new { command, payload = payloadJson });
+            var bytes = Encoding.UTF8.GetBytes(envelope);
+            client.Write(bytes, 0, bytes.Length);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"SendEnvelopeToPipe failed: {ex.Message}");
         }
     }
 }

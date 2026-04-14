@@ -487,7 +487,7 @@ static class PluginManager
             }
 
             var instance = (IPlugin)Activator.CreateInstance(pluginType)!;
-            var context = new PluginContextImpl(_host, attr, info.PluginDirectory);
+            var context = new PluginContextImpl(_host, attr);
 
             instance.Initialize(context);
 
@@ -549,7 +549,7 @@ static class PluginManager
             foreach (var info in _plugins)
                 state[info.Id] = new PluginState { Enabled = info.Enabled };
 
-            Directory.CreateDirectory(AppPaths.PluginsDir);
+            Directory.CreateDirectory(AppPaths.PluginsDataDir);
             string json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(AppPaths.PluginsStateFile, json);
         }

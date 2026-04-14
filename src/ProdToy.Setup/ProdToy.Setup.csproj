@@ -19,11 +19,6 @@
     <Description>Installer for ProdToy</Description>
   </PropertyGroup>
 
-  <ItemGroup>
-    <EmbeddedResource Include="Scripts\Show-ProdToy.ps1"
-                      LogicalName="ProdToy.Setup.Scripts.Show-ProdToy.ps1" />
-  </ItemGroup>
-
   <PropertyGroup>
     <PublishDir>..\..\release\</PublishDir>
     <PublishDocumentationFiles>false</PublishDocumentationFiles>

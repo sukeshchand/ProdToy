@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -8,9 +8,10 @@ namespace ProdToy.Setup;
 
 /// <summary>
 /// Performs the actual install/repair/update work. Extracts bundled zips next
-/// to the running installer into the user's .prod-toy directory, writes the
-/// Claude hook script, merges Claude settings, and registers the app in
-/// Windows "Apps &amp; Features".
+/// to the running installer into the user's .prod-toy directory and registers
+/// the app in Windows "Apps &amp; Features". As of Phase 6, Claude hooks and
+/// the Show-ProdToy.ps1 script are owned by the Claude Integration plugin and
+/// installed on its first Start() after the host launches post-install.
 /// </summary>
 static class Installer
 {
@@ -54,7 +55,8 @@ static class Installer
     /// contain ProdToy.zip, metadata.json, and a plugins\*.zip subdir — either
     /// shipped alongside the installer or assembled by BootstrapDownloader.
     /// </summary>
-    public static InstallResult Run(string bundleDir, Action<string> onProgress)
+    public static InstallResult Run(string bundleDir, Action<string> onProgress,
+        bool createDesktopShortcut = false, bool createStartMenuShortcut = false)
     {
         string hostZipPath = Path.Combine(bundleDir, "ProdToy.zip");
         string pluginsBundleDir = Path.Combine(bundleDir, "plugins");
@@ -136,29 +138,11 @@ static class Installer
                 Report($"Warning: could not copy installer: {ex.Message}");
             }
 
-            // Step 6: Write the hook script from embedded resource.
-            Directory.CreateDirectory(AppPaths.ClaudeHooksDir);
-            string ps1Path = Path.Combine(AppPaths.ClaudeHooksDir, "Show-ProdToy.ps1");
-            string ps1Content = LoadEmbeddedHookScript(AppPaths.ExePath);
-            File.WriteAllText(ps1Path, ps1Content, Encoding.UTF8);
-            Report($"Hook script written to {ps1Path}");
-
-            // Step 7: Back up and merge Claude settings.json.
-            if (File.Exists(AppPaths.ClaudeSettingsFile))
-            {
-                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                string backupPath = Path.Combine(
-                    Path.GetDirectoryName(AppPaths.ClaudeSettingsFile)!,
-                    $"settings.backup_{timestamp}.json");
-                try
-                {
-                    File.Copy(AppPaths.ClaudeSettingsFile, backupPath, overwrite: false);
-                    Report($"Backed up Claude settings to {Path.GetFileName(backupPath)}");
-                }
-                catch { /* backup is best-effort */ }
-            }
-            MergeHooksIntoSettings();
-            Report($"Configured Claude hooks in {AppPaths.ClaudeSettingsFile}");
+            // Phase 6: hook script + Claude settings merge are now the
+            // ClaudeIntegration plugin's job. The plugin's Start() writes
+            // ~/.claude/hooks/Show-ProdToy.ps1 and merges the hook entries
+            // into ~/.claude/settings.json on first launch after install.
+            // The installer no longer touches ~/.claude/.
 
             // Step 8: Register in Windows Apps & Features using the version from
             //         the bundle's metadata.json (not AppVersion.Current — they
@@ -184,6 +168,39 @@ static class Installer
                 Report($"Warning: could not register in Apps & Features: {ex.Message}");
             }
 
+            // Step 9: Optionally create shortcuts.
+            if (createDesktopShortcut)
+            {
+                try
+                {
+                    string shortcutPath = CreateShortcut(
+                        Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                        "ProdToy.lnk");
+                    Report($"Created desktop shortcut: {shortcutPath}");
+                }
+                catch (Exception ex)
+                {
+                    Report($"Warning: could not create desktop shortcut: {ex.Message}");
+                }
+            }
+
+            if (createStartMenuShortcut)
+            {
+                try
+                {
+                    string startMenuDir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "Microsoft", "Windows", "Start Menu", "Programs");
+                    Directory.CreateDirectory(startMenuDir);
+                    string shortcutPath = CreateShortcut(startMenuDir, "ProdToy.lnk");
+                    Report($"Created Start Menu shortcut: {shortcutPath}");
+                }
+                catch (Exception ex)
+                {
+                    Report($"Warning: could not create Start Menu shortcut: {ex.Message}");
+                }
+            }
+
             Report("Installation complete.");
             return new InstallResult(true, log.ToString());
         }
@@ -192,6 +209,45 @@ static class Installer
             Report($"Error: {ex.Message}");
             return new InstallResult(false, log.ToString());
         }
+    }
+
+    /// <summary>
+    /// Creates a .lnk file at <paramref name="directory"/>/<paramref name="fileName"/>
+    /// pointing at the installed host exe. Uses WScript.Shell via late-bound
+    /// COM so the Setup project doesn't need an interop reference. Overwrites
+    /// any existing shortcut at the target path.
+    /// </summary>
+    private static string CreateShortcut(string directory, string fileName)
+    {
+        string shortcutPath = Path.Combine(directory, fileName);
+
+        Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
+        if (shellType == null)
+            throw new InvalidOperationException("WScript.Shell COM type unavailable on this system.");
+
+        dynamic shell = Activator.CreateInstance(shellType)!;
+        try
+        {
+            dynamic shortcut = shell.CreateShortcut(shortcutPath);
+            try
+            {
+                shortcut.TargetPath = AppPaths.ExePath;
+                shortcut.WorkingDirectory = AppPaths.Root;
+                shortcut.IconLocation = AppPaths.ExePath + ",0";
+                shortcut.Description = "ProdToy";
+                shortcut.Save();
+            }
+            finally
+            {
+                if (Marshal.IsComObject(shortcut)) Marshal.FinalReleaseComObject(shortcut);
+            }
+        }
+        finally
+        {
+            if (Marshal.IsComObject(shell)) Marshal.FinalReleaseComObject(shell);
+        }
+
+        return shortcutPath;
     }
 
     /// <summary>
@@ -210,95 +266,4 @@ static class Installer
         }
     }
 
-    private static string LoadEmbeddedHookScript(string installExePath)
-    {
-        var assembly = Assembly.GetExecutingAssembly();
-        using var stream = assembly.GetManifestResourceStream("ProdToy.Setup.Scripts.Show-ProdToy.ps1")
-            ?? throw new InvalidOperationException("Embedded hook script resource not found.");
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        string template = reader.ReadToEnd();
-        return template.Replace("{{EXE_PATH}}", installExePath);
-    }
-
-    private static void MergeHooksIntoSettings()
-    {
-        string settingsPath = AppPaths.ClaudeSettingsFile;
-        JsonNode root;
-        if (File.Exists(settingsPath))
-        {
-            string existing = File.ReadAllText(settingsPath);
-            root = JsonNode.Parse(existing) ?? new JsonObject();
-        }
-        else
-        {
-            root = new JsonObject();
-        }
-
-        var hooksNode = root["hooks"]?.AsObject() ?? new JsonObject();
-
-        string hookCommand =
-            $"powershell.exe -ExecutionPolicy Bypass -File \"{AppPaths.ClaudeHooksDir}\\Show-ProdToy.ps1\"";
-
-        var popupHookEntry = new JsonObject
-        {
-            ["type"] = "command",
-            ["command"] = hookCommand,
-        };
-
-        MergeHookEvent(hooksNode, "UserPromptSubmit", null, popupHookEntry);
-        MergeHookEvent(hooksNode, "Stop", null, popupHookEntry);
-        MergeHookEvent(hooksNode, "Notification",
-            "permission_prompt|idle_prompt|elicitation_dialog", popupHookEntry);
-
-        root["hooks"] = hooksNode;
-
-        var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-        File.WriteAllText(settingsPath, root.ToJsonString(options), Encoding.UTF8);
-    }
-
-    private static void MergeHookEvent(JsonObject hooksNode, string eventName, string? matcher, JsonObject newHookEntry)
-    {
-        if (hooksNode[eventName] is JsonArray existingArray)
-        {
-            // Skip if any existing entry already references Show-ProdToy.
-            foreach (var ruleSet in existingArray)
-            {
-                if (ruleSet?["hooks"] is JsonArray hooksArray)
-                {
-                    foreach (var hook in hooksArray)
-                    {
-                        if (hook?["command"]?.GetValue<string>()?.Contains("Show-ProdToy") == true)
-                            return;
-                    }
-                }
-            }
-
-            // Otherwise, try to add to a rule set with matching matcher.
-            foreach (var ruleSet in existingArray)
-            {
-                if (ruleSet is not JsonObject ruleObj) continue;
-                string? existingMatcher = ruleObj["matcher"]?.GetValue<string>();
-                if (existingMatcher == matcher)
-                {
-                    var hooksArray = ruleObj["hooks"]?.AsArray() ?? new JsonArray();
-                    hooksArray.Add(JsonNode.Parse(newHookEntry.ToJsonString()));
-                    ruleObj["hooks"] = hooksArray;
-                    return;
-                }
-            }
-
-            // Fall through: create a new rule set.
-            var newRuleSet = new JsonObject();
-            if (matcher != null) newRuleSet["matcher"] = matcher;
-            newRuleSet["hooks"] = new JsonArray { JsonNode.Parse(newHookEntry.ToJsonString()) };
-            existingArray.Add(newRuleSet);
-        }
-        else
-        {
-            var newRuleSet = new JsonObject();
-            if (matcher != null) newRuleSet["matcher"] = matcher;
-            newRuleSet["hooks"] = new JsonArray { JsonNode.Parse(newHookEntry.ToJsonString()) };
-            hooksNode[eventName] = new JsonArray { newRuleSet };
-        }
-    }
 }

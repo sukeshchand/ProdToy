@@ -1,4 +1,4 @@
-namespace ProdToy;
+namespace ProdToy.Plugins.ClaudeIntegration;
 
 static class FunnyQuotes
 {

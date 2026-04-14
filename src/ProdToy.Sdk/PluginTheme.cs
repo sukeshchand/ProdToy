@@ -14,4 +14,6 @@ public sealed record PluginTheme(
     Color TextSecondary,
     Color Border,
     Color SuccessColor,
-    Color ErrorColor);
+    Color ErrorColor,
+    Color SuccessBg,
+    Color ErrorBg);

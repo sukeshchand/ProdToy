@@ -1,4 +1,4 @@
-using System.Drawing;
+﻿using System.Drawing;
 
 namespace ProdToy;
 
@@ -15,12 +15,7 @@ record PopupTheme(
     Color SuccessColor,
     Color SuccessBg,
     Color ErrorColor,
-    Color ErrorBg,
-    // Sparkle palette
-    Color Sparkle1,
-    Color Sparkle2,
-    Color Sparkle3,
-    Color Sparkle4
+    Color ErrorBg
 );
 
 static class Themes
@@ -39,11 +34,7 @@ static class Themes
             SuccessColor: Color.FromArgb(52, 211, 153),
             SuccessBg: Color.FromArgb(16, 52, 40),
             ErrorColor: Color.FromArgb(248, 113, 113),
-            ErrorBg: Color.FromArgb(60, 20, 20),
-            Sparkle1: Color.FromArgb(56, 132, 244),
-            Sparkle2: Color.FromArgb(96, 165, 250),
-            Sparkle3: Color.FromArgb(140, 180, 255),
-            Sparkle4: Color.FromArgb(220, 230, 255)
+            ErrorBg: Color.FromArgb(60, 20, 20)
         ),
 
         new("Deep Purple",
@@ -58,11 +49,7 @@ static class Themes
             SuccessColor: Color.FromArgb(52, 211, 153),
             SuccessBg: Color.FromArgb(16, 52, 40),
             ErrorColor: Color.FromArgb(248, 113, 113),
-            ErrorBg: Color.FromArgb(60, 20, 20),
-            Sparkle1: Color.FromArgb(139, 92, 246),
-            Sparkle2: Color.FromArgb(167, 139, 250),
-            Sparkle3: Color.FromArgb(196, 181, 253),
-            Sparkle4: Color.FromArgb(237, 233, 254)
+            ErrorBg: Color.FromArgb(60, 20, 20)
         ),
 
         new("Emerald",
@@ -77,11 +64,7 @@ static class Themes
             SuccessColor: Color.FromArgb(52, 211, 153),
             SuccessBg: Color.FromArgb(16, 52, 40),
             ErrorColor: Color.FromArgb(248, 113, 113),
-            ErrorBg: Color.FromArgb(60, 20, 20),
-            Sparkle1: Color.FromArgb(16, 185, 129),
-            Sparkle2: Color.FromArgb(52, 211, 153),
-            Sparkle3: Color.FromArgb(110, 231, 183),
-            Sparkle4: Color.FromArgb(209, 250, 229)
+            ErrorBg: Color.FromArgb(60, 20, 20)
         ),
 
         new("Amber",
@@ -96,11 +79,7 @@ static class Themes
             SuccessColor: Color.FromArgb(52, 211, 153),
             SuccessBg: Color.FromArgb(16, 52, 40),
             ErrorColor: Color.FromArgb(248, 113, 113),
-            ErrorBg: Color.FromArgb(60, 20, 20),
-            Sparkle1: Color.FromArgb(245, 158, 11),
-            Sparkle2: Color.FromArgb(251, 191, 36),
-            Sparkle3: Color.FromArgb(252, 211, 77),
-            Sparkle4: Color.FromArgb(254, 243, 199)
+            ErrorBg: Color.FromArgb(60, 20, 20)
         ),
 
         new("Rose",
@@ -115,11 +94,7 @@ static class Themes
             SuccessColor: Color.FromArgb(52, 211, 153),
             SuccessBg: Color.FromArgb(16, 52, 40),
             ErrorColor: Color.FromArgb(248, 113, 113),
-            ErrorBg: Color.FromArgb(60, 20, 20),
-            Sparkle1: Color.FromArgb(244, 63, 94),
-            Sparkle2: Color.FromArgb(251, 113, 133),
-            Sparkle3: Color.FromArgb(253, 164, 175),
-            Sparkle4: Color.FromArgb(255, 228, 230)
+            ErrorBg: Color.FromArgb(60, 20, 20)
         ),
 
         new("Cyberpunk",
@@ -134,11 +109,7 @@ static class Themes
             SuccessColor: Color.FromArgb(0, 255, 200),
             SuccessBg: Color.FromArgb(0, 40, 32),
             ErrorColor: Color.FromArgb(255, 60, 100),
-            ErrorBg: Color.FromArgb(60, 10, 20),
-            Sparkle1: Color.FromArgb(0, 255, 200),
-            Sparkle2: Color.FromArgb(0, 200, 255),
-            Sparkle3: Color.FromArgb(180, 0, 255),
-            Sparkle4: Color.FromArgb(255, 255, 255)
+            ErrorBg: Color.FromArgb(60, 10, 20)
         ),
 
         new("Mono",
@@ -153,11 +124,7 @@ static class Themes
             SuccessColor: Color.FromArgb(200, 200, 200),
             SuccessBg: Color.FromArgb(25, 25, 25),
             ErrorColor: Color.FromArgb(255, 100, 100),
-            ErrorBg: Color.FromArgb(40, 10, 10),
-            Sparkle1: Color.FromArgb(255, 255, 255),
-            Sparkle2: Color.FromArgb(200, 200, 200),
-            Sparkle3: Color.FromArgb(150, 150, 150),
-            Sparkle4: Color.FromArgb(100, 100, 100)
+            ErrorBg: Color.FromArgb(40, 10, 10)
         ),
 
         new("Slate Blue",
@@ -172,11 +139,7 @@ static class Themes
             SuccessColor: Color.FromArgb(72, 210, 150),
             SuccessBg: Color.FromArgb(38, 62, 52),
             ErrorColor: Color.FromArgb(248, 120, 120),
-            ErrorBg: Color.FromArgb(72, 40, 40),
-            Sparkle1: Color.FromArgb(100, 160, 255),
-            Sparkle2: Color.FromArgb(140, 185, 255),
-            Sparkle3: Color.FromArgb(180, 210, 255),
-            Sparkle4: Color.FromArgb(220, 235, 255)
+            ErrorBg: Color.FromArgb(72, 40, 40)
         ),
 
         new("Warm Gray",
@@ -191,11 +154,7 @@ static class Themes
             SuccessColor: Color.FromArgb(120, 200, 140),
             SuccessBg: Color.FromArgb(48, 62, 48),
             ErrorColor: Color.FromArgb(240, 110, 100),
-            ErrorBg: Color.FromArgb(72, 42, 38),
-            Sparkle1: Color.FromArgb(230, 160, 80),
-            Sparkle2: Color.FromArgb(245, 185, 110),
-            Sparkle3: Color.FromArgb(250, 210, 150),
-            Sparkle4: Color.FromArgb(255, 235, 200)
+            ErrorBg: Color.FromArgb(72, 42, 38)
         ),
 
         new("Sage",
@@ -210,11 +169,7 @@ static class Themes
             SuccessColor: Color.FromArgb(110, 210, 160),
             SuccessBg: Color.FromArgb(42, 62, 50),
             ErrorColor: Color.FromArgb(240, 115, 110),
-            ErrorBg: Color.FromArgb(70, 42, 40),
-            Sparkle1: Color.FromArgb(110, 190, 150),
-            Sparkle2: Color.FromArgb(145, 215, 175),
-            Sparkle3: Color.FromArgb(180, 230, 200),
-            Sparkle4: Color.FromArgb(215, 245, 225)
+            ErrorBg: Color.FromArgb(70, 42, 40)
         ),
 
         new("Dusk",
@@ -229,11 +184,7 @@ static class Themes
             SuccessColor: Color.FromArgb(120, 205, 160),
             SuccessBg: Color.FromArgb(44, 58, 50),
             ErrorColor: Color.FromArgb(240, 115, 120),
-            ErrorBg: Color.FromArgb(70, 40, 42),
-            Sparkle1: Color.FromArgb(170, 130, 220),
-            Sparkle2: Color.FromArgb(195, 160, 240),
-            Sparkle3: Color.FromArgb(210, 190, 248),
-            Sparkle4: Color.FromArgb(235, 225, 255)
+            ErrorBg: Color.FromArgb(70, 40, 42)
         ),
 
         new("Lite",
@@ -248,11 +199,7 @@ static class Themes
             SuccessColor: Color.FromArgb(22, 163, 74),
             SuccessBg: Color.FromArgb(220, 252, 231),
             ErrorColor: Color.FromArgb(220, 38, 38),
-            ErrorBg: Color.FromArgb(254, 226, 226),
-            Sparkle1: Color.FromArgb(56, 132, 244),
-            Sparkle2: Color.FromArgb(96, 165, 250),
-            Sparkle3: Color.FromArgb(190, 210, 255),
-            Sparkle4: Color.FromArgb(140, 170, 220)
+            ErrorBg: Color.FromArgb(254, 226, 226)
         ),
     ];
 

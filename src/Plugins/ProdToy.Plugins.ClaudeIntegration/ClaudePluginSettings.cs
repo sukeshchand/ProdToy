@@ -25,4 +25,23 @@ record ClaudePluginSettings
 
     // Auto-title
     [JsonPropertyName("autoTitleToFolder")] public bool AutoTitleToFolder { get; init; } = false;
+
+    // Chat history (plugin-owned after Phase 3)
+    [JsonPropertyName("historyEnabled")] public bool HistoryEnabled { get; init; } = true;
+
+    // One-shot flag: true once the plugin has copied legacy host day files
+    // from ~/.prod-toy/history/claude/chats/ into its own data dir.
+    [JsonPropertyName("historyMigratedFromHost")] public bool HistoryMigratedFromHost { get; init; } = false;
+
+    // Notification prefs (Phase 8 — migrated from host AppSettings). These are
+    // Claude-specific: only the ChatPopupForm reads them.
+    [JsonPropertyName("notificationsEnabled")] public bool NotificationsEnabled { get; init; } = true;
+    // "Popup" | "Windows" | "Popup + Windows"
+    [JsonPropertyName("notificationMode")] public string NotificationMode { get; init; } = "Popup";
+    [JsonPropertyName("showQuotes")] public bool ShowQuotes { get; init; } = true;
+
+    // Snooze end-time. Default == MinValue means "not snoozed". Persisted so
+    // a 30-minute snooze survives an app restart. (The host used to keep
+    // this in-memory; we deliberately upgrade to persistent here.)
+    [JsonPropertyName("snoozeUntil")] public DateTime SnoozeUntil { get; init; } = DateTime.MinValue;
 }

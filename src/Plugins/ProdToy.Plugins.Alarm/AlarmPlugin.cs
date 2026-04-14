@@ -57,14 +57,14 @@ public class AlarmPlugin : IPlugin
 
     public IReadOnlyList<MenuContribution> GetMenuItems() =>
     [
-        new("Alarms...", ShowAlarmForm, Priority: 200),
-        new("Alarm History", ShowAlarmHistory, Priority: 201),
+        new("Alarms...", ShowAlarmForm, Priority: 200, Icon: "\u23F0"),
+        new("Alarm History", ShowAlarmHistory, Priority: 201, Icon: "\uD83D\uDCCB"),
     ];
 
     public IReadOnlyList<MenuContribution> GetDashboardItems() =>
     [
-        new("Alarms", ShowAlarmForm, Priority: 200),
-        new("Alarm History", ShowAlarmHistory, Priority: 201),
+        new("Alarms", ShowAlarmForm, Priority: 200, Icon: "\u23F0"),
+        new("Alarm History", ShowAlarmHistory, Priority: 201, Icon: "\uD83D\uDCCB"),
     ];
 
     public SettingsPageContribution? GetSettingsPage() => null;

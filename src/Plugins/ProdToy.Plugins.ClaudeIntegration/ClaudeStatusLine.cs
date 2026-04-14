@@ -110,9 +110,8 @@ static class ClaudeStatusLine
                 ["editStats"] = settings.SlShowEditStats,
             };
 
-            string configPath = Path.Combine(ClaudePaths.ScriptsDir, "status-line-config.json");
             var options = new JsonSerializerOptions { WriteIndented = true };
-            File.WriteAllText(configPath, config.ToJsonString(options), Encoding.UTF8);
+            File.WriteAllText(ClaudePaths.StatusLineConfigFile, config.ToJsonString(options), Encoding.UTF8);
         }
         catch (Exception ex)
         {

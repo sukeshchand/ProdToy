@@ -12,19 +12,6 @@ record AppSettingsData
     [JsonPropertyName("globalFont")]
     public string GlobalFont { get; init; } = "Segoe UI";
 
-    [JsonPropertyName("historyEnabled")]
-    public bool HistoryEnabled { get; init; } = true;
-
-    [JsonPropertyName("notificationsEnabled")]
-    public bool NotificationsEnabled { get; init; } = true;
-
-    // "Popup", "Windows", "Popup + Windows"
-    [JsonPropertyName("notificationMode")]
-    public string NotificationMode { get; init; } = "Popup";
-
-    [JsonPropertyName("showQuotes")]
-    public bool ShowQuotes { get; init; } = true;
-
     public const string DefaultUpdateLocation =
         "https://github.com/sukeshchand/ProdToy/releases/latest/download/metadata.json";
 
@@ -37,8 +24,6 @@ record AppSettingsData
 
 static class AppSettings
 {
-    private static readonly string _dataDir = AppPaths.Root;
-
     private static readonly string _settingsPath = AppPaths.SettingsFile;
 
     private static AppSettingsData? _cached;
@@ -70,7 +55,7 @@ static class AppSettings
         _cached = settings;
         try
         {
-            Directory.CreateDirectory(_dataDir);
+            Directory.CreateDirectory(AppPaths.DataDir);
             string json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_settingsPath, json);
         }
@@ -79,6 +64,4 @@ static class AppSettings
             Debug.WriteLine($"Failed to save settings: {ex.Message}");
         }
     }
-
-    public static string DataDir => _dataDir;
 }

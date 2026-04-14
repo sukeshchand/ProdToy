@@ -15,7 +15,7 @@ class AlarmHistoryForm : Form
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true;
         MinimizeBox = true;
-        StartPosition = FormStartPosition.CenterParent;
+        StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(700, 480);
         MinimumSize = new Size(500, 300);
         ShowInTaskbar = true;
