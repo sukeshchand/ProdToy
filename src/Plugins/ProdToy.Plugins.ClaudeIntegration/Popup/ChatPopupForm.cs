@@ -88,7 +88,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
     private DateTime _selectedDate = DateTime.Today;
 
     private const int HeaderHeight = 58;
-    private const int InfoBarHeight = 56;
+    private const int InfoBarHeight = 72;
     private const int FooterHeight = 112;
 
     public ChatPopupForm(IPluginContext context, ChatHistory history)
@@ -550,6 +550,45 @@ sealed class ChatPopupForm : Form, IPluginPopup
 
     private static string ToHex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
 
+    /// <summary>
+    /// Humanized relative time like "just now", "5m ago", "2h 30m ago",
+    /// "3 days ago", "2 weeks ago". Used in the subtitle under the session
+    /// info so the user sees at a glance how stale the notification is.
+    /// </summary>
+    private static string FormatRelative(DateTime ts)
+    {
+        if (ts == default) return "";
+        var delta = DateTime.Now - ts;
+        if (delta.TotalSeconds < 0) return "just now"; // clock skew guard
+        if (delta.TotalSeconds < 45) return "just now";
+        if (delta.TotalMinutes < 1.5) return "1 min ago";
+        if (delta.TotalMinutes < 60)
+            return $"{(int)Math.Round(delta.TotalMinutes)} min ago";
+        if (delta.TotalHours < 24)
+        {
+            int h = (int)delta.TotalHours;
+            int m = (int)(delta.TotalMinutes - h * 60);
+            return m > 0 ? $"{h}h {m}m ago" : $"{h}h ago";
+        }
+        if (delta.TotalDays < 7)
+        {
+            int d = (int)delta.TotalDays;
+            return d == 1 ? "1 day ago" : $"{d} days ago";
+        }
+        if (delta.TotalDays < 30)
+        {
+            int w = (int)(delta.TotalDays / 7);
+            return w == 1 ? "1 week ago" : $"{w} weeks ago";
+        }
+        if (delta.TotalDays < 365)
+        {
+            int mo = (int)(delta.TotalDays / 30);
+            return mo == 1 ? "1 month ago" : $"{mo} months ago";
+        }
+        int y = (int)(delta.TotalDays / 365);
+        return y == 1 ? "1 year ago" : $"{y} years ago";
+    }
+
     private static string FormatTimeBadge(DateTime ts)
     {
         if (ts == default) return "";
@@ -607,25 +646,20 @@ sealed class ChatPopupForm : Form, IPluginPopup
         Text = heading;
         _titleLabel.Text = heading;
 
-        // Subtitle: "Session {id} · {date}" — date lives here so it's visible
-        // without hovering for a tooltip. Uses response time when present,
-        // otherwise "today".
+        // Subtitle: two lines — session info on top, date + relative time
+        // underneath. Two lines via an embedded newline in a single Label;
+        // AutoSize measures the tallest line so the label grows naturally.
         DateTime subtitleTime = responseTime != default ? responseTime
             : questionTime != default ? questionTime
             : DateTime.Now;
-        string dateText = subtitleTime.ToString("MMM d, yyyy", System.Globalization.CultureInfo.CurrentCulture);
+        string dateText = subtitleTime.ToString("dddd, MMM d, yyyy", System.Globalization.CultureInfo.CurrentCulture);
+        string relative = FormatRelative(subtitleTime);
 
-        string subtitle;
-        if (!string.IsNullOrEmpty(sessionId))
-        {
-            string shortId = sessionId.Length > 8 ? sessionId[..8] : sessionId;
-            subtitle = $"Session {shortId} \u00B7 {dateText}";
-        }
-        else
-        {
-            subtitle = $"Claude notification \u00B7 {dateText}";
-        }
-        _subtitleLabel.Text = subtitle;
+        string firstLine = string.IsNullOrEmpty(sessionId)
+            ? "Claude notification"
+            : $"Session {(sessionId.Length > 8 ? sessionId[..8] : sessionId)}";
+        string secondLine = $"{dateText} \u00B7 {relative}";
+        _subtitleLabel.Text = firstLine + "\n" + secondLine;
 
         string renderedMessage = RenderHtml(message);
         string firstName = GetFirstName();
