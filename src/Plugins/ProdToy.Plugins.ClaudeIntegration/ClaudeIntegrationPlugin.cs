@@ -306,17 +306,69 @@ public class ClaudeIntegrationPlugin : IPlugin
         int y = pad;
         int contentWidth = 700;
 
-        // --- NOTIFICATIONS section (Phase 8 — all plugin-owned) ---
-        var notifSectionLabel = new Label
+        // --- CLAUDE INSTALLATIONS section ---
+        var installsLabel = new Label
         {
-            Text = "NOTIFICATIONS",
+            Text = "CLAUDE INSTALLATIONS",
             Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
             ForeColor = theme.Primary,
             AutoSize = true,
             Location = new Point(pad, y),
             BackColor = Color.Transparent,
         };
-        panel.Controls.Add(notifSectionLabel);
+        panel.Controls.Add(installsLabel);
+        y += 22;
+
+        var installsList = new Label
+        {
+            Text = BuildInstallsListText(settings.ClaudeConfigDirs),
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = theme.TextSecondary,
+            AutoSize = false,
+            Size = new Size(contentWidth - 120, 52),
+            Location = new Point(pad + 8, y),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(installsList);
+
+        var rescanButton = new Button
+        {
+            Text = "Rescan",
+            Font = new Font("Segoe UI", 8.5f),
+            Size = new Size(90, 26),
+            Location = new Point(contentWidth - 104, y),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.PrimaryDim,
+            ForeColor = theme.TextPrimary,
+            Cursor = Cursors.Hand,
+        };
+        rescanButton.FlatAppearance.BorderSize = 0;
+        rescanButton.Click += (_, _) =>
+        {
+            var found = ClaudeInstallDiscovery.Scan();
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { ClaudeConfigDirs = found.Select(i => i.ConfigDir).ToList() });
+
+            // Re-apply installation into any newly discovered installs so
+            // their settings.json picks up the hook/statusLine entries.
+            try { Install(_context); } catch (Exception ex) { _context.LogError("Rescan install failed", ex); }
+
+            installsList.Text = BuildInstallsListText(found.Select(i => i.ConfigDir).ToList());
+        };
+        panel.Controls.Add(rescanButton);
+        y += 60;
+
+        // --- HOOKS AND NOTIFICATIONS section ---
+        var hooksNotifLabel = new Label
+        {
+            Text = "HOOKS AND NOTIFICATIONS",
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            ForeColor = theme.Primary,
+            AutoSize = true,
+            Location = new Point(pad, y),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(hooksNotifLabel);
         y += 26;
 
         bool notifEnabled = settings.NotificationsEnabled;
@@ -426,94 +478,7 @@ public class ClaudeIntegrationPlugin : IPlugin
             foreach (var ctrl in notifSubControls)
                 ctrl.Enabled = notifEnabledCheck.Checked;
         };
-        y += 28;
-
-        // --- CHATS section ---
-        // Phase 5: HistoryEnabled is plugin-owned. ChatHistory reads this
-        // flag as its gate; we no longer touch host settings.json for it.
-        var historyCheck = new CheckBox
-        {
-            Text = "Save chat history",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = theme.TextPrimary,
-            BackColor = Color.Transparent,
-            Checked = _context.LoadSettings<ClaudePluginSettings>().HistoryEnabled,
-            AutoSize = true,
-            Location = new Point(pad + 8, y),
-            Cursor = Cursors.Hand,
-        };
-        historyCheck.CheckedChanged += (_, _) =>
-        {
-            var s = _context.LoadSettings<ClaudePluginSettings>();
-            _context.SaveSettings(s with { HistoryEnabled = historyCheck.Checked });
-        };
-        panel.Controls.Add(historyCheck);
         y += 34;
-
-        // --- CLAUDE INSTALLATIONS section ---
-        var installsLabel = new Label
-        {
-            Text = "CLAUDE INSTALLATIONS",
-            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
-            ForeColor = theme.Primary,
-            AutoSize = true,
-            Location = new Point(pad, y),
-            BackColor = Color.Transparent,
-        };
-        panel.Controls.Add(installsLabel);
-        y += 22;
-
-        var installsList = new Label
-        {
-            Text = BuildInstallsListText(settings.ClaudeConfigDirs),
-            Font = new Font("Segoe UI", 8.5f),
-            ForeColor = theme.TextSecondary,
-            AutoSize = false,
-            Size = new Size(contentWidth - 120, 52),
-            Location = new Point(pad + 8, y),
-            BackColor = Color.Transparent,
-        };
-        panel.Controls.Add(installsList);
-
-        var rescanButton = new Button
-        {
-            Text = "Rescan",
-            Font = new Font("Segoe UI", 8.5f),
-            Size = new Size(90, 26),
-            Location = new Point(contentWidth - 104, y),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = theme.PrimaryDim,
-            ForeColor = theme.TextPrimary,
-            Cursor = Cursors.Hand,
-        };
-        rescanButton.FlatAppearance.BorderSize = 0;
-        rescanButton.Click += (_, _) =>
-        {
-            var found = ClaudeInstallDiscovery.Scan();
-            var s = _context.LoadSettings<ClaudePluginSettings>();
-            _context.SaveSettings(s with { ClaudeConfigDirs = found.Select(i => i.ConfigDir).ToList() });
-
-            // Re-apply installation into any newly discovered installs so
-            // their settings.json picks up the hook/statusLine entries.
-            try { Install(_context); } catch (Exception ex) { _context.LogError("Rescan install failed", ex); }
-
-            installsList.Text = BuildInstallsListText(found.Select(i => i.ConfigDir).ToList());
-        };
-        panel.Controls.Add(rescanButton);
-        y += 60;
-
-        // --- HOOKS section ---
-        var hooksLabel = new Label
-        {
-            Text = "HOOKS",
-            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
-            ForeColor = theme.Primary,
-            AutoSize = true,
-            Location = new Point(pad, y),
-            BackColor = Color.Transparent,
-        };
-        panel.Controls.Add(hooksLabel);
-        y += 26;
 
         // Hook toggles just update plugin settings. Show-ProdToy.ps1 reads
         // these flags at runtime and short-circuits if the event is disabled.
@@ -539,6 +504,28 @@ public class ClaudeIntegrationPlugin : IPlugin
             });
 
         y += 10;
+
+        // --- CHATS section ---
+        // Phase 5: HistoryEnabled is plugin-owned. ChatHistory reads this
+        // flag as its gate; we no longer touch host settings.json for it.
+        var historyCheck = new CheckBox
+        {
+            Text = "Save chat history",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            BackColor = Color.Transparent,
+            Checked = _context.LoadSettings<ClaudePluginSettings>().HistoryEnabled,
+            AutoSize = true,
+            Location = new Point(pad + 8, y),
+            Cursor = Cursors.Hand,
+        };
+        historyCheck.CheckedChanged += (_, _) =>
+        {
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { HistoryEnabled = historyCheck.Checked });
+        };
+        panel.Controls.Add(historyCheck);
+        y += 34;
 
         // --- STATUS LINE section ---
         var slSectionLabel = new Label
