@@ -46,7 +46,7 @@ static class NativeMethods
     internal const uint MOD_NOREPEAT = 0x4000;
 
     internal const int WM_HOTKEY = 0x0312;
-    internal const int HOTKEY_ID_SCREENSHOT = 1;
+    internal const int HOTKEY_ID_DEFAULT = 1;
 
     // Low-level keyboard hook
     internal const int WH_KEYBOARD_LL = 13;

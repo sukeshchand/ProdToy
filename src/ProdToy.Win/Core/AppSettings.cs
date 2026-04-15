@@ -19,7 +19,7 @@ record AppSettingsData
     public string UpdateLocation { get; init; } = "";
 
     [JsonPropertyName("startWithWindows")]
-    public bool StartWithWindows { get; init; } = false;
+    public bool StartWithWindows { get; init; } = true;
 }
 
 static class AppSettings

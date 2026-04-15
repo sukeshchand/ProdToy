@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
+using Microsoft.Win32;
 
 namespace ProdToy.Setup;
 
@@ -166,6 +167,24 @@ static class Installer
             catch (Exception ex)
             {
                 Report($"Warning: could not register in Apps & Features: {ex.Message}");
+            }
+
+            // Step 8b: Register "Start with Windows" so ProdToy launches at
+            //          login. Matches SettingsForm.SetStartWithWindows — the
+            //          user can disable it later from General settings.
+            try
+            {
+                using var runKey = Registry.CurrentUser.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", writable: true);
+                if (runKey != null)
+                {
+                    runKey.SetValue("ProdToy", $"\"{AppPaths.ExePath}\"");
+                    Report("Registered ProdToy to start with Windows.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Report($"Warning: could not register startup entry: {ex.Message}");
             }
 
             // Step 9: Optionally create shortcuts.

@@ -2,6 +2,14 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Screenshot;
 
+internal enum HotkeyApplyStatus
+{
+    Registered,
+    Disabled,
+    NoHotkey,
+    Failed,
+}
+
 [Plugin("ProdToy.Plugin.Screenshot", "Screenshot", "1.0.288",
     Description = "Screen capture and annotation editor",
     Author = "ProdToy",
@@ -35,32 +43,12 @@ public class ScreenshotPlugin : IPlugin
         ScreenshotPaths.Initialize(context.DataDirectory);
     }
 
-    public void Start()
-    {
-        var settings = _context.LoadSettings<ScreenshotPluginSettings>();
-        if (!settings.ScreenshotEnabled) return;
-
-        // Register global hotkey
-        if (!string.IsNullOrEmpty(settings.ScreenshotHotkey))
-        {
-            _hotkeyReg = _context.Host.RegisterHotkey(settings.ScreenshotHotkey, () =>
-                _context.Host.InvokeOnUI(TakeScreenshot));
-        }
-
-        // Register triple-Ctrl
-        if (settings.TripleCtrlEnabled)
-        {
-            _tripleCtrlReg = _context.Host.RegisterTripleCtrl(() =>
-                _context.Host.InvokeOnUI(EditLastScreenshot));
-        }
-    }
+    public void Start() => ApplyHotkeyBindings();
 
     public void Stop()
     {
-        _hotkeyReg?.Dispose();
-        _hotkeyReg = null;
-        _tripleCtrlReg?.Dispose();
-        _tripleCtrlReg = null;
+        TryDispose(ref _hotkeyReg);
+        TryDispose(ref _tripleCtrlReg);
         _context.Host.InvokeOnUI(() =>
         {
             if (_editorForm != null && !_editorForm.IsDisposed)
@@ -69,6 +57,67 @@ public class ScreenshotPlugin : IPlugin
                 _editorForm = null;
             }
         });
+    }
+
+    /// <summary>
+    /// Reload settings and (re-)register global hotkey + triple-Ctrl. Safe to
+    /// call repeatedly — always disposes any existing registrations first, so
+    /// settings changes take effect without restarting the host. Returns a
+    /// status describing the hotkey registration outcome so the settings UI
+    /// can surface conflicts/errors to the user.
+    /// </summary>
+    internal HotkeyApplyStatus ApplyHotkeyBindings()
+    {
+        TryDispose(ref _hotkeyReg);
+        TryDispose(ref _tripleCtrlReg);
+
+        var settings = _context.LoadSettings<ScreenshotPluginSettings>();
+
+        if (settings.TripleCtrlEnabled)
+        {
+            try
+            {
+                _tripleCtrlReg = _context.Host.RegisterTripleCtrl(() =>
+                    _context.Host.InvokeOnUI(EditLastScreenshot));
+            }
+            catch (Exception ex)
+            {
+                _context.LogError("Failed to register triple-Ctrl detector", ex);
+            }
+        }
+
+        if (!settings.ScreenshotEnabled)
+            return HotkeyApplyStatus.Disabled;
+
+        if (string.IsNullOrEmpty(settings.ScreenshotHotkey))
+            return HotkeyApplyStatus.NoHotkey;
+
+        try
+        {
+            _hotkeyReg = _context.Host.RegisterHotkey(settings.ScreenshotHotkey, () =>
+                _context.Host.InvokeOnUI(TakeScreenshot));
+        }
+        catch (Exception ex)
+        {
+            _context.LogError($"Hotkey '{settings.ScreenshotHotkey}' registration threw", ex);
+            return HotkeyApplyStatus.Failed;
+        }
+
+        if (_hotkeyReg == null)
+        {
+            _context.LogError(
+                $"Failed to register hotkey '{settings.ScreenshotHotkey}' — already in use or invalid");
+            return HotkeyApplyStatus.Failed;
+        }
+
+        return HotkeyApplyStatus.Registered;
+    }
+
+    private static void TryDispose<T>(ref T? reg) where T : class, IDisposable
+    {
+        try { reg?.Dispose(); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Screenshot dispose failed: {ex.Message}"); }
+        reg = null;
     }
 
     public void Dispose() { }
@@ -131,6 +180,7 @@ public class ScreenshotPlugin : IPlugin
         {
             var s = _context.LoadSettings<ScreenshotPluginSettings>();
             _context.SaveSettings(s with { ScreenshotEnabled = enableCheck.Checked });
+            ApplyHotkeyBindings();
         };
         panel.Controls.Add(enableCheck);
         y += 30;
@@ -221,22 +271,18 @@ public class ScreenshotPlugin : IPlugin
             }
         };
 
-        hotkeyBox.KeyDown += (_, e) =>
+        // PrintScreen does NOT generate WM_KEYDOWN on Windows, so we handle
+        // both KeyDown (normal keys) and KeyUp (catches PrintScreen and any
+        // other key that only fires on release).
+        void CaptureHotkey(KeyEventArgs e)
         {
             if (!recording) return;
             e.SuppressKeyPress = true;
 
             if (e.KeyCode is Keys.ControlKey or Keys.ShiftKey or Keys.Menu or Keys.LMenu
                 or Keys.RMenu or Keys.LControlKey or Keys.RControlKey or Keys.LShiftKey
-                or Keys.RShiftKey or Keys.LWin or Keys.RWin)
+                or Keys.RShiftKey or Keys.LWin or Keys.RWin or Keys.None)
                 return;
-
-            if (!e.Control && !e.Shift && !e.Alt)
-            {
-                hotkeyStatus.ForeColor = theme.ErrorColor;
-                hotkeyStatus.Text = "At least one modifier (Ctrl, Shift, Alt) is required";
-                return;
-            }
 
             var parts = new List<string>();
             if (e.Control) parts.Add("Ctrl");
@@ -252,9 +298,32 @@ public class ScreenshotPlugin : IPlugin
 
             var s = _context.LoadSettings<ScreenshotPluginSettings>();
             _context.SaveSettings(s with { ScreenshotHotkey = hotkey });
-            hotkeyStatus.ForeColor = theme.SuccessColor;
-            hotkeyStatus.Text = "Saved — restart app to apply";
-        };
+
+            var status = ApplyHotkeyBindings();
+            if (status == HotkeyApplyStatus.Registered)
+            {
+                hotkeyStatus.ForeColor = theme.SuccessColor;
+                hotkeyStatus.Text = $"Registered: {hotkey}";
+            }
+            else if (status == HotkeyApplyStatus.Disabled)
+            {
+                hotkeyStatus.ForeColor = theme.TextSecondary;
+                hotkeyStatus.Text = "Saved — enable screen capture to activate";
+            }
+            else if (hotkey.Equals("PrintScreen", StringComparison.OrdinalIgnoreCase))
+            {
+                hotkeyStatus.ForeColor = theme.ErrorColor;
+                hotkeyStatus.Text = "PrintScreen is owned by Windows. Disable Settings → Accessibility → Keyboard → 'Use Print screen to open Snipping Tool' and retry.";
+            }
+            else
+            {
+                hotkeyStatus.ForeColor = theme.ErrorColor;
+                hotkeyStatus.Text = $"'{hotkey}' is already in use or invalid";
+            }
+        }
+
+        hotkeyBox.KeyDown += (_, e) => CaptureHotkey(e);
+        hotkeyBox.KeyUp += (_, e) => CaptureHotkey(e);
 
         clearBtn.Click += (_, _) =>
         {
@@ -265,6 +334,7 @@ public class ScreenshotPlugin : IPlugin
 
             var s = _context.LoadSettings<ScreenshotPluginSettings>();
             _context.SaveSettings(s with { ScreenshotHotkey = "" });
+            ApplyHotkeyBindings();
             hotkeyStatus.ForeColor = theme.TextSecondary;
             hotkeyStatus.Text = "Hotkey cleared";
         };
@@ -277,7 +347,7 @@ public class ScreenshotPlugin : IPlugin
 
         var hotkeyNote = new Label
         {
-            Text = "Restart app after changing hotkey to apply.",
+            Text = "Hotkey applies immediately. Use PrintScreen, F13+, or any Ctrl/Alt/Shift combo.",
             Font = new Font("Segoe UI", 8f),
             ForeColor = theme.TextSecondary,
             AutoSize = true,
@@ -315,6 +385,7 @@ public class ScreenshotPlugin : IPlugin
         {
             var s = _context.LoadSettings<ScreenshotPluginSettings>();
             _context.SaveSettings(s with { TripleCtrlEnabled = tripleCtrlCheck.Checked });
+            ApplyHotkeyBindings();
         };
         panel.Controls.Add(tripleCtrlCheck);
 

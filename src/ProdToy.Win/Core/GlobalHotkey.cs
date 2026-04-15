@@ -30,7 +30,7 @@ class GlobalHotkey : IDisposable
 
         _registered = NativeMethods.RegisterHotKey(
             _window.Handle,
-            NativeMethods.HOTKEY_ID_SCREENSHOT,
+            NativeMethods.HOTKEY_ID_DEFAULT,
             modifiers | NativeMethods.MOD_NOREPEAT,
             vk);
 
@@ -44,7 +44,7 @@ class GlobalHotkey : IDisposable
     {
         if (_registered)
         {
-            NativeMethods.UnregisterHotKey(_window.Handle, NativeMethods.HOTKEY_ID_SCREENSHOT);
+            NativeMethods.UnregisterHotKey(_window.Handle, NativeMethods.HOTKEY_ID_DEFAULT);
             _registered = false;
         }
     }
@@ -63,8 +63,8 @@ class GlobalHotkey : IDisposable
         if (string.IsNullOrWhiteSpace(hotkey))
             return false;
 
-        var parts = hotkey.Split('+');
-        foreach (var part in parts)
+        bool vkSet = false;
+        foreach (var part in hotkey.Split('+'))
         {
             string p = part.Trim();
             switch (p.ToUpperInvariant())
@@ -83,15 +83,16 @@ class GlobalHotkey : IDisposable
                     modifiers |= NativeMethods.MOD_WIN;
                     break;
                 default:
-                    if (Enum.TryParse<Keys>(p, true, out var key))
-                        vk = (uint)key;
-                    else
-                        return false;
+                    if (vkSet) return false; // two non-modifier tokens
+                    if (!Enum.TryParse<Keys>(p, true, out var key)) return false;
+                    vk = (uint)key;
+                    vkSet = true;
                     break;
             }
         }
 
-        return vk != 0 && modifiers != 0;
+        // Windows allows modifier-less hotkeys (e.g. PrintScreen, F13+).
+        return vkSet;
     }
 
     private class HotkeyWindow : NativeWindow
@@ -106,7 +107,7 @@ class GlobalHotkey : IDisposable
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == NativeMethods.WM_HOTKEY &&
-                m.WParam.ToInt32() == NativeMethods.HOTKEY_ID_SCREENSHOT)
+                m.WParam.ToInt32() == NativeMethods.HOTKEY_ID_DEFAULT)
             {
                 HotkeyPressed?.Invoke();
             }
