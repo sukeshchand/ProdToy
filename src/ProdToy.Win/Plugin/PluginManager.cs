@@ -38,6 +38,7 @@ static class PluginManager
     public static void Initialize(PluginHostImpl host)
     {
         _host = host;
+        _installedIds = LoadInstalledIds();
 
         string pluginsBinDir = AppPaths.PluginsBinDir;
         if (!Directory.Exists(pluginsBinDir))
@@ -46,27 +47,53 @@ static class PluginManager
             return;
         }
 
-        var enabledState = LoadEnabledState();
-
-        // Each subdirectory under plugins/bin/ is a plugin
+        // Each subdirectory under plugins/bin/ is a plugin. Plugins are always
+        // active once they exist on disk — enable/disable has been removed.
         foreach (var dir in Directory.GetDirectories(pluginsBinDir))
         {
             var info = DiscoverPlugin(dir);
             if (info == null) continue;
 
-            // Default to enabled for newly discovered plugins
-            if (enabledState.TryGetValue(info.Id, out var state))
-                info.Enabled = state.Enabled;
-            else
-                info.Enabled = true;
-
+            info.Enabled = true;
             _plugins.Add(info);
 
-            if (info.Enabled)
-                LoadAndInitialize(info);
+            LoadAndInitialize(info);
+
+            // First-time install: if this plugin ID hasn't been installed on
+            // this machine yet (or its state entry was lost), call Install()
+            // now so it can register hook scripts, third-party config entries,
+            // etc. Install() runs exactly once; subsequent host launches just
+            // call Start().
+            if (info.Instance != null && !_installedIds.Contains(info.Id))
+            {
+                TryInstall(info);
+            }
         }
 
-        SaveEnabledState();
+        SaveInstalledIds();
+    }
+
+    /// <summary>
+    /// Runs Install() on a freshly-installed plugin and records it as installed
+    /// in plugins-state.json. Errors are logged but do not throw — Install() is
+    /// best-effort (the plugin may still function without its external-system
+    /// state if, e.g., the user denies a permission prompt).
+    /// </summary>
+    private static void TryInstall(PluginInfo info)
+    {
+        if (info.Instance == null) return;
+        try
+        {
+            var context = new PluginContextImpl(_host!, info.Metadata!);
+            info.Instance.Install(context);
+            _installedIds.Add(info.Id);
+            Debug.WriteLine($"Plugin {info.Id} Install() completed");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Plugin {info.Id} Install() failed: {ex}");
+            LogPluginError(info.Id, "Install", ex);
+        }
     }
 
     /// <summary>
@@ -124,21 +151,14 @@ static class PluginManager
 
     /// <summary>
     /// Discover a newly installed plugin by ID, load, initialize, and start it.
-    /// Called after copying plugin DLL to the plugins directory.
+    /// Called after copying plugin DLL to the plugins directory. Runs Install()
+    /// on first discovery so the plugin can register its external-system state.
     /// </summary>
     public static bool DiscoverAndLoad(string pluginId)
     {
-        // Check if already known
         var existing = _plugins.Find(p => p.Id.Equals(pluginId, StringComparison.OrdinalIgnoreCase));
-        if (existing != null)
-        {
-            // Already loaded — just enable if disabled
-            if (!existing.Enabled)
-                return EnablePlugin(pluginId);
-            return true;
-        }
+        if (existing != null) return true;
 
-        // Discover from the plugins directory
         string pluginDir = Path.Combine(AppPaths.PluginsBinDir, pluginId);
         if (!Directory.Exists(pluginDir)) return false;
 
@@ -148,6 +168,9 @@ static class PluginManager
         info.Enabled = true;
         _plugins.Add(info);
         LoadAndInitialize(info);
+
+        if (info.Instance != null && !_installedIds.Contains(info.Id))
+            TryInstall(info);
 
         if (info.Instance != null)
         {
@@ -163,51 +186,15 @@ static class PluginManager
             }
         }
 
-        SaveEnabledState();
+        SaveInstalledIds();
         PluginsChanged?.Invoke();
         return info.Instance != null;
     }
 
-    /// <summary>
-    /// Enable a disabled plugin at runtime (load + init + start).
-    /// </summary>
-    public static bool EnablePlugin(string pluginId)
+    /// <summary>Internal: stop + dispose + unload without deleting files.
+    /// Used by UninstallPlugin before removing the bin directory.</summary>
+    private static void TearDownInstance(PluginInfo info)
     {
-        var info = _plugins.Find(p => p.Id.Equals(pluginId, StringComparison.OrdinalIgnoreCase));
-        if (info == null || info.Enabled) return false;
-
-        info.Enabled = true;
-        info.LoadError = null;
-        LoadAndInitialize(info);
-
-        if (info.Instance != null)
-        {
-            try
-            {
-                info.Instance.Start();
-            }
-            catch (Exception ex)
-            {
-                info.LoadError = $"Start failed: {ex.Message}";
-                Debug.WriteLine($"Plugin {info.Id} Start failed: {ex}");
-            }
-        }
-
-        SaveEnabledState();
-        PluginsChanged?.Invoke();
-        return info.Instance != null;
-    }
-
-    /// <summary>
-    /// Disable an enabled plugin at runtime (stop + dispose + unload).
-    /// </summary>
-    public static bool DisablePlugin(string pluginId, bool notify = true)
-    {
-        var info = _plugins.Find(p => p.Id.Equals(pluginId, StringComparison.OrdinalIgnoreCase));
-        if (info == null || !info.Enabled) return false;
-
-        info.Enabled = false;
-
         if (info.Instance != null)
         {
             try
@@ -219,7 +206,6 @@ static class PluginManager
             {
                 Debug.WriteLine($"Plugin {info.Id} Stop/Dispose failed: {ex}");
             }
-
             info.Instance = null;
         }
 
@@ -229,27 +215,42 @@ static class PluginManager
             info.LoadContext = null;
         }
 
-        SaveEnabledState();
-        if (notify) PluginsChanged?.Invoke();
-        return true;
+        info.Enabled = false;
     }
 
     /// <summary>
-    /// Uninstall a plugin: stop it, unload it, delete its folder.
+    /// Uninstall a plugin: call its Uninstall() hook, stop it, unload it,
+    /// delete its bin folder, remove it from installed-ids. Plugin data
+    /// under data/plugins/{PluginId}/ is preserved (survives reinstall).
     /// </summary>
     public static bool UninstallPlugin(string pluginId)
     {
         var info = _plugins.Find(p => p.Id.Equals(pluginId, StringComparison.OrdinalIgnoreCase));
         if (info == null) return false;
 
-        // Disable without firing PluginsChanged (we'll fire once at the end)
-        if (info.Enabled)
-            DisablePlugin(pluginId, notify: false);
+        // Call Uninstall() so the plugin can strip its external-system state
+        // (hook scripts, third-party config entries, etc.) before we tear it down.
+        if (info.Instance != null && info.Metadata != null && _host != null)
+        {
+            try
+            {
+                var context = new PluginContextImpl(_host, info.Metadata);
+                info.Instance.Uninstall(context);
+                Debug.WriteLine($"Plugin {info.Id} Uninstall() completed");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Plugin {info.Id} Uninstall() failed: {ex}");
+                LogPluginError(info.Id, "Uninstall", ex);
+            }
+        }
 
+        TearDownInstance(info);
         _plugins.Remove(info);
-        SaveEnabledState();
+        _installedIds.Remove(info.Id);
+        SaveInstalledIds();
 
-        // Delete plugin folder — files are not locked since we use LoadFromStream
+        // Delete plugin bin folder — files are not locked since we use LoadFromStream.
         try
         {
             if (Directory.Exists(info.PluginDirectory))
@@ -260,20 +261,19 @@ static class PluginManager
             Debug.WriteLine($"Failed to delete plugin dir: {ex.Message}");
         }
 
-        // Fire once after everything is fully torn down
         PluginsChanged?.Invoke();
         return true;
     }
 
     /// <summary>
-    /// Install a plugin from a DLL or zip path.
-    /// Copies to ~/.prod-toy/plugins/{PluginId}/.
+    /// Install a plugin from a DLL path. Copies files to
+    /// ~/.prod-toy/plugins/bin/{PluginId}/ and defers discovery/lifecycle
+    /// to <see cref="DiscoverAndLoad"/>, which runs Initialize+Install+Start.
     /// </summary>
     public static bool InstallPlugin(string sourceDllPath)
     {
         try
         {
-            // Probe the DLL to read its PluginAttribute
             var tempContext = new PluginLoadContext(sourceDllPath);
             var assembly = tempContext.LoadFromStream(new MemoryStream(File.ReadAllBytes(sourceDllPath)));
             var (pluginType, attr) = FindPluginType(assembly);
@@ -282,7 +282,6 @@ static class PluginManager
             if (pluginType == null || attr == null)
                 return false;
 
-            // Copy to plugins bin directory
             string destDir = Path.Combine(AppPaths.PluginsBinDir, attr.Id);
             Directory.CreateDirectory(destDir);
 
@@ -293,16 +292,7 @@ static class PluginManager
                 File.Copy(file, destFile, overwrite: true);
             }
 
-            // Discover and register
-            var info = DiscoverPlugin(destDir);
-            if (info != null)
-            {
-                info.Enabled = true;
-                _plugins.Add(info);
-                SaveEnabledState();
-            }
-
-            return info != null;
+            return DiscoverAndLoad(attr.Id);
         }
         catch (Exception ex)
         {
@@ -487,7 +477,7 @@ static class PluginManager
             }
 
             var instance = (IPlugin)Activator.CreateInstance(pluginType)!;
-            var context = new PluginContextImpl(_host, attr, info.PluginDirectory);
+            var context = new PluginContextImpl(_host, attr);
 
             instance.Initialize(context);
 
@@ -520,8 +510,23 @@ static class PluginManager
     }
 
     // --- State persistence ---
+    //
+    // plugins-state.json tracks which plugins have had Install() called on
+    // this machine. A plugin is "installed" once its external-system state
+    // (hook scripts, third-party config entries, etc.) has been written.
+    // Install() runs exactly once per plugin on the machine; Uninstall()
+    // runs exactly once at removal time. Start()/Stop() are unrelated to
+    // this file — they run on every host launch regardless.
 
-    private static Dictionary<string, PluginState> LoadEnabledState()
+    private sealed class PluginsStateFile
+    {
+        [JsonPropertyName("installedIds")]
+        public List<string> InstalledIds { get; set; } = new();
+    }
+
+    private static HashSet<string> _installedIds = new(StringComparer.OrdinalIgnoreCase);
+
+    private static HashSet<string> LoadInstalledIds()
     {
         try
         {
@@ -529,27 +534,25 @@ static class PluginManager
             if (File.Exists(path))
             {
                 string json = File.ReadAllText(path);
-                return JsonSerializer.Deserialize<Dictionary<string, PluginState>>(json)
-                       ?? new Dictionary<string, PluginState>();
+                var state = JsonSerializer.Deserialize<PluginsStateFile>(json);
+                if (state?.InstalledIds != null)
+                    return new HashSet<string>(state.InstalledIds, StringComparer.OrdinalIgnoreCase);
             }
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"Failed to load plugin state: {ex.Message}");
         }
-
-        return new Dictionary<string, PluginState>();
+        return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
-    private static void SaveEnabledState()
+    private static void SaveInstalledIds()
     {
         try
         {
-            var state = new Dictionary<string, PluginState>();
-            foreach (var info in _plugins)
-                state[info.Id] = new PluginState { Enabled = info.Enabled };
-
-            Directory.CreateDirectory(AppPaths.PluginsDir);
+            var state = new PluginsStateFile { InstalledIds = _installedIds.ToList() };
+            state.InstalledIds.Sort(StringComparer.OrdinalIgnoreCase);
+            Directory.CreateDirectory(AppPaths.PluginsDataDir);
             string json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(AppPaths.PluginsStateFile, json);
         }
@@ -571,9 +574,4 @@ static class PluginManager
         catch { }
     }
 
-    private sealed class PluginState
-    {
-        [JsonPropertyName("enabled")]
-        public bool Enabled { get; set; } = true;
-    }
 }

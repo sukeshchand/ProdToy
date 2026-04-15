@@ -12,6 +12,16 @@ public class AlarmPlugin : IPlugin
     private AlarmForm? _alarmForm;
     private AlarmHistoryForm? _alarmHistoryForm;
 
+    public void Install(IPluginContext context)
+    {
+        // No external-system state to install.
+    }
+
+    public void Uninstall(IPluginContext context)
+    {
+        // No external-system state to remove.
+    }
+
     public void Initialize(IPluginContext context)
     {
         _context = context;
@@ -57,14 +67,14 @@ public class AlarmPlugin : IPlugin
 
     public IReadOnlyList<MenuContribution> GetMenuItems() =>
     [
-        new("Alarms...", ShowAlarmForm, Priority: 200),
-        new("Alarm History", ShowAlarmHistory, Priority: 201),
+        new("Alarms...", ShowAlarmForm, Priority: 200, Icon: "\u23F0"),
+        new("Alarm History", ShowAlarmHistory, Priority: 201, Icon: "\uD83D\uDCCB"),
     ];
 
     public IReadOnlyList<MenuContribution> GetDashboardItems() =>
     [
-        new("Alarms", ShowAlarmForm, Priority: 200),
-        new("Alarm History", ShowAlarmHistory, Priority: 201),
+        new("Alarms", ShowAlarmForm, Priority: 200, Icon: "\u23F0"),
+        new("Alarm History", ShowAlarmHistory, Priority: 201, Icon: "\uD83D\uDCCB"),
     ];
 
     public SettingsPageContribution? GetSettingsPage() => null;

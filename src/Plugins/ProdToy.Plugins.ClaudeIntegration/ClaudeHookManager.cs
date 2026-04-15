@@ -5,29 +5,39 @@ using System.Text.Json.Nodes;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
+/// <summary>
+/// Writes/removes ProdToy hook entries in one or more Claude Code
+/// <c>settings.json</c> files. Every method takes an explicit install (or
+/// list of installs) — there is no implicit default — so the same code works
+/// for any number of Claude installations the user has on the machine.
+/// </summary>
 static class ClaudeHookManager
 {
     private const string AutoTitleMarkerStart = "<!-- ProdToy:AutoTitle:Start -->";
     private const string AutoTitleMarkerEnd = "<!-- ProdToy:AutoTitle:End -->";
 
-    public static void SetAutoTitleHook(bool enabled)
+    // ---------- Auto-title instruction in CLAUDE.md ----------
+
+    public static void SetAutoTitleHook(IEnumerable<ClaudeInstall> installs, bool enabled)
     {
-        try
+        foreach (var install in installs)
         {
-            if (enabled) AddInstruction();
-            else RemoveInstruction();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Failed to set auto-title: {ex.Message}");
+            try
+            {
+                if (enabled) AddInstruction(install.ClaudeMdFile);
+                else RemoveInstruction(install.ClaudeMdFile);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to set auto-title in {install.ClaudeMdFile}: {ex.Message}");
+            }
         }
     }
 
-    private static void AddInstruction()
+    private static void AddInstruction(string claudeMdPath)
     {
-        string path = ClaudePaths.ClaudeMdFile;
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        string existing = File.Exists(path) ? File.ReadAllText(path) : "";
+        Directory.CreateDirectory(Path.GetDirectoryName(claudeMdPath)!);
+        string existing = File.Exists(claudeMdPath) ? File.ReadAllText(claudeMdPath) : "";
         if (existing.Contains(AutoTitleMarkerStart)) return;
 
         string instruction = $@"
@@ -39,15 +49,14 @@ Where <current_folder_name> is the name of the current working directory (just t
 {AutoTitleMarkerEnd}
 ";
         string newContent = existing.TrimEnd() + "\n" + instruction;
-        File.WriteAllText(path, newContent.TrimStart(), Encoding.UTF8);
+        File.WriteAllText(claudeMdPath, newContent.TrimStart(), Encoding.UTF8);
     }
 
-    private static void RemoveInstruction()
+    private static void RemoveInstruction(string claudeMdPath)
     {
-        string path = ClaudePaths.ClaudeMdFile;
-        if (!File.Exists(path)) return;
+        if (!File.Exists(claudeMdPath)) return;
 
-        string content = File.ReadAllText(path);
+        string content = File.ReadAllText(claudeMdPath);
         int startIdx = content.IndexOf(AutoTitleMarkerStart);
         if (startIdx < 0) return;
         int endIdx = content.IndexOf(AutoTitleMarkerEnd);
@@ -58,55 +67,31 @@ Where <current_folder_name> is the name of the current working directory (just t
         string after = content[endIdx..].TrimStart();
         string result = string.IsNullOrWhiteSpace(before) && string.IsNullOrWhiteSpace(after)
             ? "" : (before + "\n" + after).Trim() + "\n";
-        File.WriteAllText(path, result, Encoding.UTF8);
+        File.WriteAllText(claudeMdPath, result, Encoding.UTF8);
     }
 
-    public static void CleanupOldHook()
-    {
-        try
-        {
-            string settingsPath = ClaudePaths.ClaudeSettingsFile;
-            if (!File.Exists(settingsPath)) return;
-
-            string json = File.ReadAllText(settingsPath);
-            var root = JsonNode.Parse(json);
-            if (root?["hooks"] is not JsonObject hooksNode) return;
-            if (hooksNode["SessionStart"] is not JsonArray eventArray) return;
-
-            for (int i = eventArray.Count - 1; i >= 0; i--)
-            {
-                if (eventArray[i]?["hooks"] is not JsonArray hooksArray) continue;
-                for (int j = hooksArray.Count - 1; j >= 0; j--)
-                {
-                    string? command = hooksArray[j]?["command"]?.GetValue<string>();
-                    if (command != null && command.Contains("Set-FolderTitle"))
-                        hooksArray.RemoveAt(j);
-                }
-                if (hooksArray.Count == 0) eventArray.RemoveAt(i);
-            }
-
-            if (eventArray.Count == 0) hooksNode.Remove("SessionStart");
-
-            var options = new JsonSerializerOptions { WriteIndented = true };
-            File.WriteAllText(settingsPath, root!.ToJsonString(options), Encoding.UTF8);
-
-            string oldScript = Path.Combine(ClaudePaths.ClaudeHooksDir, "Set-FolderTitle.ps1");
-            if (File.Exists(oldScript)) File.Delete(oldScript);
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Cleanup old hook failed: {ex.Message}");
-        }
-    }
+    // ---------- settings.json hook registration ----------
 
     /// <summary>
-    /// Updates Claude's settings.json to enable/disable a ProdToy hook for the given event.
+    /// Add or remove a ProdToy hook entry for the given event across every
+    /// Claude install in <paramref name="installs"/>. Idempotent — adding an
+    /// entry that already exists is a no-op, removing one that isn't there is
+    /// a no-op.
     /// </summary>
-    public static void UpdateClaudeHook(string eventName, string? matcher, bool enabled)
+    public static void UpdateClaudeHook(
+        IEnumerable<ClaudeInstall> installs,
+        string eventName,
+        string? matcher,
+        bool enabled)
+    {
+        foreach (var install in installs)
+            UpdateClaudeHookOne(install.SettingsFile, eventName, matcher, enabled);
+    }
+
+    private static void UpdateClaudeHookOne(string settingsPath, string eventName, string? matcher, bool enabled)
     {
         try
         {
-            string settingsPath = ClaudePaths.ClaudeSettingsFile;
             JsonNode root;
             if (File.Exists(settingsPath))
             {
@@ -125,11 +110,10 @@ Where <current_folder_name> is the name of the current working directory (just t
                 root["hooks"] = hooksNode;
             }
 
-            string hookCommand = $"powershell.exe -ExecutionPolicy Bypass -File \"{Path.Combine(ClaudePaths.ClaudeHooksDir, "Show-ProdToy.ps1")}\"";
+            string hookCommand = $"powershell.exe -ExecutionPolicy Bypass -File \"{ClaudePaths.ShowProdToyScript}\"";
 
             if (!enabled)
             {
-                // Remove ProdToy hooks from this event
                 if (hooksNode[eventName] is JsonArray eventArray)
                 {
                     for (int i = eventArray.Count - 1; i >= 0; i--)
@@ -150,14 +134,12 @@ Where <current_folder_name> is the name of the current working directory (just t
             }
             else
             {
-                // Add ProdToy hook if not already present
                 if (hooksNode[eventName] is not JsonArray eventArray2)
                 {
                     eventArray2 = new JsonArray();
                     hooksNode[eventName] = eventArray2;
                 }
 
-                // Check if already exists
                 bool exists = false;
                 foreach (var ruleSet in eventArray2.AsArray())
                 {
@@ -182,7 +164,6 @@ Where <current_folder_name> is the name of the current working directory (just t
                 }
             }
 
-            // Remove hooks object if empty
             if (hooksNode.Count == 0)
                 ((JsonObject)root).Remove("hooks");
 
@@ -191,7 +172,55 @@ Where <current_folder_name> is the name of the current working directory (just t
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"UpdateClaudeHook failed: {ex.Message}");
+            Debug.WriteLine($"UpdateClaudeHook({settingsPath}) failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Remove ALL ProdToy hook entries from every event in every install's
+    /// settings.json. Called from <c>Uninstall()</c> to fully clean up.
+    /// </summary>
+    public static void RemoveAllProdToyHooks(IEnumerable<ClaudeInstall> installs)
+    {
+        foreach (var install in installs)
+        {
+            try
+            {
+                string settingsPath = install.SettingsFile;
+                if (!File.Exists(settingsPath)) continue;
+
+                string json = File.ReadAllText(settingsPath);
+                var root = JsonNode.Parse(json);
+                if (root?["hooks"] is not JsonObject hooksNode) continue;
+
+                var eventNames = hooksNode.Select(kv => kv.Key).ToList();
+                foreach (var eventName in eventNames)
+                {
+                    if (hooksNode[eventName] is not JsonArray eventArray) continue;
+                    for (int i = eventArray.Count - 1; i >= 0; i--)
+                    {
+                        if (eventArray[i]?["hooks"] is not JsonArray ha) continue;
+                        for (int j = ha.Count - 1; j >= 0; j--)
+                        {
+                            string? cmd = ha[j]?["command"]?.GetValue<string>();
+                            if (cmd != null && IsProdToyHookCommand(cmd))
+                                ha.RemoveAt(j);
+                        }
+                        if (ha.Count == 0) eventArray.RemoveAt(i);
+                    }
+                    if (eventArray.Count == 0) hooksNode.Remove(eventName);
+                }
+
+                if (hooksNode.Count == 0)
+                    ((JsonObject)root!).Remove("hooks");
+
+                var options = new JsonSerializerOptions { WriteIndented = true };
+                File.WriteAllText(settingsPath, root!.ToJsonString(options), Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"RemoveAllProdToyHooks({install.SettingsFile}) failed: {ex.Message}");
+            }
         }
     }
 

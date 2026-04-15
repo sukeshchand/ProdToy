@@ -6,7 +6,7 @@ namespace ProdToy;
 
 class DashboardForm : Form
 {
-    private readonly PopupTheme _theme;
+    private PopupTheme _theme;
     private readonly Panel _contentPanel;
     private const int Pad = 24;
     private const int TileWidth = 220;
@@ -52,6 +52,17 @@ class DashboardForm : Form
         BuildTiles();
     }
 
+    public void ApplyTheme(PopupTheme theme)
+    {
+        _theme = theme;
+        BackColor = theme.BgDark;
+        ForeColor = theme.TextPrimary;
+        var oldIcon = Icon;
+        Icon = Themes.CreateAppIcon(theme.Primary);
+        oldIcon?.Dispose();
+        BuildTiles();
+    }
+
     public void BuildTiles()
     {
         _contentPanel.Controls.Clear();
@@ -94,8 +105,7 @@ class DashboardForm : Form
             int col = 0;
             foreach (var item in items)
             {
-                string icon = GetIconForAction(item.Text);
-                y = AddTile(item.Text, "", icon, _theme.PrimaryDim, item.OnClick, col, y);
+                y = AddTile(item.Text, "", item.Icon, _theme.PrimaryDim, item.OnClick, col, y);
                 col++;
                 if (col >= TilesPerRow)
                 {
@@ -259,19 +269,6 @@ class DashboardForm : Form
         if (itemsInRow > 0)
             return y + TileHeight + TileGap;
         return y;
-    }
-
-    private static string GetIconForAction(string actionText)
-    {
-        return actionText.ToLowerInvariant() switch
-        {
-            "last notification" or "show last notification" => "\uD83D\uDCE8",
-            "take screenshot" => "\uD83D\uDCF7",
-            "edit last screenshot" => "\u270F\uFE0F",
-            "alarms..." or "alarms" => "\u23F0",
-            "alarm history" => "\uD83D\uDCCB",
-            _ => "\uD83D\uDD0C",
-        };
     }
 
     private static GraphicsPath GetRoundedRect(Rectangle rect, int radius)

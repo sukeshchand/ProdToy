@@ -2,11 +2,16 @@ using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace ProdToy;
+namespace ProdToy.Plugins.ClaudeIntegration;
 
-static class MarkdownRenderer
+/// <summary>
+/// Markdown → HTML renderer for the Claude chat popup. Plugin-owned copy of
+/// the host's MarkdownRenderer, with the chat-specific .user-block /
+/// .claude-block / .timestamp CSS still included here (the host's copy drops
+/// those rules in Phase 5).
+/// </summary>
+static class ChatMarkdownRenderer
 {
-    // Pre-compiled regexes to avoid recompilation on every line/call
     private static readonly Regex RxTableRow = new(@"^\|.+\|$", RegexOptions.Compiled);
     private static readonly Regex RxTableSep = new(@"^\|[\s\-:|]+\|$", RegexOptions.Compiled);
     private static readonly Regex RxListClose = new(@"^\s*[-*]\s", RegexOptions.Compiled);
@@ -34,7 +39,6 @@ static class MarkdownRenderer
         {
             var line = rawLine;
 
-            // Fenced code blocks (```)
             if (line.TrimStart().StartsWith("```"))
             {
                 if (inCodeBlock)
@@ -58,7 +62,6 @@ static class MarkdownRenderer
                 continue;
             }
 
-            // Table handling: lines that look like | col | col |
             bool isTableRow = RxTableRow.IsMatch(line.Trim());
             bool isSeparator = isTableRow && RxTableSep.IsMatch(line.Trim());
 
@@ -68,7 +71,6 @@ static class MarkdownRenderer
 
                 if (!inTable)
                 {
-                    // Start a new table — this first row is the header
                     inTable = true;
                     tableHeaderDone = false;
                     sb.AppendLine("<table><thead><tr>");
@@ -80,7 +82,6 @@ static class MarkdownRenderer
 
                 if (isSeparator)
                 {
-                    // Separator row (|---|---|) — skip it, start tbody
                     if (!tableHeaderDone)
                     {
                         sb.AppendLine("<tbody>");
@@ -89,7 +90,6 @@ static class MarkdownRenderer
                     continue;
                 }
 
-                // Regular data row
                 if (!tableHeaderDone)
                 {
                     sb.AppendLine("<tbody>");
@@ -102,7 +102,6 @@ static class MarkdownRenderer
                 continue;
             }
 
-            // Not a table row — close table if open
             if (inTable)
             {
                 sb.AppendLine("</tbody></table>");
@@ -110,14 +109,12 @@ static class MarkdownRenderer
                 tableHeaderDone = false;
             }
 
-            // Close list if non-list line
             if (inList && !RxListClose.IsMatch(line) && !RxOlClose.IsMatch(line) && line.Trim().Length > 0)
             {
                 sb.AppendLine("</ul>");
                 inList = false;
             }
 
-            // Empty line
             if (string.IsNullOrWhiteSpace(line))
             {
                 if (inList) { sb.AppendLine("</ul>"); inList = false; }
@@ -125,7 +122,6 @@ static class MarkdownRenderer
                 continue;
             }
 
-            // Horizontal rule (---, ***, ___)
             if (RxHrule.IsMatch(line.Trim()))
             {
                 if (inList) { sb.AppendLine("</ul>"); inList = false; }
@@ -133,7 +129,6 @@ static class MarkdownRenderer
                 continue;
             }
 
-            // Unordered list items (- or *)
             var ulMatch = RxUl.Match(line);
             if (ulMatch.Success)
             {
@@ -142,7 +137,6 @@ static class MarkdownRenderer
                 continue;
             }
 
-            // Ordered list items (1. 2. etc)
             var olMatch = RxOl.Match(line);
             if (olMatch.Success)
             {
@@ -151,7 +145,6 @@ static class MarkdownRenderer
                 continue;
             }
 
-            // Headings (## etc)
             var headingMatch = RxHeading.Match(line);
             if (headingMatch.Success)
             {
@@ -160,7 +153,6 @@ static class MarkdownRenderer
                 continue;
             }
 
-            // Regular paragraph
             sb.AppendLine($"<p>{InlineMarkdown(line)}</p>");
         }
 
@@ -174,19 +166,16 @@ static class MarkdownRenderer
     private static string InlineMarkdown(string text)
     {
         text = WebUtility.HtmlEncode(text);
-
         text = RxBold1.Replace(text, "<strong>$1</strong>");
         text = RxBold2.Replace(text, "<strong>$1</strong>");
         text = RxItalic1.Replace(text, "<em>$1</em>");
         text = RxItalic2.Replace(text, "<em>$1</em>");
         text = RxInlineCode.Replace(text, "<code class=\"inline\">$1</code>");
-
         return text;
     }
 
     private static string[] ParseTableCells(string line)
     {
-        // Trim outer pipes and split by |
         var trimmed = line.Trim();
         if (trimmed.StartsWith("|")) trimmed = trimmed[1..];
         if (trimmed.EndsWith("|")) trimmed = trimmed[..^1];
@@ -243,12 +232,8 @@ static class MarkdownRenderer
         margin: 4px 0 4px 8px;
         padding-left: 18px;
     }}
-    li {{
-        margin: 3px 0;
-    }}
-    li::marker {{
-        color: {accentColorHex};
-    }}
+    li {{ margin: 3px 0; }}
+    li::marker {{ color: {accentColorHex}; }}
     h1, h2, h3 {{
         color: {headingColorHex};
         margin: 8px 0 4px 0;
@@ -273,16 +258,65 @@ static class MarkdownRenderer
         font-weight: 600;
         font-size: 13px;
     }}
-    tr:nth-child(even) {{
-        background: rgba(56, 132, 244, 0.04);
-    }}
-    td {{
-        color: {textColorHex};
-    }}
+    tr:nth-child(even) {{ background: rgba(56, 132, 244, 0.04); }}
+    td {{ color: {textColorHex}; }}
     hr {{
         border: none;
         border-top: 1px solid {accentColorHex}33;
         margin: 10px 0;
+    }}
+    .user-block {{
+        background: {themePrimaryHex}10;
+        border: 1px solid {themePrimaryHex}25;
+        border-left: 4px solid {themePrimaryHex}77;
+        padding: 12px 16px;
+        margin: 0 0 10px 0;
+        border-radius: 0 8px 8px 0;
+    }}
+    .user-block .label {{
+        color: {themePrimaryHex};
+        font-weight: 700;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 6px;
+        opacity: 0.85;
+    }}
+    .user-block .label::before {{ content: '\25B8 '; }}
+    .user-block .text {{
+        color: {headingColorHex};
+        font-family: 'Cascadia Code', 'Consolas', monospace;
+        font-size: 14px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }}
+    .claude-block {{
+        background: transparent;
+        border-left: 3px solid {themePrimaryHex}33;
+        border-radius: 0;
+        padding: 8px 14px 8px 14px;
+        margin: 4px 0 0 0;
+    }}
+    .claude-label {{
+        color: {themePrimaryHex};
+        font-weight: 700;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 6px;
+    }}
+    .claude-label::before {{ content: '\2726 '; }}
+    .claude-content {{ }}
+    .timestamp {{
+        display: inline-block;
+        margin-left: 6px;
+        font-weight: 400;
+        font-size: 10px;
+        text-transform: none;
+        letter-spacing: 0;
+        opacity: 0.7;
+        color: {textColorHex};
     }}
     br {{ display: block; content: ''; margin: 4px 0; }}
     ::-webkit-scrollbar {{ width: 6px; }}

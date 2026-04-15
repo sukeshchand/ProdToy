@@ -1,3 +1,49 @@
+# ProdToy Claude Code status-line script.
+#
+# Runtime gates (evaluated in order; any fail → empty output, Claude shows
+# nothing for the status line):
+#   1. Plugin settings.json is readable.
+#   2. SlEnabled flag is true.
+#   3. HostRunning flag is true AND the named pipe is responding (crash probe).
+# If all three pass, render the status line from the event JSON on stdin and
+# the per-item visibility settings in status-line-config.json.
+
+$settingsPath = "{{SETTINGS_PATH}}"
+$pipeName     = "{{PIPE_NAME}}"
+
+# --- Plugin settings gate ---
+$pluginSettings = $null
+if (Test-Path -LiteralPath $settingsPath) {
+    try { $pluginSettings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json } catch { }
+}
+if ($null -eq $pluginSettings) { exit 0 }
+
+function Get-SettingBool($obj, $name, $default) {
+    if ($null -eq $obj) { return $default }
+    $prop = $obj.PSObject.Properties[$name]
+    if ($null -eq $prop) { return $default }
+    return [bool]$prop.Value
+}
+
+$slEnabled       = Get-SettingBool $pluginSettings "slEnabled" $true
+$hostRunningFlag = Get-SettingBool $pluginSettings "hostRunning" $false
+
+if (-not $slEnabled) { exit 0 }
+
+# --- Host-running check (crash-safe): flag says on + pipe is reachable. ---
+if (-not $hostRunningFlag) { exit 0 }
+try {
+    $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $pipeName, [System.IO.Pipes.PipeDirection]::Out)
+    try {
+        $pipe.Connect(150)
+        if (-not $pipe.IsConnected) { exit 0 }
+    } finally {
+        $pipe.Dispose()
+    }
+} catch {
+    exit 0
+}
+
 $ESC = [char]27
 $C_LABEL  = "$ESC[38;5;141m"   # soft purple — label keys
 $C_VALUE  = "$ESC[38;5;78m"    # medium green — values

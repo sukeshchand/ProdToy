@@ -15,7 +15,19 @@ class PopupAppContext : ApplicationContext
     private SettingsForm? _settingsForm;
     private PluginHostImpl? _pluginHost;
 
-    public PopupAppContext(string initialTitle, string initialMessage, string initialType, string sessionId = "", string cwd = "", bool startHidden = false)
+    /// <summary>Envelope-mode constructor: no initial popup shown. The host
+    /// boots normally, starts plugins, then dispatches the envelope through
+    /// the pipe router on the UI thread. Used when `--command` is the first
+    /// invocation of the day and there's no running host yet.</summary>
+    public PopupAppContext(string envelopeCommand, string? envelopePayloadJson)
+        : this("ProdToy", "", NotificationType.Info, startHidden: true)
+    {
+        if (string.IsNullOrEmpty(envelopeCommand)) return;
+        var json = JsonSerializer.Serialize(new { command = envelopeCommand, payload = envelopePayloadJson });
+        _popupForm.BeginInvoke(() => _pluginHost?.PipeRouter.TryDispatch(json));
+    }
+
+    public PopupAppContext(string initialTitle, string initialMessage, string initialType, bool startHidden = false)
     {
         var theme = Themes.LoadSaved();
         _appIcon = Themes.CreateAppIcon(theme.Primary);
@@ -29,7 +41,7 @@ class PopupAppContext : ApplicationContext
 
         _popupForm = new PopupForm(theme);
         if (!startHidden)
-            _popupForm.ShowPopup(initialTitle, initialMessage, initialType, sessionId, cwd);
+            _popupForm.ShowPopup(initialTitle, initialMessage, initialType);
 
         // Create dashboard
         _dashboardForm = new DashboardForm(theme);
@@ -147,8 +159,13 @@ class PopupAppContext : ApplicationContext
             _appIcon = Themes.CreateAppIcon(theme.Primary);
             _trayIcon.Icon = _appIcon;
 
-            // Apply to popup
+            // Apply to host forms
             _popupForm.ApplyTheme(theme);
+            _dashboardForm.ApplyTheme(theme);
+
+            // Broadcast to plugins (ChatPopupForm and any other IPluginPopup
+            // instances subscribe to IPluginHost.ThemeChanged).
+            _pluginHost?.RaiseThemeChanged(theme);
         };
 
         _settingsForm.GlobalFontChanged += fontFamily =>
@@ -156,29 +173,9 @@ class PopupAppContext : ApplicationContext
             _popupForm.ApplyGlobalFont(fontFamily);
         };
 
-        _popupForm.SnoozeChanged += UpdateTrayText;
-
-        _settingsForm.FormClosed += (_, _) =>
-        {
-            _popupForm.SnoozeChanged -= UpdateTrayText;
-            _settingsForm = null;
-        };
+        _settingsForm.FormClosed += (_, _) => _settingsForm = null;
 
         _settingsForm.Show();
-    }
-
-    private void UpdateTrayText()
-    {
-        if (_popupForm.IsSnoozed)
-        {
-            var remaining = _popupForm.SnoozeUntil - DateTime.Now;
-            int mins = Math.Max(1, (int)remaining.TotalMinutes);
-            _trayIcon.Text = $"ProdToy (snoozed {mins}m)";
-        }
-        else
-        {
-            _trayIcon.Text = "ProdToy";
-        }
     }
 
     private static void ApplyFontToForm(Form form, string fontFamily)
@@ -211,24 +208,6 @@ class PopupAppContext : ApplicationContext
             catch { }
             ApplyFontRecursive(child, fontFamily);
         }
-    }
-
-    private void ShowWindowsNotification(string title, string message, string type)
-    {
-        var icon = type switch
-        {
-            NotificationType.Error => ToolTipIcon.Error,
-            NotificationType.Success => ToolTipIcon.Info,
-            NotificationType.Pending => ToolTipIcon.Warning,
-            _ => ToolTipIcon.Info,
-        };
-
-        // Truncate message for balloon notification
-        string truncated = message.Length > 200 ? message[..197] + "..." : message;
-        // Strip markdown formatting
-        truncated = truncated.Replace("`", "").Replace("*", "").Replace("#", "");
-
-        _trayIcon.ShowBalloonTip(5000, title, truncated, icon);
     }
 
     private void ExitApp()
@@ -267,29 +246,11 @@ class PopupAppContext : ApplicationContext
 
                 if (!string.IsNullOrEmpty(json))
                 {
-                    PipeMessage? msg;
-                    try { msg = JsonSerializer.Deserialize<PipeMessage>(json); }
-                    catch { msg = null; }
-                    if (msg != null && AppSettings.Load().NotificationsEnabled)
-                    {
-                        var mode = AppSettings.Load().NotificationMode;
-                        var title = msg.title ?? "ProdToy";
-                        var message = msg.message ?? "Task completed.";
-                        var type = msg.type ?? NotificationType.Info;
-
-                        if (mode is "Popup" or "Popup + Windows")
-                        {
-                            _popupForm.Invoke(() => _popupForm.ShowPopup(
-                                title, message, type,
-                                msg.sessionId ?? "",
-                                msg.cwd ?? ""));
-                        }
-
-                        if (mode is "Windows" or "Popup + Windows")
-                        {
-                            _popupForm.Invoke(() => ShowWindowsNotification(title, message, type));
-                        }
-                    }
+                    // Phase 5: pipe is routed-only. Envelope shape is
+                    // { "command": "...", "payload": "..." }; the host
+                    // dispatches via PipeRouter. Plugins own the semantics
+                    // of each command name they register.
+                    _pluginHost?.PipeRouter.TryDispatch(json);
                 }
             }
             catch (OperationCanceledException) { break; }
@@ -301,5 +262,4 @@ class PopupAppContext : ApplicationContext
         }
     }
 
-    private record PipeMessage(string? title, string? message, string? type, string? sessionId, string? cwd);
 }

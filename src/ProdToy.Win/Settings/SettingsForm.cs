@@ -991,26 +991,6 @@ class SettingsForm : Form
                     pluginPanel.Size = new Size(tabInner, 56);
                 }
 
-                var enableToggle = new CheckBox
-                {
-                    Text = "Enabled",
-                    Font = new Font("Segoe UI", 8.5f),
-                    ForeColor = theme.TextSecondary,
-                    Checked = plugin.Enabled,
-                    AutoSize = true,
-                    Location = new Point(tabInner - 100, 14),
-                    BackColor = Color.Transparent,
-                };
-                var capturedPlugin = plugin;
-                enableToggle.CheckedChanged += (_, _) =>
-                {
-                    if (enableToggle.Checked)
-                        PluginManager.EnablePlugin(capturedPlugin.Id);
-                    else
-                        PluginManager.DisablePlugin(capturedPlugin.Id);
-                };
-                pluginPanel.Controls.Add(enableToggle);
-
                 pluginsPage.Controls.Add(pluginPanel);
                 py += pluginPanel.Height + 6;
             }

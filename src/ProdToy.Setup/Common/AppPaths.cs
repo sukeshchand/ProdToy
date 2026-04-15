@@ -20,8 +20,8 @@ static class AppPaths
     /// <summary>Plugin DLLs: Root\plugins\bin\</summary>
     public static string PluginsBinDir { get; } = Path.Combine(Root, "plugins", "bin");
 
-    /// <summary>Plugin data (preserved on uninstall): Root\plugins\data\</summary>
-    public static string PluginsDataDir { get; } = Path.Combine(Root, "plugins", "data");
+    /// <summary>Plugin data (preserved on uninstall): Root\data\plugins\</summary>
+    public static string PluginsDataDir { get; } = Path.Combine(Root, "data", "plugins");
 
     /// <summary>Claude hooks directory: %USERPROFILE%\.claude\hooks\</summary>
     public static string ClaudeHooksDir { get; } = Path.Combine(

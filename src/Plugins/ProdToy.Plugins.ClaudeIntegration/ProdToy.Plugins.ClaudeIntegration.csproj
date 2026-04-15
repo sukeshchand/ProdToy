@@ -15,10 +15,18 @@
       <Private>false</Private>
       <ExcludeAssets>runtime</ExcludeAssets>
     </ProjectReference>
+    <!-- WebView2 is bundled with the host at runtime, so we only need the
+         compile-time reference. Private=false + ExcludeAssets=runtime keeps
+         the DLLs out of the plugin package. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Scripts\context-bar.ps1" LogicalName="ProdToy.Plugins.ClaudeIntegration.Scripts.context-bar.ps1" />
+    <EmbeddedResource Include="Scripts\Show-ProdToy.ps1" LogicalName="ProdToy.Plugins.ClaudeIntegration.Scripts.Show-ProdToy.ps1" />
   </ItemGroup>
 
   <!-- Copy plugin DLL to user's plugins directory after build -->

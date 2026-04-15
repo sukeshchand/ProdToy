@@ -2,20 +2,47 @@ namespace ProdToy.Sdk;
 
 /// <summary>
 /// Lifecycle interface that every plugin must implement.
-/// The host calls methods in order: Initialize → Start → (running) → Stop → Dispose.
 ///
-/// Start() contract:
-///   - Verify all external integrations are properly configured (hooks, hotkeys, etc.)
-///   - Fix anything that's broken or out of sync with plugin settings
-///   - Register all resources the plugin needs (hotkeys, timers, hooks)
+/// <para>One-time lifecycle (install/uninstall):</para>
+/// <list type="bullet">
+///   <item><description><b>Install()</b> — called exactly once when the plugin is first installed
+///     (by the plugin store or as part of a fresh host install that bundles this plugin).
+///     This is the right place to write external-system state: hook-script files, settings
+///     entries in third-party config files, registry keys, scheduled tasks, desktop shortcuts.</description></item>
+///   <item><description><b>Uninstall()</b> — called exactly once when the plugin is being removed
+///     via the plugin store. Must undo everything Install() did. After Uninstall(), the system
+///     should be as if the plugin was never installed.</description></item>
+/// </list>
 ///
-/// Stop() contract:
-///   - Remove ALL external integrations this plugin installed (hooks, hotkeys, scripts, etc.)
-///   - Close all open forms and stop all background work
-///   - After Stop(), the system should be as if the plugin was never installed
+/// <para>Per-run lifecycle (start/stop):</para>
+/// <list type="bullet">
+///   <item><description><b>Initialize(context)</b> — called once after the plugin assembly is
+///     loaded. Wire up references only — do not show UI or start background work.</description></item>
+///   <item><description><b>Start()</b> — called after all plugins are initialized, and again on
+///     every host restart. Register hotkeys, start timers, open background watchers. Does NOT
+///     touch external-system state (that's Install's job).</description></item>
+///   <item><description><b>Stop()</b> — called during host shutdown. Unregister hotkeys, stop
+///     timers, close forms. Does NOT remove external-system state.</description></item>
+///   <item><description><b>Dispose()</b> — called after Stop() during host shutdown.</description></item>
+/// </list>
 /// </summary>
 public interface IPlugin : IDisposable
 {
+    /// <summary>
+    /// Called exactly once when the plugin is first installed on this machine.
+    /// Write external-system state here (hook scripts, third-party config entries,
+    /// registry keys). Idempotent — running twice should be safe, but the host
+    /// guarantees it only runs once per install.
+    /// </summary>
+    void Install(IPluginContext context);
+
+    /// <summary>
+    /// Called exactly once when the plugin is being removed via the plugin store.
+    /// Undo everything <see cref="Install"/> did. After Uninstall(), no trace of
+    /// this plugin should remain in any external system.
+    /// </summary>
+    void Uninstall(IPluginContext context);
+
     /// <summary>
     /// Called once after the plugin assembly is loaded.
     /// Wire up references only — do not show UI or start background work.
@@ -23,15 +50,15 @@ public interface IPlugin : IDisposable
     void Initialize(IPluginContext context);
 
     /// <summary>
-    /// Called after all plugins are initialized, and also when re-enabled at runtime.
-    /// Verify and fix all external integrations. Register hotkeys, start timers.
+    /// Called after all plugins are initialized, and on every host restart.
+    /// Register hotkeys, start timers, open background watchers. Does NOT
+    /// touch external-system state (that's Install's job).
     /// </summary>
     void Start();
 
     /// <summary>
-    /// Called during shutdown, disable, or uninstall.
-    /// MUST remove all external integrations: hooks, hotkeys, scripts, registry entries.
-    /// Close all forms, stop all timers. Leave no trace.
+    /// Called during host shutdown. Unregister hotkeys, stop timers, close
+    /// forms. Does NOT remove external-system state (that's Uninstall's job).
     /// </summary>
     void Stop();
 

@@ -16,26 +16,22 @@ static class AppPaths
     /// <summary>Installer exe location (used by Settings → Uninstall): Root\ProdToySetup.exe</summary>
     public static string SetupExePath { get; } = Path.Combine(Root, "ProdToySetup.exe");
 
-    /// <summary>Settings file: Root\settings.json</summary>
-    public static string SettingsFile { get; } = Path.Combine(Root, "settings.json");
+    /// <summary>Top-level persistent data directory: Root\data\.
+    /// Survives uninstall/reinstall. Host settings and plugin data both
+    /// live here.</summary>
+    public static string DataDir { get; } = Path.Combine(Root, "data");
 
-    /// <summary>History root: Root\history\</summary>
+    /// <summary>Host settings file: Root\data\settings.json</summary>
+    public static string SettingsFile { get; } = Path.Combine(Root, "data", "settings.json");
+
+    /// <summary>History root: Root\history\ (legacy; plugin data dirs preferred)</summary>
     public static string HistoryDir { get; } = Path.Combine(Root, "history");
-
-    /// <summary>Claude chat history: Root\history\claude\chats\</summary>
-    public static string ClaudeChatHistoryDir { get; } = Path.Combine(Root, "history", "claude", "chats");
 
     /// <summary>Screenshots directory: Root\screenshots\</summary>
     public static string ScreenshotsDir { get; } = Path.Combine(Root, "screenshots");
 
     /// <summary>Edit sessions: Root\screenshots\_edits\</summary>
     public static string ScreenshotsEditsDir { get; } = Path.Combine(Root, "screenshots", "_edits");
-
-    /// <summary>Scripts directory: Root\scripts\</summary>
-    public static string ScriptsDir { get; } = Path.Combine(Root, "scripts");
-
-    /// <summary>Claude status line script: Root\scripts\context-bar.ps1</summary>
-    public static string ClaudeStatusLineScript { get; } = Path.Combine(Root, "scripts", "context-bar.ps1");
 
     /// <summary>Alarms data: Root\alarms\</summary>
     public static string AlarmsDir { get; } = Path.Combine(Root, "alarms");
@@ -46,27 +42,19 @@ static class AppPaths
     /// <summary>Plugin DLLs: Root\plugins\bin\</summary>
     public static string PluginsBinDir { get; } = Path.Combine(Root, "plugins", "bin");
 
-    /// <summary>Plugin data (survives uninstall): Root\plugins\data\</summary>
-    public static string PluginsDataDir { get; } = Path.Combine(Root, "plugins", "data");
+    /// <summary>Plugin data (survives uninstall): Root\data\plugins\.
+    /// Separate top-level data\ tree so plugins\ only ever contains the
+    /// volatile bin\ directory (wiped on uninstall), and all persistent
+    /// state lives under data\.</summary>
+    public static string PluginsDataDir { get; } = Path.Combine(Root, "data", "plugins");
 
-    /// <summary>Plugins state file: Root\plugins\plugins-state.json</summary>
-    public static string PluginsStateFile { get; } = Path.Combine(Root, "plugins", "plugins-state.json");
+    /// <summary>Plugins state file: Root\data\plugins\plugins-state.json.
+    /// Enable/disable choices survive an uninstall and reinstall.</summary>
+    public static string PluginsStateFile { get; } = Path.Combine(Root, "data", "plugins", "plugins-state.json");
 
     /// <summary>Logs directory: Root\logs\</summary>
     public static string LogsDir { get; } = Path.Combine(Root, "logs");
 
     /// <summary>Temporary working dir for updates and other short-lived state: Root\tmp\</summary>
     public static string TmpDir { get; } = Path.Combine(Root, "tmp");
-
-    /// <summary>Claude hooks directory: %USERPROFILE%\.claude\hooks\</summary>
-    public static string ClaudeHooksDir { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "hooks");
-
-    /// <summary>Claude settings file: %USERPROFILE%\.claude\settings.json</summary>
-    public static string ClaudeSettingsFile { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
-
-    /// <summary>Claude CLAUDE.md: %USERPROFILE%\.claude\CLAUDE.md</summary>
-    public static string ClaudeMdFile { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "CLAUDE.md");
 }

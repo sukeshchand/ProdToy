@@ -10,111 +10,282 @@ namespace ProdToy.Plugins.ClaudeIntegration;
 public class ClaudeIntegrationPlugin : IPlugin
 {
     private IPluginContext _context = null!;
+    private IDisposable? _notifyHandlerReg;
+    private IDisposable? _saveQuestionHandlerReg;
+    private IDisposable? _popupReg;
+    private ChatHistory _chatHistory = null!;
+    private ChatPopupForm? _chatPopup;
+
+    public void Install(IPluginContext context)
+    {
+        ClaudePaths.Initialize(context.DataDirectory);
+
+        // 1. Scan the disk for Claude installations.
+        var installs = ClaudeInstallDiscovery.Scan();
+
+        // 2. Extract both PS1 scripts into the plugin data dir.
+        string pluginSettingsPath = Path.Combine(context.DataDirectory, "settings.json");
+        EnsureHookScriptFromResource(context);
+        ClaudeStatusLine.Install(installs, context.LoadSettings<ClaudePluginSettings>(), pluginSettingsPath);
+
+        // 3. Write hook entries into every discovered install's settings.json.
+        //    Entries are always written unconditionally — the PS1 scripts decide
+        //    at runtime whether to actually render anything based on plugin
+        //    settings (SlEnabled, NotificationsEnabled, HostRunning).
+        ClaudeHookManager.UpdateClaudeHook(installs, "Stop", null, enabled: true);
+        ClaudeHookManager.UpdateClaudeHook(installs, "Notification",
+            "permission_prompt|idle_prompt|elicitation_dialog", enabled: true);
+        ClaudeHookManager.UpdateClaudeHook(installs, "UserPromptSubmit", null, enabled: true);
+
+        // 4. Auto-title instruction in CLAUDE.md.
+        var settings = context.LoadSettings<ClaudePluginSettings>();
+        if (settings.AutoTitleToFolder)
+            ClaudeHookManager.SetAutoTitleHook(installs, enabled: true);
+
+        // 5. Remember the installs we registered into so Uninstall() can find them.
+        context.SaveSettings(settings with
+        {
+            ClaudeConfigDirs = installs.Select(i => i.ConfigDir).ToList(),
+        });
+
+        context.Log($"Claude integration installed into {installs.Count} Claude install(s)");
+    }
+
+    public void Uninstall(IPluginContext context)
+    {
+        ClaudePaths.Initialize(context.DataDirectory);
+
+        var settings = context.LoadSettings<ClaudePluginSettings>();
+        var installs = settings.ClaudeConfigDirs
+            .Where(Directory.Exists)
+            .Select(d => new ClaudeInstall(d))
+            .ToList();
+
+        // Fallback: if the stored list is empty (shouldn't happen after a
+        // proper Install(), but belt-and-suspenders), rescan now.
+        if (installs.Count == 0)
+            installs = ClaudeInstallDiscovery.Scan();
+
+        try
+        {
+            ClaudeHookManager.RemoveAllProdToyHooks(installs);
+            ClaudeHookManager.SetAutoTitleHook(installs, enabled: false);
+            ClaudeStatusLine.Uninstall(installs);
+        }
+        catch (Exception ex)
+        {
+            context.LogError("Failed to remove Claude integration", ex);
+        }
+
+        context.Log($"Claude integration removed from {installs.Count} Claude install(s)");
+    }
 
     public void Initialize(IPluginContext context)
     {
         _context = context;
-        ClaudePaths.Initialize(context.Host.AppRootPath);
+        ClaudePaths.Initialize(context.DataDirectory);
+
+        _chatHistory = new ChatHistory(
+            context.DataDirectory,
+            () => context.LoadSettings<ClaudePluginSettings>().HistoryEnabled);
+
+        // Phase 2+3: routed pipe handlers. claude.notify → write to plugin
+        // history, then show via generic notifications. claude.save-question
+        // → plugin-owned SaveQuestion.
+        _notifyHandlerReg = context.Host.RegisterPipeHandler("claude.notify", OnNotifyCommand);
+        _saveQuestionHandlerReg = context.Host.RegisterPipeHandler("claude.save-question", OnSaveQuestionCommand);
     }
+
+    private void OnNotifyCommand(PipeCommand cmd)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(cmd.PayloadJson)) return;
+            var payload = System.Text.Json.JsonSerializer.Deserialize<NotifyPayload>(cmd.PayloadJson);
+            if (payload == null) return;
+
+            string title = payload.title ?? "ProdToy";
+            string message = payload.message ?? "";
+            string type = payload.type ?? "info";
+            string sessionId = payload.sessionId ?? "";
+            string cwd = payload.cwd ?? "";
+
+            // Phase 3: write the response into plugin-owned history.
+            _chatHistory.SaveResponse(title, message, type, sessionId, cwd);
+
+            // Phase 8: snooze, notifications-enabled, and notification-mode
+            // gates now live entirely inside ChatPopupForm.ShowPopup(), which
+            // reads ClaudePluginSettings directly. No host-side facility.
+            EnsureChatPopup();
+            _chatPopup?.ShowPopup(title, message, type, sessionId, cwd);
+        }
+        catch (Exception ex)
+        {
+            _context.LogError("claude.notify handler failed", ex);
+        }
+    }
+
+    private void EnsureChatPopup()
+    {
+        if (_chatPopup != null) return;
+        _chatPopup = new ChatPopupForm(_context, _chatHistory);
+        _popupReg = _context.Host.RegisterPopup(_chatPopup);
+    }
+
+    private void OnSaveQuestionCommand(PipeCommand cmd)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(cmd.PayloadJson)) return;
+            var payload = System.Text.Json.JsonSerializer.Deserialize<SaveQuestionPayload>(cmd.PayloadJson);
+            if (payload == null) return;
+            _chatHistory.SaveQuestion(
+                payload.question ?? "",
+                payload.sessionId ?? "",
+                payload.cwd ?? "");
+        }
+        catch (Exception ex)
+        {
+            _context.LogError("claude.save-question handler failed", ex);
+        }
+    }
+
+    private sealed record NotifyPayload(string? title, string? message, string? type, string? sessionId, string? cwd);
+    private sealed record SaveQuestionPayload(string? question, string? sessionId, string? cwd);
 
     public void Start()
     {
-        var settings = _context.LoadSettings<ClaudePluginSettings>();
-
-        // Always re-apply everything — hooks/scripts may have been removed externally
-        // Ensure hook script exists on disk
-        EnsureHookScript();
-
-        // Force re-apply all Claude hooks (writes entries even if they already exist)
-        ClaudeHookManager.UpdateClaudeHook("Stop", null, settings.HookStopEnabled);
-        ClaudeHookManager.UpdateClaudeHook("Notification",
-            "permission_prompt|idle_prompt|elicitation_dialog", settings.HookNotificationEnabled);
-        ClaudeHookManager.UpdateClaudeHook("UserPromptSubmit", null, settings.HookUserPromptEnabled);
-
-        // Force re-apply status line (always re-enable + rewrite config if setting says enabled)
-        if (settings.SlEnabled)
+        // Start is per-run: we only touch in-process state here, not Claude
+        // settings.json or hook scripts on disk (that's Install()'s job, done
+        // once at plugin install time).
+        //
+        // Safety net: if the PS1 scripts were deleted between launches
+        // (manual cleanup, disk cleanup, etc.) re-extract them so Claude CLI
+        // still finds them when it fires a hook. Cheap — just a file write.
+        try
         {
-            ClaudeStatusLine.Enable();
-            ClaudeStatusLine.WriteConfig(settings);
+            if (!File.Exists(ClaudePaths.ShowProdToyScript))
+                EnsureHookScriptFromResource(_context);
         }
-        else
+        catch (Exception ex)
         {
-            if (ClaudeStatusLine.IsEnabled())
-                ClaudeStatusLine.Disable();
+            _context.LogError("Start: ShowProdToy script verify failed", ex);
         }
 
-        // Force re-apply auto-title
-        ClaudeHookManager.SetAutoTitleHook(settings.AutoTitleToFolder);
+        // Mark host as running so the PS1 scripts know they can dispatch.
+        SetHostRunning(true);
 
-        // Cleanup legacy hooks
-        ClaudeHookManager.CleanupOldHook();
+        // Force Claude to re-run the status-line script so the bar appears
+        // immediately on host start (HostRunning flipped from false → true,
+        // but Claude would otherwise keep showing its cached empty output).
+        BumpStatusLineNow();
 
-        _context.Log("Claude integration started — hooks, script, and status line verified");
+        _context.Log("Claude integration started");
     }
 
     public void Stop()
     {
-        // Remove ALL ProdToy hooks and integrations from Claude
-        try
-        {
-            // Remove hook entries from settings.json
-            ClaudeHookManager.UpdateClaudeHook("Stop", null, false);
-            ClaudeHookManager.UpdateClaudeHook("Notification",
-                "permission_prompt|idle_prompt|elicitation_dialog", false);
-            ClaudeHookManager.UpdateClaudeHook("UserPromptSubmit", null, false);
+        // Mark host as not running so PS1 scripts short-circuit without
+        // trying to talk to a dead pipe. Done first so a slow form dispose
+        // below doesn't leave the flag stale if Claude fires a hook mid-Stop.
+        SetHostRunning(false);
 
-            // Remove auto-title instruction from CLAUDE.md
-            ClaudeHookManager.SetAutoTitleHook(false);
+        // Force Claude to re-run the status-line script so the bar disappears
+        // immediately on host stop (HostRunning flipped true → false, but
+        // Claude would otherwise keep showing its cached populated output).
+        // Must happen while the process is still alive enough to write JSON.
+        BumpStatusLineNow();
 
-            // Disable and remove status line
-            if (ClaudeStatusLine.IsEnabled())
-                ClaudeStatusLine.Disable();
+        // Stop is per-run: only in-process teardown (pipe handlers, popup form).
+        // Claude settings.json and hook scripts are left alone — they were put
+        // there by Install() and are only removed by Uninstall().
+        _notifyHandlerReg?.Dispose();
+        _notifyHandlerReg = null;
+        _saveQuestionHandlerReg?.Dispose();
+        _saveQuestionHandlerReg = null;
+        _popupReg?.Dispose();
+        _popupReg = null;
 
-            // Delete the hook script file so Claude Code can't invoke ProdToy
-            DeleteHookScript();
+        try { _chatPopup?.Close(); } catch { }
+        try { _chatPopup?.Dispose(); } catch { }
+        _chatPopup = null;
 
-            _context.Log("Claude integration stopped — all hooks, script, and status line removed");
-        }
-        catch (Exception ex)
-        {
-            _context.LogError("Failed to clean up Claude hooks on stop", ex);
-        }
+        _context.Log("Claude integration stopped");
     }
 
-    private void EnsureHookScript()
+    private void SetHostRunning(bool running)
     {
         try
         {
-            _context.Host.EnsureHookScript();
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { HostRunning = running });
         }
         catch (Exception ex)
         {
-            _context.LogError("Failed to ensure hook script", ex);
+            _context.LogError($"Failed to write HostRunning={running}", ex);
         }
     }
 
-    private static void DeleteHookScript()
+    /// <summary>
+    /// Extracts <c>Show-ProdToy.ps1</c> from the embedded resource into the
+    /// plugin's scripts directory, substituting runtime placeholders with
+    /// concrete paths so the PS1 script is fully self-contained.
+    /// </summary>
+    private static void EnsureHookScriptFromResource(IPluginContext context)
     {
-        try
-        {
-            string scriptPath = Path.Combine(ClaudePaths.ClaudeHooksDir, "Show-ProdToy.ps1");
-            if (File.Exists(scriptPath))
-                File.Delete(scriptPath);
-        }
-        catch { }
+        Directory.CreateDirectory(ClaudePaths.ScriptsDir);
+
+        var assembly = typeof(ClaudeIntegrationPlugin).Assembly;
+        using var stream = assembly.GetManifestResourceStream(
+            "ProdToy.Plugins.ClaudeIntegration.Scripts.Show-ProdToy.ps1");
+        if (stream == null)
+            throw new InvalidOperationException("Embedded Show-ProdToy.ps1 not found.");
+        using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+        string template = reader.ReadToEnd();
+
+        string exePath = Path.Combine(context.Host.AppRootPath, "ProdToy.exe");
+        string settingsPath = Path.Combine(context.DataDirectory, "settings.json");
+
+        string content = template
+            .Replace("{{EXE_PATH}}", exePath)
+            .Replace("{{SETTINGS_PATH}}", settingsPath)
+            .Replace("{{PIPE_NAME}}", "ProdToy_Pipe");
+
+        File.WriteAllText(ClaudePaths.ShowProdToyScript, content, System.Text.Encoding.UTF8);
     }
 
     public void Dispose() { }
 
     public IReadOnlyList<MenuContribution> GetMenuItems() =>
     [
-        new("Show Last Notification", () => _context.Host.ShowNotificationPopup(), Priority: 50),
+        new("Show Last Notification", ShowLastNotification, Priority: 50, Icon: "\uD83D\uDCE8"),
     ];
 
     public IReadOnlyList<MenuContribution> GetDashboardItems() =>
     [
-        new("Last Notification", () => _context.Host.ShowNotificationPopup(), Priority: 50),
+        new("Last Notification", ShowLastNotification, Priority: 50, Icon: "\uD83D\uDCE8"),
     ];
+
+    private void ShowLastNotification()
+    {
+        // Phase 8: the plugin owns its popup entirely. There's no generic
+        // notification facility to fall back on — just bring the chat
+        // popup forward (creating it lazily if needed) and show the last
+        // entry from plugin-owned history.
+        _context.Host.InvokeOnUI(() =>
+        {
+            EnsureChatPopup();
+            var latest = _chatHistory.GetLatest();
+            if (latest != null)
+            {
+                _chatPopup!.ShowPopup(latest.Title, latest.Message, latest.Type, latest.SessionId, latest.Cwd);
+            }
+            else
+            {
+                _chatPopup!.BringToForeground();
+            }
+        });
+    }
 
     public SettingsPageContribution? GetSettingsPage() =>
         new("Claude CLI", () => BuildSettingsPanel(), TabOrder: 200);
@@ -123,7 +294,6 @@ public class ClaudeIntegrationPlugin : IPlugin
     {
         var theme = _context.Host.CurrentTheme;
         var settings = _context.LoadSettings<ClaudePluginSettings>();
-        var hostSettings = HostSettings.Load(_context.Host.AppRootPath);
 
         var panel = new Panel
         {
@@ -136,20 +306,87 @@ public class ClaudeIntegrationPlugin : IPlugin
         int y = pad;
         int contentWidth = 700;
 
-        // --- NOTIFICATIONS section ---
-        var notifSectionLabel = new Label
+        // Local helper: thin horizontal separator between sections.
+        int AddSeparator(int yPos)
         {
-            Text = "NOTIFICATIONS",
+            var sep = new Panel
+            {
+                BackColor = theme.Border,
+                Size = new Size(contentWidth - pad, 1),
+                Location = new Point(pad, yPos + 6),
+            };
+            panel.Controls.Add(sep);
+            return yPos + 18;
+        }
+
+        // --- CLAUDE INSTALLATIONS section ---
+        var installsLabel = new Label
+        {
+            Text = "CLAUDE INSTALLATIONS",
             Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
             ForeColor = theme.Primary,
             AutoSize = true,
             Location = new Point(pad, y),
             BackColor = Color.Transparent,
         };
-        panel.Controls.Add(notifSectionLabel);
+        panel.Controls.Add(installsLabel);
+        y += 22;
+
+        var installsList = new Label
+        {
+            Text = BuildInstallsListText(settings.ClaudeConfigDirs),
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = theme.TextSecondary,
+            AutoSize = false,
+            Size = new Size(contentWidth - 120, 52),
+            Location = new Point(pad + 8, y),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(installsList);
+
+        var rescanButton = new Button
+        {
+            Text = "Rescan",
+            Font = new Font("Segoe UI", 8.5f),
+            Size = new Size(90, 26),
+            Location = new Point(contentWidth - 104, y),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.PrimaryDim,
+            ForeColor = theme.TextPrimary,
+            Cursor = Cursors.Hand,
+        };
+        rescanButton.FlatAppearance.BorderSize = 0;
+        rescanButton.Click += (_, _) =>
+        {
+            var found = ClaudeInstallDiscovery.Scan();
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { ClaudeConfigDirs = found.Select(i => i.ConfigDir).ToList() });
+
+            // Re-apply installation into any newly discovered installs so
+            // their settings.json picks up the hook/statusLine entries.
+            try { Install(_context); } catch (Exception ex) { _context.LogError("Rescan install failed", ex); }
+
+            installsList.Text = BuildInstallsListText(found.Select(i => i.ConfigDir).ToList());
+        };
+        panel.Controls.Add(rescanButton);
+        y += 60;
+
+        y = AddSeparator(y);
+
+        // --- HOOKS AND NOTIFICATIONS section ---
+        var hooksNotifLabel = new Label
+        {
+            Text = "HOOKS AND NOTIFICATIONS",
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            ForeColor = theme.Primary,
+            AutoSize = true,
+            Location = new Point(pad, y),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(hooksNotifLabel);
         y += 26;
 
-        bool notifEnabled = hostSettings.NotificationsEnabled;
+        bool notifEnabled = settings.NotificationsEnabled;
         var notifSubControls = new List<Control>();
 
         var notifEnabledCheck = new CheckBox
@@ -193,11 +430,11 @@ public class ClaudeIntegrationPlugin : IPlugin
         };
         foreach (var mode in notifModes)
             notifModeCombo.Items.Add(mode);
-        notifModeCombo.SelectedItem = notifModes.Contains(hostSettings.NotificationMode) ? hostSettings.NotificationMode : "Popup";
+        notifModeCombo.SelectedItem = notifModes.Contains(settings.NotificationMode) ? settings.NotificationMode : "Popup";
         notifModeCombo.SelectedIndexChanged += (_, _) =>
         {
-            var hs = HostSettings.Load(_context.Host.AppRootPath);
-            HostSettings.Save(_context.Host.AppRootPath, hs with { NotificationMode = notifModeCombo.SelectedItem?.ToString() ?? "Popup" });
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { NotificationMode = notifModeCombo.SelectedItem?.ToString() ?? "Popup" });
         };
         panel.Controls.Add(notifModeCombo);
         notifSubControls.Add(notifModeCombo);
@@ -209,7 +446,7 @@ public class ClaudeIntegrationPlugin : IPlugin
             Font = new Font("Segoe UI", 9.5f),
             ForeColor = theme.TextPrimary,
             BackColor = Color.Transparent,
-            Checked = hostSettings.ShowQuotes,
+            Checked = settings.ShowQuotes,
             Enabled = notifEnabled,
             AutoSize = true,
             Location = new Point(pad + 8, y),
@@ -217,19 +454,19 @@ public class ClaudeIntegrationPlugin : IPlugin
         };
         quotesCheck.CheckedChanged += (_, _) =>
         {
-            var hs = HostSettings.Load(_context.Host.AppRootPath);
-            HostSettings.Save(_context.Host.AppRootPath, hs with { ShowQuotes = quotesCheck.Checked });
-            _context.Host.NotifyShowQuotesChanged(quotesCheck.Checked);
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { ShowQuotes = quotesCheck.Checked });
+            _chatPopup?.SetShowQuotes(quotesCheck.Checked);
         };
         panel.Controls.Add(quotesCheck);
         notifSubControls.Add(quotesCheck);
         y += 28;
 
-        bool isSnoozed = _context.Host.IsSnoozed;
+        bool isSnoozed = settings.SnoozeUntil > DateTime.Now;
         var snoozeCheck = new CheckBox
         {
             Text = isSnoozed
-                ? $"Snoozed ({Math.Max(1, (int)(_context.Host.SnoozeUntil - DateTime.Now).TotalMinutes)} min left)"
+                ? $"Snoozed ({Math.Max(1, (int)(settings.SnoozeUntil - DateTime.Now).TotalMinutes)} min left)"
                 : "Snooze notifications (30 min)",
             Font = new Font("Segoe UI", 9.5f),
             ForeColor = theme.TextPrimary,
@@ -242,63 +479,29 @@ public class ClaudeIntegrationPlugin : IPlugin
         };
         snoozeCheck.CheckedChanged += (_, _) =>
         {
-            if (snoozeCheck.Checked)
-                _context.Host.Snooze();
-            else
-                _context.Host.Unsnooze();
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            var until = snoozeCheck.Checked ? DateTime.Now.AddMinutes(30) : DateTime.MinValue;
+            _context.SaveSettings(s with { SnoozeUntil = until });
         };
         panel.Controls.Add(snoozeCheck);
         notifSubControls.Add(snoozeCheck);
 
         notifEnabledCheck.CheckedChanged += (_, _) =>
         {
-            var hs = HostSettings.Load(_context.Host.AppRootPath);
-            HostSettings.Save(_context.Host.AppRootPath, hs with { NotificationsEnabled = notifEnabledCheck.Checked });
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { NotificationsEnabled = notifEnabledCheck.Checked });
             foreach (var ctrl in notifSubControls)
                 ctrl.Enabled = notifEnabledCheck.Checked;
         };
-        y += 28;
-
-        // --- CHATS section ---
-        var historyCheck = new CheckBox
-        {
-            Text = "Save chat history",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = theme.TextPrimary,
-            BackColor = Color.Transparent,
-            Checked = hostSettings.HistoryEnabled,
-            AutoSize = true,
-            Location = new Point(pad + 8, y),
-            Cursor = Cursors.Hand,
-        };
-        historyCheck.CheckedChanged += (_, _) =>
-        {
-            var hs = HostSettings.Load(_context.Host.AppRootPath);
-            HostSettings.Save(_context.Host.AppRootPath, hs with { HistoryEnabled = historyCheck.Checked });
-            _context.Host.NotifyHistoryEnabledChanged(historyCheck.Checked);
-        };
-        panel.Controls.Add(historyCheck);
         y += 34;
 
-        // --- HOOKS section ---
-        var hooksLabel = new Label
-        {
-            Text = "HOOKS",
-            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
-            ForeColor = theme.Primary,
-            AutoSize = true,
-            Location = new Point(pad, y),
-            BackColor = Color.Transparent,
-        };
-        panel.Controls.Add(hooksLabel);
-        y += 26;
-
+        // Hook toggles just update plugin settings. Show-ProdToy.ps1 reads
+        // these flags at runtime and short-circuits if the event is disabled.
         y = AddHookCheckbox(panel, theme, "On Stop — notify when Claude finishes a response",
             settings.HookStopEnabled, pad, y, (checked_) =>
             {
                 var s = _context.LoadSettings<ClaudePluginSettings>();
                 _context.SaveSettings(s with { HookStopEnabled = checked_ });
-                ClaudeHookManager.UpdateClaudeHook("Stop", null, checked_);
             });
 
         y = AddHookCheckbox(panel, theme, "On Notification — notify on permission/idle/question prompts",
@@ -306,8 +509,6 @@ public class ClaudeIntegrationPlugin : IPlugin
             {
                 var s = _context.LoadSettings<ClaudePluginSettings>();
                 _context.SaveSettings(s with { HookNotificationEnabled = checked_ });
-                ClaudeHookManager.UpdateClaudeHook("Notification",
-                    "permission_prompt|idle_prompt|elicitation_dialog", checked_);
             });
 
         y = AddHookCheckbox(panel, theme, "On User Prompt — save question when you send a message",
@@ -315,10 +516,33 @@ public class ClaudeIntegrationPlugin : IPlugin
             {
                 var s = _context.LoadSettings<ClaudePluginSettings>();
                 _context.SaveSettings(s with { HookUserPromptEnabled = checked_ });
-                ClaudeHookManager.UpdateClaudeHook("UserPromptSubmit", null, checked_);
             });
 
         y += 10;
+
+        // --- CHATS section ---
+        // Phase 5: HistoryEnabled is plugin-owned. ChatHistory reads this
+        // flag as its gate; we no longer touch host settings.json for it.
+        var historyCheck = new CheckBox
+        {
+            Text = "Save chat history",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            BackColor = Color.Transparent,
+            Checked = _context.LoadSettings<ClaudePluginSettings>().HistoryEnabled,
+            AutoSize = true,
+            Location = new Point(pad + 8, y),
+            Cursor = Cursors.Hand,
+        };
+        historyCheck.CheckedChanged += (_, _) =>
+        {
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { HistoryEnabled = historyCheck.Checked });
+        };
+        panel.Controls.Add(historyCheck);
+        y += 34;
+
+        y = AddSeparator(y);
 
         // --- STATUS LINE section ---
         var slSectionLabel = new Label
@@ -364,18 +588,17 @@ public class ClaudeIntegrationPlugin : IPlugin
                 var s = _context.LoadSettings<ClaudePluginSettings>();
                 _context.SaveSettings(s with { SlEnabled = slEnableCheck.Checked });
 
-                if (slEnableCheck.Checked)
-                {
-                    ClaudeStatusLine.Enable();
-                    slStatus.ForeColor = theme.SuccessColor;
-                    slStatus.Text = "Enabled — restart Claude Code to apply";
-                }
-                else
-                {
-                    ClaudeStatusLine.Disable();
-                    slStatus.ForeColor = theme.TextSecondary;
-                    slStatus.Text = "Disabled — restart Claude Code to apply";
-                }
+                // context-bar.ps1 reads SlEnabled on every render, so the
+                // behavior change is already live. But Claude caches the
+                // status-line script output between events, so we bump the
+                // script filename to force it to re-run on the next tick.
+                BumpStatusLineNow();
+
+                slStatus.ForeColor = slEnableCheck.Checked ? theme.SuccessColor : theme.TextSecondary;
+                slStatus.Text = slEnableCheck.Checked
+                    ? "Enabled"
+                    : "Disabled";
+
                 foreach (var cb in slCheckboxes)
                     cb.Enabled = slEnableCheck.Checked;
             }
@@ -440,11 +663,47 @@ public class ClaudeIntegrationPlugin : IPlugin
                 };
                 _context.SaveSettings(s);
                 ClaudeStatusLine.WriteConfig(s);
+
+                // Force Claude to re-run the status-line script next tick.
+                BumpStatusLineNow();
             };
             panel.Controls.Add(cb);
         }
 
         return panel;
+    }
+
+    /// <summary>
+    /// Force every discovered Claude install to re-run the status-line script
+    /// on the next render tick. Claude caches script output between events, so
+    /// just changing plugin settings isn't visible immediately — bumping the
+    /// script filename invalidates the cache.
+    /// </summary>
+    private void BumpStatusLineNow()
+    {
+        try
+        {
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            var installs = s.ClaudeConfigDirs
+                .Where(Directory.Exists)
+                .Select(d => new ClaudeInstall(d))
+                .ToList();
+            if (installs.Count == 0) return;
+
+            string pluginSettingsPath = Path.Combine(_context.DataDirectory, "settings.json");
+            ClaudeStatusLine.BumpScriptVersion(installs, pluginSettingsPath);
+        }
+        catch (Exception ex)
+        {
+            _context.LogError("BumpStatusLineNow failed", ex);
+        }
+    }
+
+    private static string BuildInstallsListText(List<string> dirs)
+    {
+        if (dirs == null || dirs.Count == 0)
+            return "No Claude installations detected. Click Rescan to search.";
+        return string.Join("\n", dirs.Select(d => "• " + d));
     }
 
     private static int AddHookCheckbox(Panel panel, PluginTheme theme, string text,

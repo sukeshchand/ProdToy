@@ -1,12 +1,20 @@
 using System.Drawing;
+using ProdToy.Sdk;
 
-namespace ProdToy;
+namespace ProdToy.Plugins.ClaudeIntegration;
 
 enum FilterMode { None, Cwd, Session }
 
+/// <summary>
+/// Plugin-owned Filter History dialog. Moved from the host; rewritten to
+/// take the plugin's <see cref="ChatHistory"/> instance rather than the
+/// host's static <c>ResponseHistory</c>, and <see cref="PluginTheme"/>
+/// rather than the host's internal theme record.
+/// </summary>
 class FilterDialog : Form
 {
-    private readonly PopupTheme _theme;
+    private readonly PluginTheme _theme;
+    private readonly ChatHistory _history;
     private readonly RadioButton _rbCwd;
     private readonly RadioButton _rbSession;
     private readonly ListBox _listBox;
@@ -25,9 +33,10 @@ class FilterDialog : Form
     public string SelectedValue { get; private set; } = "";
     public DateTime SelectedDate { get; private set; }
 
-    public FilterDialog(PopupTheme theme, FilterMode currentMode, string currentValue, DateTime currentDate)
+    public FilterDialog(PluginTheme theme, ChatHistory history, FilterMode currentMode, string currentValue, DateTime currentDate)
     {
         _theme = theme;
+        _history = history;
         _selectedDate = currentDate.Date;
         SelectedDate = _selectedDate;
         Text = "Filter History";
@@ -41,7 +50,6 @@ class FilterDialog : Form
         ClientSize = new Size(380, 420);
         Font = new Font("Segoe UI", 10f);
 
-        // --- Date section ---
         var dateLabel = new Label
         {
             Text = "Date:",
@@ -96,7 +104,6 @@ class FilterDialog : Form
         _nextDayButton.FlatAppearance.MouseOverBackColor = theme.Primary;
         _nextDayButton.Click += (_, _) => NavigateDate(+1);
 
-        // --- Group by section ---
         var groupLabel = new Label
         {
             Text = "Group by:",
@@ -196,8 +203,7 @@ class FilterDialog : Form
             groupLabel, _rbCwd, _rbSession, listLabel, _listBox, _okButton, _clearButton
         });
 
-        // Load available dates and data for selected date
-        _availableDates = ResponseHistory.GetAvailableDates();
+        _availableDates = _history.GetAvailableDates();
         SetMinDate();
         LoadDataForDate();
         UpdateDayNavButtons();
@@ -228,9 +234,9 @@ class FilterDialog : Form
 
     private void LoadDataForDate()
     {
-        ResponseHistory.Invalidate();
-        _cwdValues = ResponseHistory.GetDistinctCwd(_selectedDate);
-        _sessionValues = ResponseHistory.GetDistinctSessions(_selectedDate);
+        _history.Invalidate();
+        _cwdValues = _history.GetDistinctCwd(_selectedDate);
+        _sessionValues = _history.GetDistinctSessions(_selectedDate);
     }
 
     private void OnDateChanged(DateTime newDate)
@@ -241,7 +247,6 @@ class FilterDialog : Form
         LoadDataForDate();
         UpdateDayNavButtons();
 
-        // Re-populate the list with data from the new date
         if (_rbCwd.Checked)
             PopulateList(FilterMode.Cwd);
         else if (_rbSession.Checked)
@@ -253,9 +258,7 @@ class FilterDialog : Form
         var newDate = _selectedDate.AddDays(direction);
         if (newDate > DateTime.Today) return;
         if (_availableDates.Count > 0 && newDate < _availableDates[0]) return;
-
         _datePicker.Value = newDate;
-        // ValueChanged event will trigger OnDateChanged
     }
 
     private void UpdateDayNavButtons()
@@ -274,7 +277,7 @@ class FilterDialog : Form
             {
                 string folder = Path.GetFileName(cwd.TrimEnd('/', '\\'));
                 if (string.IsNullOrEmpty(folder)) folder = cwd;
-                int count = ResponseHistory.FilterByCwd(_selectedDate, cwd).Count;
+                int count = _history.FilterByCwd(_selectedDate, cwd).Count;
                 _listBox.Items.Add(new FilterItem(folder, cwd, count));
             }
         }
@@ -285,12 +288,11 @@ class FilterDialog : Form
                 string shortId = sessionId.Length > 8 ? sessionId[..8] : sessionId;
                 string folder = string.IsNullOrEmpty(cwd) ? "" : Path.GetFileName(cwd.TrimEnd('/', '\\'));
                 string display = string.IsNullOrEmpty(folder) ? shortId : $"{shortId} ({folder})";
-                int count = ResponseHistory.FilterBySession(_selectedDate, sessionId).Count;
+                int count = _history.FilterBySession(_selectedDate, sessionId).Count;
                 _listBox.Items.Add(new FilterItem(display, sessionId, count));
             }
         }
 
-        // Try to re-select the current value
         if (selectValue != null)
         {
             for (int i = 0; i < _listBox.Items.Count; i++)

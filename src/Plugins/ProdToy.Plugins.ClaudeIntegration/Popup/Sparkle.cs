@@ -1,6 +1,6 @@
 using System.Drawing;
 
-namespace ProdToy;
+namespace ProdToy.Plugins.ClaudeIntegration;
 
 class Sparkle
 {

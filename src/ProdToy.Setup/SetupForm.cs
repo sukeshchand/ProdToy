@@ -17,6 +17,8 @@ class SetupForm : Form
     private readonly RoundedButton _cancelButton;
     private readonly Label _statusLabel;
     private readonly TextBox _logBox;
+    private readonly CheckBox? _desktopShortcutCheck;
+    private readonly CheckBox? _startMenuShortcutCheck;
     private readonly bool _repairMode;
 
     public SetupForm()
@@ -183,6 +185,39 @@ class SetupForm : Form
         };
         infoY += 24;
 
+        // Only offer the shortcut options on a fresh install. On repair/update
+        // we leave any existing shortcuts alone.
+        if (!_repairMode)
+        {
+            _desktopShortcutCheck = new CheckBox
+            {
+                Text = "Create a desktop shortcut",
+                Font = new Font("Segoe UI", 9.5f),
+                ForeColor = _theme.TextPrimary,
+                BackColor = Color.Transparent,
+                AutoSize = true,
+                Checked = true,
+                Location = new Point(28, infoY),
+                Cursor = Cursors.Hand,
+            };
+            Controls.Add(_desktopShortcutCheck);
+            infoY += 26;
+
+            _startMenuShortcutCheck = new CheckBox
+            {
+                Text = "Create a Start Menu shortcut",
+                Font = new Font("Segoe UI", 9.5f),
+                ForeColor = _theme.TextPrimary,
+                BackColor = Color.Transparent,
+                AutoSize = true,
+                Checked = true,
+                Location = new Point(28, infoY),
+                Cursor = Cursors.Hand,
+            };
+            Controls.Add(_startMenuShortcutCheck);
+            infoY += 30;
+        }
+
         int formWidth = 540;
 
         _logBox = new TextBox
@@ -276,7 +311,12 @@ class SetupForm : Form
             string bundleDir = await BootstrapDownloader.EnsureBundleAsync(AppendLog);
 
             // Phase 2: run the actual installer against the resolved bundle.
-            var result = await Task.Run(() => Installer.Run(bundleDir, AppendLog));
+            bool createDesktopShortcut = _desktopShortcutCheck?.Checked ?? false;
+            bool createStartMenuShortcut = _startMenuShortcutCheck?.Checked ?? false;
+            var result = await Task.Run(() => Installer.Run(
+                bundleDir, AppendLog,
+                createDesktopShortcut: createDesktopShortcut,
+                createStartMenuShortcut: createStartMenuShortcut));
 
             if (result.Success)
             {

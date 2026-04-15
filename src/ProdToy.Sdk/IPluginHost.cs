@@ -38,27 +38,18 @@ public interface IPluginHost
     /// <summary>Register a triple-Ctrl-tap callback. Returns a disposable handle.</summary>
     IDisposable? RegisterTripleCtrl(Action callback);
 
-    /// <summary>Show the notification popup window (bring to foreground).</summary>
-    void ShowNotificationPopup();
+    /// <summary>Register a handler for pipe commands routed to this plugin. The host
+    /// inspects the "command" field of incoming pipe payloads and dispatches to the
+    /// matching handler on the UI thread. Returns a disposable that unregisters on dispose.</summary>
+    IDisposable RegisterPipeHandler(string command, PipeCommandHandler handler);
 
-    /// <summary>Notify the host that show-quotes setting changed.</summary>
-    void NotifyShowQuotesChanged(bool show);
+    /// <summary>Register a plugin-owned popup window so the host can route
+    /// lifecycle events (theme change, exit) into it. Returns a disposable
+    /// that unregisters on dispose.</summary>
+    IDisposable RegisterPopup(IPluginPopup popup);
 
-    /// <summary>Notify the host that history-enabled setting changed.</summary>
-    void NotifyHistoryEnabledChanged(bool enabled);
-
-    /// <summary>Snooze notifications for 30 minutes.</summary>
-    void Snooze();
-
-    /// <summary>Cancel active snooze.</summary>
-    void Unsnooze();
-
-    /// <summary>Whether notifications are currently snoozed.</summary>
-    bool IsSnoozed { get; }
-
-    /// <summary>When the current snooze expires.</summary>
-    DateTime SnoozeUntil { get; }
-
-    /// <summary>Write/regenerate the Claude Code hook script to disk. Called by plugins that need it.</summary>
-    void EnsureHookScript();
+    /// <summary>Resolved path the plugin can use as a WebView2 user-data folder.
+    /// Each plugin gets a sibling folder under the host's shared temp root so
+    /// multiple WebView2 controls in the same process don't collide.</summary>
+    string GetWebView2UserDataFolder(string subDirName);
 }

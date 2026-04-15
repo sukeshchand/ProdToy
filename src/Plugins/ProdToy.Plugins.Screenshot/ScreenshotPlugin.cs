@@ -16,7 +16,17 @@ public class ScreenshotPlugin : IPlugin
     // Static accessor for theme (used by ScreenshotEditorForm internally)
     private static IPluginHost? _host;
     internal static PluginTheme GetTheme() => _host?.CurrentTheme ?? new PluginTheme(
-        "Default", default, default, default, default, default, default, default, default, default, default);
+        "Default", default, default, default, default, default, default, default, default, default, default, default, default);
+
+    public void Install(IPluginContext context)
+    {
+        // No external-system state to install.
+    }
+
+    public void Uninstall(IPluginContext context)
+    {
+        // No external-system state to remove.
+    }
 
     public void Initialize(IPluginContext context)
     {
@@ -65,14 +75,14 @@ public class ScreenshotPlugin : IPlugin
 
     public IReadOnlyList<MenuContribution> GetMenuItems() =>
     [
-        new("Take Screenshot", TakeScreenshot, Priority: 100),
-        new("Edit Last Screenshot", EditLastScreenshot, Priority: 101),
+        new("Take Screenshot", TakeScreenshot, Priority: 100, Icon: "\uD83D\uDCF7"),
+        new("Edit Last Screenshot", EditLastScreenshot, Priority: 101, Icon: "\u270F\uFE0F"),
     ];
 
     public IReadOnlyList<MenuContribution> GetDashboardItems() =>
     [
-        new("Take Screenshot", TakeScreenshot, Priority: 100),
-        new("Edit Last Screenshot", EditLastScreenshot, Priority: 101),
+        new("Take Screenshot", TakeScreenshot, Priority: 100, Icon: "\uD83D\uDCF7"),
+        new("Edit Last Screenshot", EditLastScreenshot, Priority: 101, Icon: "\u270F\uFE0F"),
     ];
 
     public SettingsPageContribution? GetSettingsPage() =>

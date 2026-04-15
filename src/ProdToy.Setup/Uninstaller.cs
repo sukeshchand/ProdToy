@@ -13,7 +13,7 @@ static class Uninstaller
     /// Removes hook script, settings entries, registry entries. Writes a cleanup
     /// batch script that the caller must launch before exiting — the batch waits
     /// for this process to terminate, then deletes the exe files.
-    /// Plugin DATA under plugins/data/ is preserved.
+    /// Plugin DATA under data/plugins/ is preserved.
     /// </summary>
     public static UninstallResult Run(out string? cleanupBatPath)
     {
@@ -75,6 +75,20 @@ static class Uninstaller
                 log.AppendLine($"Warning: could not remove startup entry: {ex.Message}");
             }
 
+            // Step 3c: Remove desktop and Start Menu shortcuts (if present).
+            TryDeleteShortcut(
+                Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                    "ProdToy.lnk"),
+                "desktop shortcut",
+                log);
+            TryDeleteShortcut(
+                Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "Microsoft", "Windows", "Start Menu", "Programs", "ProdToy.lnk"),
+                "Start Menu shortcut",
+                log);
+
             // Step 4: Build cleanup batch that deletes exe files after this process exits.
             var batLines = new StringBuilder();
             batLines.AppendLine("@echo off");
@@ -96,8 +110,11 @@ static class Uninstaller
                 dirsToClean.Add(Path.GetDirectoryName(exe)!);
             }
 
-            // Remove plugin DLL dir (bin) so stale DLLs don't linger; data survives.
-            batLines.AppendLine($"rmdir /s /q \"{AppPaths.PluginsBinDir}\" >nul 2>&1");
+            // Remove the entire plugins/ directory (DLLs only — plugin data
+            // lives under data/plugins/ and survives uninstall).
+            string pluginsDir = Path.Combine(AppPaths.Root, "plugins");
+            batLines.AppendLine($"rmdir /s /q \"{pluginsDir}\" >nul 2>&1");
+            log.AppendLine($"Scheduled removal of: {pluginsDir}");
 
             // Try to remove each exe's containing dir if empty (rmdir without /s).
             foreach (var dir in dirsToClean)
@@ -132,6 +149,22 @@ static class Uninstaller
             CreateNoWindow = true,
             UseShellExecute = false,
         });
+    }
+
+    private static void TryDeleteShortcut(string path, string label, StringBuilder log)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                log.AppendLine($"Removed {label}: {path}");
+            }
+        }
+        catch (Exception ex)
+        {
+            log.AppendLine($"Warning: could not remove {label}: {ex.Message}");
+        }
     }
 
     private static void RemoveHooksFromSettings(string settingsPath)
