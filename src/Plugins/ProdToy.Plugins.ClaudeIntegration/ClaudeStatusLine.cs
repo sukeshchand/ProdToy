@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
@@ -18,6 +19,11 @@ namespace ProdToy.Plugins.ClaudeIntegration;
 /// </summary>
 static class ClaudeStatusLine
 {
+    // Matches context-bar.ps1 and context-bar-v{n}.ps1.
+    private static readonly Regex ScriptNameRegex = new(
+        @"^context-bar(?:-v(\d+))?\.ps1$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /// <summary>
     /// Extract context-bar.ps1 to the plugin's scripts dir and write the
     /// <c>statusLine</c> entry into every install's <c>settings.json</c>.
@@ -31,11 +37,10 @@ static class ClaudeStatusLine
         try
         {
             Directory.CreateDirectory(ClaudePaths.ScriptsDir);
-            ExtractScript(pluginSettingsPath);
+            ExtractScript(pluginSettingsPath, ClaudePaths.ClaudeStatusLineScript);
             WriteConfig(settings);
 
-            string command = $"powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '{ClaudePaths.ClaudeStatusLineScript}'\"";
-
+            string command = BuildCommand(ClaudePaths.ClaudeStatusLineScript);
             foreach (var install in installs)
                 WriteStatusLineEntry(install.SettingsFile, command);
         }
@@ -46,53 +51,39 @@ static class ClaudeStatusLine
     }
 
     /// <summary>
-    /// Set <c>statusLine.refreshInterval</c> on every install so Claude CLI
-    /// polls the PS1 on a timer in addition to event-driven ticks. Used while
-    /// the settings panel is open so toggling <c>SlEnabled</c> / item visibility
-    /// takes effect within a second instead of waiting for the next assistant
-    /// message. Cleared by <see cref="ClearRefreshInterval"/> on panel close.
+    /// Force Claude CLI to invalidate its cached status-line script by:
+    ///   1. Writing a new <c>context-bar-v{n+1}.ps1</c> (fresh extraction from
+    ///      the embedded template with current substitutions).
+    ///   2. Updating every install's <c>settings.json</c> <c>statusLine.command</c>
+    ///      to point at the new filename.
+    ///   3. Deleting older <c>context-bar*.ps1</c> files we own, best-effort.
+    /// Claude sees a changed <c>command</c> string and re-runs the script on
+    /// the next render tick — that's how toggles take effect immediately.
     /// </summary>
-    public static void SetRefreshInterval(IEnumerable<ClaudeInstall> installs, int intervalMs)
-    {
-        foreach (var install in installs)
-            UpdateRefreshInterval(install.SettingsFile, intervalMs);
-    }
-
-    /// <summary>
-    /// Remove <c>statusLine.refreshInterval</c> so Claude CLI reverts to
-    /// event-driven rendering only.
-    /// </summary>
-    public static void ClearRefreshInterval(IEnumerable<ClaudeInstall> installs)
-    {
-        foreach (var install in installs)
-            UpdateRefreshInterval(install.SettingsFile, null);
-    }
-
-    private static void UpdateRefreshInterval(string settingsPath, int? intervalMs)
+    public static void BumpScriptVersion(
+        IEnumerable<ClaudeInstall> installs,
+        string pluginSettingsPath)
     {
         try
         {
-            if (!File.Exists(settingsPath)) return;
-            string json = File.ReadAllText(settingsPath);
-            var root = JsonNode.Parse(json);
-            if (root is not JsonObject obj || obj["statusLine"] is not JsonObject sl) return;
+            Directory.CreateDirectory(ClaudePaths.ScriptsDir);
 
-            // Only touch the entry if it's ours.
-            string? cmd = sl["command"]?.GetValue<string>();
-            if (cmd == null || !cmd.Contains("context-bar.ps1", StringComparison.OrdinalIgnoreCase))
-                return;
+            int nextVersion = FindHighestVersion() + 1;
+            string newFileName = $"context-bar-v{nextVersion}.ps1";
+            string newPath = Path.Combine(ClaudePaths.ScriptsDir, newFileName);
 
-            if (intervalMs.HasValue)
-                sl["refreshInterval"] = intervalMs.Value;
-            else
-                sl.Remove("refreshInterval");
+            ExtractScript(pluginSettingsPath, newPath);
 
-            var options = new JsonSerializerOptions { WriteIndented = true };
-            File.WriteAllText(settingsPath, root.ToJsonString(options), Encoding.UTF8);
+            string command = BuildCommand(newPath);
+            var installsList = installs.ToList();
+            foreach (var install in installsList)
+                WriteStatusLineEntry(install.SettingsFile, command);
+
+            DeleteOldScripts(except: newPath);
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to update refreshInterval in {settingsPath}: {ex.Message}");
+            Debug.WriteLine($"Failed to bump status line script: {ex.Message}");
         }
     }
 
@@ -111,9 +102,9 @@ static class ClaudeStatusLine
                 var root = JsonNode.Parse(json);
                 if (root is JsonObject obj && obj.ContainsKey("statusLine"))
                 {
-                    // Only remove if the entry is ours (points at our script).
+                    // Only remove if the entry is ours (points at a context-bar*.ps1).
                     string? cmd = obj["statusLine"]?["command"]?.GetValue<string>();
-                    if (cmd != null && cmd.Contains("context-bar.ps1", StringComparison.OrdinalIgnoreCase))
+                    if (cmd != null && IsOurCommand(cmd))
                     {
                         obj.Remove("statusLine");
                         var options = new JsonSerializerOptions { WriteIndented = true };
@@ -125,6 +116,52 @@ static class ClaudeStatusLine
             {
                 Debug.WriteLine($"Failed to uninstall status line from {install.SettingsFile}: {ex.Message}");
             }
+        }
+    }
+
+    private static string BuildCommand(string scriptPath) =>
+        $"powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '{scriptPath}'\"";
+
+    private static bool IsOurCommand(string command)
+    {
+        // Match either "context-bar.ps1" or "context-bar-v{n}.ps1" inside the
+        // command string. Prefix check is enough — we don't need a full regex.
+        return command.Contains("context-bar", StringComparison.OrdinalIgnoreCase)
+            && command.Contains(".ps1", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int FindHighestVersion()
+    {
+        int highest = 0;
+        if (!Directory.Exists(ClaudePaths.ScriptsDir)) return highest;
+
+        foreach (var file in Directory.EnumerateFiles(ClaudePaths.ScriptsDir, "context-bar*.ps1"))
+        {
+            var m = ScriptNameRegex.Match(Path.GetFileName(file));
+            if (!m.Success) continue;
+            if (m.Groups[1].Success && int.TryParse(m.Groups[1].Value, out int v))
+            {
+                if (v > highest) highest = v;
+            }
+        }
+        return highest;
+    }
+
+    private static void DeleteOldScripts(string except)
+    {
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(ClaudePaths.ScriptsDir, "context-bar*.ps1"))
+            {
+                if (string.Equals(file, except, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!ScriptNameRegex.IsMatch(Path.GetFileName(file))) continue;
+                try { File.Delete(file); }
+                catch (Exception ex) { Debug.WriteLine($"Could not delete old script {file}: {ex.Message}"); }
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"DeleteOldScripts failed: {ex.Message}");
         }
     }
 
@@ -193,7 +230,7 @@ static class ClaudeStatusLine
         }
     }
 
-    private static void ExtractScript(string pluginSettingsPath)
+    private static void ExtractScript(string pluginSettingsPath, string destPath)
     {
         var assembly = Assembly.GetExecutingAssembly();
         using var stream = assembly.GetManifestResourceStream("ProdToy.Plugins.ClaudeIntegration.Scripts.context-bar.ps1");
@@ -207,6 +244,6 @@ static class ClaudeStatusLine
             .Replace("{{SETTINGS_PATH}}", pluginSettingsPath)
             .Replace("{{PIPE_NAME}}", "ProdToy_Pipe");
 
-        File.WriteAllText(ClaudePaths.ClaudeStatusLineScript, content, Encoding.UTF8);
+        File.WriteAllText(destPath, content, Encoding.UTF8);
     }
 }

@@ -175,6 +175,11 @@ public class ClaudeIntegrationPlugin : IPlugin
         // Mark host as running so the PS1 scripts know they can dispatch.
         SetHostRunning(true);
 
+        // Force Claude to re-run the status-line script so the bar appears
+        // immediately on host start (HostRunning flipped from false → true,
+        // but Claude would otherwise keep showing its cached empty output).
+        BumpStatusLineNow();
+
         _context.Log("Claude integration started");
     }
 
@@ -184,6 +189,12 @@ public class ClaudeIntegrationPlugin : IPlugin
         // trying to talk to a dead pipe. Done first so a slow form dispose
         // below doesn't leave the flag stale if Claude fires a hook mid-Stop.
         SetHostRunning(false);
+
+        // Force Claude to re-run the status-line script so the bar disappears
+        // immediately on host stop (HostRunning flipped true → false, but
+        // Claude would otherwise keep showing its cached populated output).
+        // Must happen while the process is still alive enough to write JSON.
+        BumpStatusLineNow();
 
         // Stop is per-run: only in-process teardown (pipe handlers, popup form).
         // Claude settings.json and hook scripts are left alone — they were put
@@ -573,8 +584,12 @@ public class ClaudeIntegrationPlugin : IPlugin
                 var s = _context.LoadSettings<ClaudePluginSettings>();
                 _context.SaveSettings(s with { SlEnabled = slEnableCheck.Checked });
 
-                // context-bar.ps1 reads SlEnabled on every render, so no
-                // settings.json mutation is needed here.
+                // context-bar.ps1 reads SlEnabled on every render, so the
+                // behavior change is already live. But Claude caches the
+                // status-line script output between events, so we bump the
+                // script filename to force it to re-run on the next tick.
+                BumpStatusLineNow();
+
                 slStatus.ForeColor = slEnableCheck.Checked ? theme.SuccessColor : theme.TextSecondary;
                 slStatus.Text = slEnableCheck.Checked
                     ? "Enabled"
@@ -644,44 +659,40 @@ public class ClaudeIntegrationPlugin : IPlugin
                 };
                 _context.SaveSettings(s);
                 ClaudeStatusLine.WriteConfig(s);
+
+                // Force Claude to re-run the status-line script next tick.
+                BumpStatusLineNow();
             };
             panel.Controls.Add(cb);
         }
 
-        // While the settings panel is live, set statusLine.refreshInterval so
-        // Claude CLI polls the PS1 ~every second. This makes SlEnabled toggles
-        // and item-visibility changes feel instant. Cleared on panel teardown
-        // to avoid steady-state polling.
-        panel.HandleCreated += (_, _) =>
-        {
-            try
-            {
-                var s = _context.LoadSettings<ClaudePluginSettings>();
-                var installs = s.ClaudeConfigDirs
-                    .Where(Directory.Exists)
-                    .Select(d => new ClaudeInstall(d))
-                    .ToList();
-                if (installs.Count > 0)
-                    ClaudeStatusLine.SetRefreshInterval(installs, 1000);
-            }
-            catch (Exception ex) { _context.LogError("SetRefreshInterval failed", ex); }
-        };
-        panel.HandleDestroyed += (_, _) =>
-        {
-            try
-            {
-                var s = _context.LoadSettings<ClaudePluginSettings>();
-                var installs = s.ClaudeConfigDirs
-                    .Where(Directory.Exists)
-                    .Select(d => new ClaudeInstall(d))
-                    .ToList();
-                if (installs.Count > 0)
-                    ClaudeStatusLine.ClearRefreshInterval(installs);
-            }
-            catch (Exception ex) { _context.LogError("ClearRefreshInterval failed", ex); }
-        };
-
         return panel;
+    }
+
+    /// <summary>
+    /// Force every discovered Claude install to re-run the status-line script
+    /// on the next render tick. Claude caches script output between events, so
+    /// just changing plugin settings isn't visible immediately — bumping the
+    /// script filename invalidates the cache.
+    /// </summary>
+    private void BumpStatusLineNow()
+    {
+        try
+        {
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            var installs = s.ClaudeConfigDirs
+                .Where(Directory.Exists)
+                .Select(d => new ClaudeInstall(d))
+                .ToList();
+            if (installs.Count == 0) return;
+
+            string pluginSettingsPath = Path.Combine(_context.DataDirectory, "settings.json");
+            ClaudeStatusLine.BumpScriptVersion(installs, pluginSettingsPath);
+        }
+        catch (Exception ex)
+        {
+            _context.LogError("BumpStatusLineNow failed", ex);
+        }
     }
 
     private static string BuildInstallsListText(List<string> dirs)
