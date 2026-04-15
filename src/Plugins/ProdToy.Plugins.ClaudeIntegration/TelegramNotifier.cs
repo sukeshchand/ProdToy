@@ -103,7 +103,7 @@ sealed class TelegramNotifier
             if (!resp.IsSuccessStatusCode)
             {
                 string err = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
-                _context.LogError($"Telegram send failed ({(int)resp.StatusCode}): {err}", new HttpRequestException(err));
+                _context.LogError($"Telegram send failed ({(int)resp.StatusCode}): {err}");
                 return false;
             }
             return true;

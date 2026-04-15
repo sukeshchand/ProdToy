@@ -136,8 +136,29 @@ public class ClaudeIntegrationPlugin : IPlugin
 
     private void EnsureChatPopup()
     {
+        // If the previous instance's WebView2 init failed permanently, tear
+        // it down and rebuild. Prevents a single flaky startup (e.g. a transient
+        // COM apartment race) from bricking notifications for the rest of the
+        // session — next notification gets a fresh popup with a fresh WebView2.
+        if (_chatPopup != null && _chatPopup.IsWebViewFailed)
+        {
+            _context.LogError("ChatPopupForm previous init failed — rebuilding");
+            try { _popupReg?.Dispose(); } catch { }
+            _popupReg = null;
+            try { _chatPopup.Close(); } catch { }
+            try { _chatPopup.Dispose(); } catch { }
+            _chatPopup = null;
+        }
+
         if (_chatPopup != null) return;
+
         _chatPopup = new ChatPopupForm(_context, _chatHistory);
+        _chatPopup.WebViewInitFailed += () =>
+        {
+            // Nothing to do synchronously — the IsWebViewFailed flag is already
+            // set. The next EnsureChatPopup call (on the next notification) will
+            // see it and rebuild.
+        };
         _popupReg = _context.Host.RegisterPopup(_chatPopup);
     }
 

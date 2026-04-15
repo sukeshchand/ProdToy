@@ -60,7 +60,19 @@ sealed class ChatPopupForm : Form, IPluginPopup
     private readonly WebView2 _webView;
 
     private bool _webViewReady;
+    private bool _webViewFailed;
     private string? _pendingHtml;
+
+    /// <summary>
+    /// Fired from <see cref="InitializeWebView2"/>'s catch block when WebView2
+    /// init permanently fails (e.g. COM apartment race that somehow survives
+    /// v1.0.324's CreationProperties fix). The plugin listens and disposes +
+    /// reconstructs this popup on the next notification, so a one-time flaky
+    /// startup doesn't brick the chat popup for the rest of the session.
+    /// </summary>
+    public event Action? WebViewInitFailed;
+
+    public bool IsWebViewFailed => _webViewFailed;
     private string _lastMessage = "";
     private string _lastType = "info";
     private Color _accentColor;
@@ -287,10 +299,21 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _footerPanel.Controls.Add(_snoozeCheckBox);
 
         // --- Content area ---
+        // Set the user data folder via CreationProperties BEFORE the control's
+        // HWND is created. This makes WebView2 do its own STA bookkeeping
+        // during handle creation and avoids the RPC_E_CHANGED_MODE race we'd
+        // hit if we called CoreWebView2Environment.CreateAsync ourselves from
+        // a thread whose COM apartment state was already decided by something
+        // else (a prior plugin, a Control.Invoke callback chain, etc).
+        string userDataFolder = _host.GetWebView2UserDataFolder("claude-chat");
         _webView = new WebView2
         {
             Dock = DockStyle.Fill,
             DefaultBackgroundColor = _theme.BgDark,
+            CreationProperties = new CoreWebView2CreationProperties
+            {
+                UserDataFolder = userDataFolder,
+            },
         };
 
         _webViewContainer = new Panel
@@ -496,11 +519,14 @@ sealed class ChatPopupForm : Form, IPluginPopup
     {
         try
         {
-            string userDataFolder = _host.GetWebView2UserDataFolder("claude-chat");
-            // ConfigureAwait(true) is intentional — we must resume on the UI
-            // thread to touch _webView afterwards.
-            var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder).ConfigureAwait(true);
-            await _webView.EnsureCoreWebView2Async(env).ConfigureAwait(true);
+            // With CreationProperties.UserDataFolder set on the WebView2
+            // control in the constructor, we can just call the parameterless
+            // EnsureCoreWebView2Async — the control creates its environment
+            // internally, handling COM/STA bookkeeping correctly. This avoids
+            // the "Cannot change thread mode after it is set" (RPC_E_CHANGED_MODE)
+            // race that the manual CoreWebView2Environment.CreateAsync path hit.
+            await _webView.EnsureCoreWebView2Async(null).ConfigureAwait(true);
+
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
@@ -517,6 +543,8 @@ sealed class ChatPopupForm : Form, IPluginPopup
         {
             Debug.WriteLine($"ChatPopupForm WebView2 init failed: {ex.Message}");
             try { _context.LogError("ChatPopupForm WebView2 init failed", ex); } catch { }
+            _webViewFailed = true;
+            try { WebViewInitFailed?.Invoke(); } catch { }
         }
     }
 
