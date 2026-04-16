@@ -39,6 +39,7 @@ class ScreenshotToolbar : Control
     public event Action? ZoomOutRequested;
     public event Action? ZoomResetRequested;
     public event Action? ZoomFitRequested;
+    public event Action? CompareRequested;
 
     /// <summary>Provides the current zoom value (1.0 = 100%) for the toolbar label.</summary>
     public Func<float>? ZoomProvider { get; set; }
@@ -67,6 +68,7 @@ class ScreenshotToolbar : Control
         _items.Add(new ToolbarPrimaryButton("quickcopy", "\uE8C8", "Image", "Copy Image (Ctrl+C)", () => QuickCopyRequested?.Invoke()));
         _items.Add(new ToolbarPrimaryButton("copypath", "\uE8C8", "File", "Copy File (Ctrl+Shift+C)", () => CopyPathRequested?.Invoke()));
         _items.Add(new ToolbarPrimaryButton("copypathtext", "\uE8C8", "Path", "Copy Path (Ctrl+Shift+P)", () => CopyPathTextRequested?.Invoke()));
+        _items.Add(new ToolbarPrimaryButton("compare", "\uE8F1", "Compare", "Compare Last Two (Ctrl+Shift+K)", () => CompareRequested?.Invoke()));
         AddSeparator();
 
         // Tools

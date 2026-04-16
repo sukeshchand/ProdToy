@@ -257,6 +257,7 @@ class ScreenshotEditorForm : Form
         _toolbar.ZoomOutRequested += () => { _canvas.ZoomOutStep(); _canvasContainer.CenterCanvas(); };
         _toolbar.ZoomResetRequested += () => { _canvas.ResetZoom(); _canvasContainer.CenterCanvas(); };
         _toolbar.ZoomFitRequested += () => { _canvas.FitToContainer(_canvasContainer.ClientSize); _canvasContainer.CenterCanvas(); };
+        _toolbar.CompareRequested += DoCompare;
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -264,6 +265,7 @@ class ScreenshotEditorForm : Form
         if (e.Control && e.Shift && e.KeyCode == Keys.S) { DoSaveAs(); e.Handled = true; return; }
         if (e.Control && e.Shift && e.KeyCode == Keys.C) { DoCopyPath(); e.Handled = true; return; }
         if (e.Control && e.Shift && e.KeyCode == Keys.P) { DoCopyPathText(); e.Handled = true; return; }
+        if (e.Control && e.Shift && e.KeyCode == Keys.K) { DoCompare(); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.C) { DoCopy(); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.Z) { _session.UndoRedo.Undo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.Y) { _session.UndoRedo.Redo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); e.Handled = true; return; }
@@ -410,6 +412,130 @@ class ScreenshotEditorForm : Form
             WindowState = FormWindowState.Minimized;
         }
         catch (Exception ex) { Debug.WriteLine($"Copy Path Text failed: {ex.Message}"); }
+    }
+
+    private void DoCompare()
+    {
+        try
+        {
+            // Get last two screenshot files, ordered newest-first
+            string dir = ScreenshotPaths.ScreenshotsDir;
+            if (!Directory.Exists(dir)) return;
+            var files = new DirectoryInfo(dir)
+                .GetFiles("*.png")
+                .OrderByDescending(f => f.CreationTime)
+                .Take(2)
+                .ToArray();
+
+            if (files.Length < 2)
+            {
+                MessageBox.Show(this, "Need at least two saved screenshots to compare.",
+                    "Compare", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // Load both images (newest = right, previous = left)
+            Bitmap imgRight, imgLeft;
+            using (var s1 = File.OpenRead(files[0].FullName))
+            using (var b1 = new Bitmap(s1))
+            {
+                imgRight = new Bitmap(b1.Width, b1.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                using var g = Graphics.FromImage(imgRight);
+                g.DrawImage(b1, 0, 0);
+            }
+            using (var s2 = File.OpenRead(files[1].FullName))
+            using (var b2 = new Bitmap(s2))
+            {
+                imgLeft = new Bitmap(b2.Width, b2.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                using var g = Graphics.FromImage(imgLeft);
+                g.DrawImage(b2, 0, 0);
+            }
+
+            // Layout: padding + imgLeft + gap + imgRight + padding
+            int padding = 30;
+            int gap = 20;
+            int canvasW = padding + imgLeft.Width + gap + imgRight.Width + padding;
+            int canvasH = padding + Math.Max(imgLeft.Height, imgRight.Height) + padding;
+            float maxH = Math.Max(imgLeft.Height, imgRight.Height);
+
+            // Create a blank canvas (the base image — just the background)
+            var baseBmp = new Bitmap(canvasW, canvasH, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(baseBmp))
+                g.Clear(Color.FromArgb(240, 240, 240));
+
+            // Save current session before switching
+            _canvas.CommitTextEdit();
+            AutoSaveNow();
+            _session.OriginalImage.Dispose();
+
+            // Create new session with blank base
+            _session = new EditorSession(baseBmp);
+            InitEditFolder(_session, baseBmp);
+
+            // Save both layer images into the _edits folder so they persist
+            string editDir = _session.EditDir;
+            Directory.CreateDirectory(editDir);
+
+            string leftLayerPath = Path.Combine(editDir, $"layer_compare_left.png");
+            imgLeft.Save(leftLayerPath, System.Drawing.Imaging.ImageFormat.Png);
+
+            string rightLayerPath = Path.Combine(editDir, $"layer_compare_right.png");
+            imgRight.Save(rightLayerPath, System.Drawing.Imaging.ImageFormat.Png);
+
+            // Add both as ImageObject annotation layers with SourcePath set
+            float leftY = padding + (maxH - imgLeft.Height) / 2f;
+            var leftObj = new ImageObject
+            {
+                Image = imgLeft,
+                Position = new PointF(padding, leftY),
+                DisplaySize = new SizeF(imgLeft.Width, imgLeft.Height),
+                SourcePath = leftLayerPath,
+            };
+            _session.AddAnnotation(leftObj);
+
+            float rightX = padding + imgLeft.Width + gap;
+            float rightY = padding + (maxH - imgRight.Height) / 2f;
+            var rightObj = new ImageObject
+            {
+                Image = imgRight,
+                Position = new PointF(rightX, rightY),
+                DisplaySize = new SizeF(imgRight.Width, imgRight.Height),
+                SourcePath = rightLayerPath,
+            };
+            _session.AddAnnotation(rightObj);
+
+            Text = $"ProdToy \u2014 Compare";
+
+            // Replace canvas in same window
+            _canvas = new ScreenshotCanvas
+            {
+                Size = new Size(_session.CanvasSize.Width, _session.CanvasSize.Height),
+                Session = _session,
+            };
+            _canvasContainer.SetCanvas(_canvas);
+
+            // Re-wire events
+            _canvas.CanvasResizeRequested += _ => _canvasContainer.SyncCanvasSize();
+            _canvas.ToolAutoSwitched += () => _toolbar.Invalidate();
+            _toolbar.ZoomProvider = () => _canvas.Zoom;
+            _canvas.ZoomChanged += () => _toolbar.Invalidate();
+            _session.UndoRedo.StateChanged += ScheduleAutoSave;
+            _canvas.CanvasChanged += ScheduleAutoSave;
+
+            _toolbar.Session = _session;
+            _toolbar.Invalidate();
+            _recentPanel.SetEditingId(_session.EditId);
+            ResizeFormToFitCanvas();
+
+            // Immediately save so state.json, preview, and layer files are all written
+            AutoSaveNow();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Compare failed: {ex.Message}");
+            MessageBox.Show(this, $"Compare failed: {ex.Message}", "Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     /// <summary>Create the _edits folder for this capture and save the base image.</summary>
