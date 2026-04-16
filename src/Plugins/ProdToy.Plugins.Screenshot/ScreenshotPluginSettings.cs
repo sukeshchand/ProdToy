@@ -5,7 +5,7 @@ namespace ProdToy.Plugins.Screenshot;
 record ScreenshotPluginSettings
 {
     [JsonPropertyName("screenshotEnabled")]
-    public bool ScreenshotEnabled { get; init; } = false;
+    public bool ScreenshotEnabled { get; init; } = true;
 
     [JsonPropertyName("screenshotHotkey")]
     public string ScreenshotHotkey { get; init; } = "Ctrl+Q";

@@ -16,7 +16,7 @@ record AppSettingsData
         "https://github.com/sukeshchand/ProdToy/releases/latest/download/metadata.json";
 
     [JsonPropertyName("updateLocation")]
-    public string UpdateLocation { get; init; } = "";
+    public string UpdateLocation { get; init; } = DefaultUpdateLocation;
 
     [JsonPropertyName("startWithWindows")]
     public bool StartWithWindows { get; init; } = true;
