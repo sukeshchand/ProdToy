@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.288",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.345",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -117,11 +117,21 @@ public class ClaudeIntegrationPlugin : IPlugin
             // Phase 3: write the response into plugin-owned history.
             _chatHistory.SaveResponse(title, message, type, sessionId, cwd);
 
-            // Phase 8: snooze, notifications-enabled, and notification-mode
-            // gates now live entirely inside ChatPopupForm.ShowPopup(), which
-            // reads ClaudePluginSettings directly. No host-side facility.
+            // Phase 8: PipeRouter dispatches on the UI thread via
+            // _popupForm.Invoke() — a synchronous SendMessage. WebView2's
+            // CoreWebView2 rejects calls from that nested Invoke call stack
+            // with "can only be accessed from the UI thread" even though it IS
+            // the UI thread. Fix: BeginInvoke on the ChatPopupForm itself to
+            // post ShowPopup onto a clean top-level message loop iteration.
             EnsureChatPopup();
-            _chatPopup?.ShowPopup(title, message, type, sessionId, cwd);
+            if (_chatPopup != null)
+            {
+                var popup = _chatPopup;
+                popup.BeginInvoke(() =>
+                {
+                    popup.ShowPopup(title, message, type, sessionId, cwd);
+                });
+            }
 
             // Fan out to Telegram (fire-and-forget). TelegramNotifier handles
             // its own enable/gate/credential checks and never throws into the

@@ -10,7 +10,7 @@ internal enum HotkeyApplyStatus
     Failed,
 }
 
-[Plugin("ProdToy.Plugin.Screenshot", "Screenshot", "1.0.288",
+[Plugin("ProdToy.Plugin.Screenshot", "Screenshot", "1.0.345",
     Description = "Screen capture and annotation editor",
     Author = "ProdToy",
     MenuPriority = 100)]
