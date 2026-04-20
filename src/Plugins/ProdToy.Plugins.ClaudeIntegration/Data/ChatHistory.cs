@@ -129,8 +129,12 @@ sealed class ChatHistory
     public HistoryEntry? GetLatest()
     {
         var index = LoadIndex();
-        if (index.Count == 0) return null;
-        return LoadEntry(index[^1]);
+        for (int i = index.Count - 1; i >= 0; i--)
+        {
+            if (index[i].Type == NotificationType.Pending) continue;
+            return LoadEntry(index[i]);
+        }
+        return null;
     }
 
     public HistoryEntry? LoadEntry(HistoryIndex idx)
