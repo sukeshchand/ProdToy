@@ -12,6 +12,11 @@ record ClaudePluginSettings
     // Status line — enabled by default
     [JsonPropertyName("slEnabled")] public bool SlEnabled { get; init; } = true;
 
+    // Status line presentation style. One of: "classic", "minimal", "emoji",
+    // "powerline", "ascii", "compact", "progressbar", "verbose". Read by
+    // context-bar.ps1 via status-line-config.json.
+    [JsonPropertyName("slStyle")] public string SlStyle { get; init; } = "emoji";
+
     // Status line item visibility
     [JsonPropertyName("slShowModel")] public bool SlShowModel { get; init; } = true;
     [JsonPropertyName("slShowDir")] public bool SlShowDir { get; init; } = true;

@@ -19,8 +19,7 @@ sealed record ClaudeInstall(string ConfigDir)
 /// Scans the current user's home + roaming + local app data directories for
 /// Claude Code CLI installations. A directory is considered a Claude install
 /// if its name contains "claude" (case-insensitive) AND it contains a
-/// <c>settings.json</c> whose top-level JSON has either a <c>"hooks"</c> or
-/// <c>"statusLine"</c> key.
+/// <c>settings.json</c> that parses as a JSON object.
 /// </summary>
 static class ClaudeInstallDiscovery
 {
@@ -60,7 +59,7 @@ static class ClaudeInstallDiscovery
                     if (!File.Exists(settingsFile))
                         continue;
 
-                    if (!HasHooksOrStatusLine(settingsFile))
+                    if (!IsValidSettingsJson(settingsFile))
                         continue;
 
                     string abs = Path.GetFullPath(dir);
@@ -84,14 +83,12 @@ static class ClaudeInstallDiscovery
         yield return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
     }
 
-    private static bool HasHooksOrStatusLine(string settingsFile)
+    private static bool IsValidSettingsJson(string settingsFile)
     {
         try
         {
             string json = File.ReadAllText(settingsFile);
-            var root = JsonNode.Parse(json);
-            if (root is not JsonObject obj) return false;
-            return obj.ContainsKey("hooks") || obj.ContainsKey("statusLine");
+            return JsonNode.Parse(json) is JsonObject;
         }
         catch (Exception ex)
         {

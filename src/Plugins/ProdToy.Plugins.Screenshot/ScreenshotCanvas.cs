@@ -921,6 +921,13 @@ class ScreenshotCanvas : Control
     public bool HasSelectedRegion => _selectedRegion.HasValue;
     public bool IsCropActive => _isCropDragging || _isCropAdjusting;
 
+    public void ClearSelectedRegion()
+    {
+        if (_selectedRegion == null) return;
+        _selectedRegion = null;
+        Invalidate();
+    }
+
     public void DeleteSelectedRegion()
     {
         if (_session == null || !_selectedRegion.HasValue) return;

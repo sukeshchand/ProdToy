@@ -8,6 +8,13 @@
 # If all three pass, render the status line from the event JSON on stdin and
 # the per-item visibility settings in status-line-config.json.
 
+# Force UTF-8 on stdin/stdout so emojis and box-drawing chars reach Claude
+# intact. Windows PowerShell 5.1 defaults to the console's active codepage,
+# which would otherwise mangle multi-byte glyphs into '?' or replacement chars.
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}
+try { [Console]::InputEncoding  = [System.Text.UTF8Encoding]::new($false) } catch {}
+
 $settingsPath = "{{SETTINGS_PATH}}"
 $pipeName     = "{{PIPE_NAME}}"
 
@@ -61,10 +68,12 @@ $cfg = @{
     prompts = $true; context = $true; duration = $true
     mode = $true; version = $true; editStats = $true
 }
+$style = 'classic'
 $cfgPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "status-line-config.json"
 if (Test-Path $cfgPath) {
     try {
         $cfgData = Get-Content $cfgPath -Raw | ConvertFrom-Json
+        if ($null -ne $cfgData.style) { $style = [string]$cfgData.style }
         if ($null -ne $cfgData.model) { $cfg.model = [bool]$cfgData.model }
         if ($null -ne $cfgData.dir) { $cfg.dir = [bool]$cfgData.dir }
         if ($null -ne $cfgData.branch) { $cfg.branch = [bool]$cfgData.branch }
@@ -222,6 +231,145 @@ function Format-EditStats($added, $deleted, $modified, $files) {
     $fileWord = if ($files -eq 1) { "file" } else { "files" }
     $parts.Add("${C_NONE}${files} ${fileWord}")
     return $parts -join "${C_SEP}, "
+}
+
+# --- Shared formatted values (consumed by every style) ---
+
+$branchStr = if ($branch) { $branch + $(if ($dirty -gt 0) { " *${dirty}" } else { "" }) } else { "none" }
+$branchColor = if (-not $branch) {
+    $C_NONE
+} elseif ($branch -eq "main" -or $branch -eq "master") {
+    $C_RED
+} elseif ($branch.StartsWith("dev")) {
+    $C_YELLOW
+} else {
+    $C_VALUE
+}
+
+$permDisplay = switch ($permMode) {
+    "default"            { @{ label = "Default";    short = "Def";    color = $C_GREEN  } }
+    "acceptEdits"        { @{ label = "Auto-Edit";  short = "AE";     color = $C_YELLOW } }
+    "bypassPermissions"  { @{ label = "Bypass All"; short = "Bypass"; color = $C_RED    } }
+    default              { @{ label = $permMode;    short = $permMode; color = $C_VALUE  } }
+}
+
+$runningVersion = if ($jsonData.version) { [string]$jsonData.version } else { "" }
+
+function Make-Bar([int]$pct, [int]$width = 10) {
+    if ($null -eq $pct -or $pct -lt 0) { $pct = 0 }
+    if ($pct -gt 100) { $pct = 100 }
+    $filled = [math]::Floor($width * $pct / 100.0)
+    if ($filled -gt $width) { $filled = $width }
+    $empty  = $width - $filled
+    return ('█' * $filled) + ('░' * $empty)
+}
+
+# --- Alternate style dispatchers ---
+# 'classic' falls through to the multi-line row-building code below.
+
+if ($style -ne 'classic') {
+    $parts = [System.Collections.Generic.List[string]]::new()
+
+    switch ($style) {
+        'minimal' {
+            if ($cfg.model)   { [void]$parts.Add($model) }
+            if ($cfg.dir)     { [void]$parts.Add($dir) }
+            if ($cfg.branch -and $branch) { [void]$parts.Add($branchStr) }
+            if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("${ctxPct}%") }
+            if ($cfg.duration -and $duration) { [void]$parts.Add($duration) }
+            if ($cfg.prompts) { [void]$parts.Add("${prompts}p") }
+            if ($cfg.mode)    { [void]$parts.Add($permDisplay.short) }
+            Write-Host ($parts -join ' ')
+            break
+        }
+        'emoji' {
+            if ($cfg.model)   { [void]$parts.Add("🤖 ${C_VALUE}${model}${C_RESET}") }
+            if ($cfg.dir)     { [void]$parts.Add("📁 ${C_VALUE}${dir}${C_RESET}") }
+            if ($cfg.branch -and $branch) { [void]$parts.Add("🌿 ${branchColor}${branchStr}${C_RESET}") }
+            if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("📊 ${ctxColor}${ctxPct}%${C_RESET}") }
+            if ($cfg.duration -and $duration) { [void]$parts.Add("⏱ ${C_VALUE}${duration}${C_RESET}") }
+            if ($cfg.prompts) { [void]$parts.Add("💬 ${C_VALUE}${prompts}${C_RESET}") }
+            if ($cfg.mode)    { [void]$parts.Add("🔐 $($permDisplay.color)$($permDisplay.label)${C_RESET}") }
+            if ($cfg.version -and $runningVersion) { [void]$parts.Add("🔖 ${C_VALUE}${runningVersion}${C_RESET}") }
+            Write-Host ($parts -join '  ')
+            break
+        }
+        'powerline' {
+            if ($cfg.model) { [void]$parts.Add("${C_VALUE}${model}${C_RESET}") }
+            if ($cfg.dir)   { [void]$parts.Add("${C_VALUE}${dir}${C_RESET}") }
+            if ($cfg.branch -and $branch) { [void]$parts.Add("${branchColor}${branchStr}${C_RESET}") }
+            if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("${ctxColor}${ctxPct}%${C_RESET}") }
+            if ($cfg.duration -and $duration) { [void]$parts.Add("${C_VALUE}${duration}${C_RESET}") }
+            if ($cfg.mode) { [void]$parts.Add("$($permDisplay.color)$($permDisplay.label)${C_RESET}") }
+            if ($cfg.version -and $runningVersion) { [void]$parts.Add("${C_VALUE}${runningVersion}${C_RESET}") }
+            Write-Host ($parts -join " ${C_SEP}▸${C_RESET} ")
+            break
+        }
+        'ascii' {
+            if ($cfg.model)   { [void]$parts.Add("[Model=${model}]") }
+            if ($cfg.dir)     { [void]$parts.Add("[Dir=${dir}]") }
+            if ($cfg.branch)  { [void]$parts.Add("[Branch=" + $(if ($branch) { $branchStr } else { "none" }) + "]") }
+            if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("[Ctx=${ctxPct}%]") }
+            if ($cfg.duration -and $duration) { [void]$parts.Add("[Dur=${duration}]") }
+            if ($cfg.prompts) { [void]$parts.Add("[Prompts=${prompts}]") }
+            if ($cfg.mode)    { [void]$parts.Add("[Mode=$($permDisplay.label)]") }
+            if ($cfg.version -and $runningVersion) { [void]$parts.Add("[Ver=${runningVersion}]") }
+            Write-Host ($parts -join ' ')
+            break
+        }
+        'compact' {
+            if ($cfg.model)   { [void]$parts.Add("M:${model}") }
+            if ($cfg.dir)     { [void]$parts.Add("d:${dir}") }
+            if ($cfg.branch -and $branch) { [void]$parts.Add("b:${branchStr}") }
+            if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("c:${ctxPct}%") }
+            if ($cfg.duration -and $duration) { [void]$parts.Add("t:${duration}") }
+            if ($cfg.prompts) { [void]$parts.Add("p:${prompts}") }
+            if ($cfg.mode)    { [void]$parts.Add("m:$($permDisplay.short)") }
+            if ($cfg.version -and $runningVersion) { [void]$parts.Add("v:${runningVersion}") }
+            Write-Host ($parts -join '|')
+            break
+        }
+        'progressbar' {
+            if ($cfg.model) { [void]$parts.Add("${C_LABEL}${model}${C_RESET}") }
+            if ($cfg.dir)   { [void]$parts.Add("${C_VALUE}${dir}${C_RESET}") }
+            if ($cfg.branch -and $branch) { [void]$parts.Add("${branchColor}${branchStr}${C_RESET}") }
+            if ($cfg.context -and $null -ne $ctxPct) {
+                $bar = Make-Bar $ctxPct 10
+                [void]$parts.Add("${ctxColor}${bar}${C_RESET} ${ctxColor}${ctxPct}%${C_RESET}")
+            }
+            if ($cfg.duration -and $duration) { [void]$parts.Add("${C_VALUE}${duration}${C_RESET}") }
+            if ($cfg.mode) { [void]$parts.Add("$($permDisplay.color)$($permDisplay.label)${C_RESET}") }
+            Write-Host ($parts -join "${C_SEP} | ${C_RESET}")
+            break
+        }
+        'verbose' {
+            $envp = [System.Collections.Generic.List[string]]::new()
+            if ($cfg.model)  { [void]$envp.Add("Model:${C_VALUE}${model}${C_RESET}") }
+            if ($cfg.dir)    { [void]$envp.Add("Dir:${C_VALUE}${dir}${C_RESET}") }
+            if ($cfg.branch) { [void]$envp.Add("Branch:${branchColor}$(if ($branch) { $branchStr } else { 'none' })${C_RESET}") }
+            if ($envp.Count -gt 0) { Write-Host ("${C_LABEL}Session${C_RESET}: " + ($envp -join ' · ')) }
+
+            $statp = [System.Collections.Generic.List[string]]::new()
+            if ($cfg.context -and $null -ne $ctxPct) { [void]$statp.Add("ctx:${ctxColor}${ctxPct}%${C_RESET}") }
+            if ($cfg.duration -and $duration) { [void]$statp.Add("dur:${C_VALUE}${duration}${C_RESET}") }
+            if ($cfg.prompts) { [void]$statp.Add("prompts:${C_VALUE}${prompts}${C_RESET}") }
+            if ($cfg.mode)   { [void]$statp.Add("mode:$($permDisplay.color)$($permDisplay.label)${C_RESET}") }
+            if ($cfg.version -and $runningVersion) { [void]$statp.Add("v:${C_VALUE}${runningVersion}${C_RESET}") }
+            if ($statp.Count -gt 0) { Write-Host ("${C_LABEL}Stats${C_RESET}  : " + ($statp -join ' · ')) }
+
+            if ($cfg.editStats -and $totalFileCount -gt 0) {
+                Write-Host ("${C_LABEL}Edits${C_RESET}  : $(Format-EditStats $totalAdded $totalDeleted $totalModified $totalFileCount)")
+            }
+            break
+        }
+        default {
+            if ($cfg.model) { [void]$parts.Add($model) }
+            if ($cfg.dir)   { [void]$parts.Add($dir) }
+            Write-Host ($parts -join ' ')
+            break
+        }
+    }
+    exit 0
 }
 
 # Row 1: environment

@@ -210,6 +210,7 @@ static class ClaudeStatusLine
 
             var config = new JsonObject
             {
+                ["style"] = settings.SlStyle,
                 ["model"] = settings.SlShowModel,
                 ["dir"] = settings.SlShowDir,
                 ["branch"] = settings.SlShowBranch,

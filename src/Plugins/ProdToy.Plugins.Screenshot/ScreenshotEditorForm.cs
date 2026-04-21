@@ -297,6 +297,8 @@ class ScreenshotEditorForm : Form
         {
             if (_session.CurrentTool == AnnotationTool.Crop) { _canvas.CancelCrop(); _canvas.Invalidate(); e.Handled = true; return; }
             if (isEditingText) { _canvas.CommitTextEdit(); _canvas.Invalidate(); e.Handled = true; return; }
+            if (_session.SelectedObject != null) { _session.DeselectAll(); _canvas.Invalidate(); e.Handled = true; return; }
+            if (_canvas.HasSelectedRegion) { _canvas.ClearSelectedRegion(); e.Handled = true; return; }
             Close(); e.Handled = true; return;
         }
 
@@ -414,36 +416,75 @@ class ScreenshotEditorForm : Form
         catch (Exception ex) { Debug.WriteLine($"Copy Path Text failed: {ex.Message}"); }
     }
 
+    /// <summary>
+    /// Decides which two screenshot files to compare, based on items the user
+    /// right-clicked to mark in <see cref="RecentImagesPanel"/>. Returns the
+    /// paths newest-first (left = older, right = newer) for the fallback and
+    /// single-marked cases; for the two-marked case the marking order is used
+    /// (first marked = left, second marked = right).
+    /// </summary>
+    private bool PickComparePaths(out string leftPath, out string rightPath)
+    {
+        leftPath = rightPath = "";
+        var marked = _recentPanel.CompareMarked;
+        var visible = _recentPanel.VisibleFilePaths;
+
+        if (marked.Count == 2)
+        {
+            leftPath = marked[0];
+            rightPath = marked[1];
+            return true;
+        }
+
+        if (marked.Count == 1)
+        {
+            string target = marked[0];
+            int idx = visible.ToList().IndexOf(target);
+            // visible is newest-first: prev-in-time = idx+1 (older), next-in-time = idx-1 (newer).
+            string? older = idx >= 0 && idx + 1 < visible.Count ? visible[idx + 1] : null;
+            string? newer = idx >= 1 ? visible[idx - 1] : null;
+            if (older != null) { leftPath = older; rightPath = target; return true; }
+            if (newer != null) { leftPath = target; rightPath = newer; return true; }
+
+            MessageBox.Show(this,
+                "Only one screenshot is available, so there is nothing to compare it with. " +
+                "Capture another screenshot, or mark a second file as a compare item, and try again.",
+                "Compare", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return false;
+        }
+
+        // No marks — fall back to the most recent two screenshots.
+        if (visible.Count < 2)
+        {
+            MessageBox.Show(this,
+                visible.Count == 0
+                    ? "There are no screenshots to compare yet. Capture two screenshots first."
+                    : "Only one screenshot is available. Capture another one, or mark two files via right-click → Set as compare item.",
+                "Compare", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return false;
+        }
+        leftPath = visible[1];
+        rightPath = visible[0];
+        return true;
+    }
+
     private void DoCompare()
     {
         try
         {
-            // Get last two screenshot files, ordered newest-first
-            string dir = ScreenshotPaths.ScreenshotsDir;
-            if (!Directory.Exists(dir)) return;
-            var files = new DirectoryInfo(dir)
-                .GetFiles("*.png")
-                .OrderByDescending(f => f.CreationTime)
-                .Take(2)
-                .ToArray();
-
-            if (files.Length < 2)
-            {
-                MessageBox.Show(this, "Need at least two saved screenshots to compare.",
-                    "Compare", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (!PickComparePaths(out string leftPath, out string rightPath))
                 return;
-            }
 
-            // Load both images (newest = right, previous = left)
+            // Load both images
             Bitmap imgRight, imgLeft;
-            using (var s1 = File.OpenRead(files[0].FullName))
+            using (var s1 = File.OpenRead(rightPath))
             using (var b1 = new Bitmap(s1))
             {
                 imgRight = new Bitmap(b1.Width, b1.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
                 using var g = Graphics.FromImage(imgRight);
                 g.DrawImage(b1, 0, 0);
             }
-            using (var s2 = File.OpenRead(files[1].FullName))
+            using (var s2 = File.OpenRead(leftPath))
             using (var b2 = new Bitmap(s2))
             {
                 imgLeft = new Bitmap(b2.Width, b2.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);

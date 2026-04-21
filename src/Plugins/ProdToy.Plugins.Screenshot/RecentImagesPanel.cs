@@ -26,11 +26,24 @@ class RecentImagesPanel : Panel
     private Panel? _selectedItemPanel;
     private string? _editingEditId;
 
+    // Ordered: first marked = compare "left", second marked = compare "right".
+    // Capped at 2; marking a third drops the oldest (FIFO).
+    private readonly List<string> _compareMarked = new();
+
+    // Paths shown in the panel, newest-first. Mirrors what LoadImages displayed.
+    private List<string> _visibleFilePaths = new();
+
     public event Action<string?>? SelectionChanged;
     public event Action<string>? OpenRequested;
 
     public string? SelectedFilePath => _selectedFilePath;
     public bool IsCollapsed => _collapsed;
+
+    /// <summary>Files currently marked as compare candidates, in marking order.</summary>
+    public IReadOnlyList<string> CompareMarked => _compareMarked;
+
+    /// <summary>All file paths visible in the panel, newest-first.</summary>
+    public IReadOnlyList<string> VisibleFilePaths => _visibleFilePaths;
 
     /// <summary>Set the EditId of the currently editing session to highlight it in the list.</summary>
     public void SetEditingId(string? editId)
@@ -128,6 +141,11 @@ class RecentImagesPanel : Panel
             Debug.WriteLine($"Failed to list screenshots: {ex.Message}");
             return;
         }
+
+        // Drop compare marks whose underlying files no longer exist.
+        _compareMarked.RemoveAll(p => !File.Exists(p));
+
+        _visibleFilePaths = files.ToList();
 
         int y = 2;
         int innerW = PanelWidth - 16;
@@ -250,7 +268,63 @@ class RecentImagesPanel : Panel
         thumb.MouseEnter += (_, _) => { if (_selectedItemPanel != panel) panel.BackColor = _theme.PrimaryDim; };
         thumb.MouseLeave += (_, _) => { if (_selectedItemPanel != panel) panel.BackColor = defaultBg; };
 
+        // Right-click context menu: Set/Unset compare item.
+        var menu = new ContextMenuStrip();
+        menu.Opening += (_, _) =>
+        {
+            menu.Items.Clear();
+            bool isMarked = _compareMarked.Contains(path);
+            var toggle = new ToolStripMenuItem(isMarked ? "Unset compare item" : "Set as compare item");
+            toggle.Click += (_, _) => ToggleCompareMark(path);
+            menu.Items.Add(toggle);
+            if (_compareMarked.Count > 0)
+            {
+                var clearAll = new ToolStripMenuItem("Clear all compare marks");
+                clearAll.Click += (_, _) => { _compareMarked.Clear(); Reload(); };
+                menu.Items.Add(clearAll);
+            }
+        };
+        panel.ContextMenuStrip = menu;
+        thumb.ContextMenuStrip = menu;
+        label.ContextMenuStrip = menu;
+
+        // Compare-mark badge in the top-right of the thumbnail.
+        int markIndex = _compareMarked.IndexOf(filePath);
+        if (markIndex >= 0)
+        {
+            var badge = new Label
+            {
+                Text = (markIndex + 1).ToString(),
+                Font = new Font("Segoe UI Semibold", 8f, FontStyle.Bold),
+                ForeColor = Color.White,
+                BackColor = _theme.Primary,
+                AutoSize = false,
+                Size = new Size(18, 18),
+                Location = new Point(thumb.Right - 20, thumbTop + 2),
+                TextAlign = ContentAlignment.MiddleCenter,
+            };
+            badge.ContextMenuStrip = menu;
+            badge.Click += OnClick;
+            panel.Controls.Add(badge);
+            badge.BringToFront();
+        }
+
         return panel;
+    }
+
+    private void ToggleCompareMark(string filePath)
+    {
+        int existing = _compareMarked.IndexOf(filePath);
+        if (existing >= 0)
+        {
+            _compareMarked.RemoveAt(existing);
+        }
+        else
+        {
+            if (_compareMarked.Count >= 2) _compareMarked.RemoveAt(0);
+            _compareMarked.Add(filePath);
+        }
+        Reload();
     }
 
     private Color _selectedDefaultBg;

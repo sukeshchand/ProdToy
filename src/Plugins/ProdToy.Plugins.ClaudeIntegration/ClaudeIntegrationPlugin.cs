@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.350",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.357",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -395,17 +395,25 @@ public class ClaudeIntegrationPlugin : IPlugin
         panel.Controls.Add(installsLabel);
         y += 22;
 
+        var installsScroll = new Panel
+        {
+            AutoScroll = true,
+            Size = new Size(contentWidth - 120, 90),
+            Location = new Point(pad + 8, y),
+            BackColor = Color.Transparent,
+        };
         var installsList = new Label
         {
             Text = BuildInstallsListText(settings.ClaudeConfigDirs),
             Font = new Font("Segoe UI", 8.5f),
             ForeColor = theme.TextSecondary,
-            AutoSize = false,
-            Size = new Size(contentWidth - 120, 52),
-            Location = new Point(pad + 8, y),
+            AutoSize = true,
+            MaximumSize = new Size(installsScroll.ClientSize.Width - 4, 0),
+            Location = new Point(0, 0),
             BackColor = Color.Transparent,
         };
-        panel.Controls.Add(installsList);
+        installsScroll.Controls.Add(installsList);
+        panel.Controls.Add(installsScroll);
 
         var rescanButton = new Button
         {
@@ -432,7 +440,7 @@ public class ClaudeIntegrationPlugin : IPlugin
             installsList.Text = BuildInstallsListText(found.Select(i => i.ConfigDir).ToList());
         };
         panel.Controls.Add(rescanButton);
-        y += 60;
+        y += 98;
 
         y = AddSeparator(y);
 
@@ -950,6 +958,59 @@ public class ClaudeIntegrationPlugin : IPlugin
         panel.Controls.Add(slEnableCheck);
         panel.Controls.Add(slStatus);
         y += 44;
+
+        // Style dropdown — selects the rendering preset used by context-bar.ps1.
+        var styleLabel = new Label
+        {
+            Text = "Style",
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(pad, y + 4),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(styleLabel);
+
+        var styleOptions = new (string Value, string Display)[]
+        {
+            ("classic",     "Classic — multi-line, labeled"),
+            ("minimal",     "Minimal — single line, no colors"),
+            ("emoji",       "Emoji — icons + colors (default)"),
+            ("powerline",   "Powerline — chevron-separated blocks"),
+            ("ascii",       "ASCII — [Key=Value] brackets, no colors"),
+            ("compact",     "Compact — single-letter labels"),
+            ("progressbar", "Progress Bar — visual context meter"),
+            ("verbose",     "Verbose — multi-line, dense"),
+        };
+
+        var styleCombo = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Font = new Font("Segoe UI", 9f),
+            Location = new Point(pad + 60, y),
+            Size = new Size(contentWidth - 80, 24),
+            Enabled = slEnableCheck.Checked,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.BgDark,
+            ForeColor = theme.TextPrimary,
+        };
+        foreach (var (_, display) in styleOptions) styleCombo.Items.Add(display);
+        int styleIdx = Array.FindIndex(styleOptions, o =>
+            string.Equals(o.Value, settings.SlStyle, StringComparison.OrdinalIgnoreCase));
+        styleCombo.SelectedIndex = styleIdx >= 0 ? styleIdx : 0;
+        styleCombo.SelectedIndexChanged += (_, _) =>
+        {
+            if (styleCombo.SelectedIndex < 0) return;
+            string value = styleOptions[styleCombo.SelectedIndex].Value;
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { SlStyle = value });
+            ClaudeStatusLine.WriteConfig(s with { SlStyle = value });
+            BumpStatusLineNow();
+        };
+        panel.Controls.Add(styleCombo);
+        // Keep style combo enabled-state in sync with the master enable toggle.
+        slEnableCheck.CheckedChanged += (_, _) => styleCombo.Enabled = slEnableCheck.Checked;
+        y += 32;
 
         // Status line item toggles
         var slItems = new (string Label, string Prop)[]
