@@ -29,14 +29,21 @@ static class AlarmNotifier
     {
         if (_host == null) return;
 
-        try
+        // Fire-and-forget on the thread pool so the scheduler's timer thread is
+        // never blocked waiting on the UI thread. If the UI thread is busy (e.g.
+        // WebView2 prewarm still running right after an app update), the Invoke
+        // call queues but the scheduler proceeds to its next tick immediately.
+        ThreadPool.QueueUserWorkItem(_ =>
         {
-            _host.InvokeOnUI(() => ShowAlarm(alarm));
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"AlarmNotifier dispatch failed: {ex.Message}");
-        }
+            try
+            {
+                _host.InvokeOnUI(() => ShowAlarm(alarm));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"AlarmNotifier dispatch failed: {ex.Message}");
+            }
+        });
     }
 
     private static void ShowAlarm(AlarmEntry alarm)

@@ -19,7 +19,11 @@ static class AlarmScheduler
         _getMissedGraceMinutes = getMissedGraceMinutes;
         _missedCheckDone = false;
         _tickCount = 0;
-        _timer = new System.Threading.Timer(_ => Tick(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30));
+        // First tick deferred to 20s to let host startup settle (tray icon, plugin
+        // loads, WebView2 prewarm in the Claude plugin, etc.). Firing at 5s used
+        // to paint the popup while the UI thread was still busy, producing the
+        // "Alarm (Not Responding)" window seen right after an update.
+        _timer = new System.Threading.Timer(_ => Tick(), null, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(30));
         Debug.WriteLine("AlarmScheduler started");
     }
 

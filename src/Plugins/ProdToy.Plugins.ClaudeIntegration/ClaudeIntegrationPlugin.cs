@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.357",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.376",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -85,6 +85,9 @@ public class ClaudeIntegrationPlugin : IPlugin
     {
         _context = context;
         ClaudePaths.Initialize(context.DataDirectory);
+        ClaudeShortcutStore.Initialize(context.DataDirectory);
+        ClaudeShortcutFolders.Initialize(context.DataDirectory);
+        OwnedWtProfilesStore.Initialize(context.DataDirectory);
 
         _chatHistory = new ChatHistory(
             context.DataDirectory,
@@ -273,6 +276,9 @@ public class ClaudeIntegrationPlugin : IPlugin
         try { _chatPopup?.Dispose(); } catch { }
         _chatPopup = null;
 
+        try { _shortcutsForm?.Close(); } catch { }
+        _shortcutsForm = null;
+
         _context.Log("Claude integration stopped");
     }
 
@@ -319,14 +325,35 @@ public class ClaudeIntegrationPlugin : IPlugin
 
     public void Dispose() { }
 
+    private ClaudeShortcutsForm? _shortcutsForm;
+
+    private void ShowShortcutsForm()
+    {
+        _context.Host.InvokeOnUI(() =>
+        {
+            if (_shortcutsForm != null && !_shortcutsForm.IsDisposed)
+            {
+                _shortcutsForm.BringToFront();
+                _shortcutsForm.Activate();
+                return;
+            }
+            var theme = _context.Host.CurrentTheme;
+            _shortcutsForm = new ClaudeShortcutsForm(theme);
+            _shortcutsForm.FormClosed += (_, _) => _shortcutsForm = null;
+            _shortcutsForm.Show();
+        });
+    }
+
     public IReadOnlyList<MenuContribution> GetMenuItems() =>
     [
         new("Show Last Notification", ShowLastNotification, Priority: 50, Icon: "\uD83D\uDCE8"),
+        new("Claude Shortcuts…", ShowShortcutsForm, Priority: 55, Icon: "\uD83D\uDE80"),
     ];
 
     public IReadOnlyList<MenuContribution> GetDashboardItems() =>
     [
         new("Last Notification", ShowLastNotification, Priority: 50, Icon: "\uD83D\uDCE8"),
+        new("Claude Shortcuts", ShowShortcutsForm, Priority: 55, Icon: "\uD83D\uDE80"),
     ];
 
     private void ShowLastNotification()

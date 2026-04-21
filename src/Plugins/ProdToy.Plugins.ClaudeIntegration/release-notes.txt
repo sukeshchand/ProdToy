@@ -1,1 +1,1 @@
-EnsureHookScript moved behind IPluginHost; plugin no longer touches host paths directly.
+New Claude Shortcuts manager: save multiple project launch configurations (working dir, args, WT profile, admin flag) and launch Claude in Windows Terminal with one click — replaces per-project .bat files.

@@ -2,7 +2,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Alarm;
 
-[Plugin("ProdToy.Plugin.Alarm", "Alarms", "1.0.366",
+[Plugin("ProdToy.Plugin.Alarm", "Alarms", "1.0.369",
     Description = "Schedule recurring alarms with popup and sound notifications",
     Author = "ProdToy",
     MenuPriority = 200)]
