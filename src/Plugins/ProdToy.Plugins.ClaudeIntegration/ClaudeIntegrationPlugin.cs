@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.350",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.352",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -395,17 +395,25 @@ public class ClaudeIntegrationPlugin : IPlugin
         panel.Controls.Add(installsLabel);
         y += 22;
 
+        var installsScroll = new Panel
+        {
+            AutoScroll = true,
+            Size = new Size(contentWidth - 120, 90),
+            Location = new Point(pad + 8, y),
+            BackColor = Color.Transparent,
+        };
         var installsList = new Label
         {
             Text = BuildInstallsListText(settings.ClaudeConfigDirs),
             Font = new Font("Segoe UI", 8.5f),
             ForeColor = theme.TextSecondary,
-            AutoSize = false,
-            Size = new Size(contentWidth - 120, 52),
-            Location = new Point(pad + 8, y),
+            AutoSize = true,
+            MaximumSize = new Size(installsScroll.ClientSize.Width - 4, 0),
+            Location = new Point(0, 0),
             BackColor = Color.Transparent,
         };
-        panel.Controls.Add(installsList);
+        installsScroll.Controls.Add(installsList);
+        panel.Controls.Add(installsScroll);
 
         var rescanButton = new Button
         {
@@ -432,7 +440,7 @@ public class ClaudeIntegrationPlugin : IPlugin
             installsList.Text = BuildInstallsListText(found.Select(i => i.ConfigDir).ToList());
         };
         panel.Controls.Add(rescanButton);
-        y += 60;
+        y += 98;
 
         y = AddSeparator(y);
 

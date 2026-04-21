@@ -297,6 +297,8 @@ class ScreenshotEditorForm : Form
         {
             if (_session.CurrentTool == AnnotationTool.Crop) { _canvas.CancelCrop(); _canvas.Invalidate(); e.Handled = true; return; }
             if (isEditingText) { _canvas.CommitTextEdit(); _canvas.Invalidate(); e.Handled = true; return; }
+            if (_session.SelectedObject != null) { _session.DeselectAll(); _canvas.Invalidate(); e.Handled = true; return; }
+            if (_canvas.HasSelectedRegion) { _canvas.ClearSelectedRegion(); e.Handled = true; return; }
             Close(); e.Handled = true; return;
         }
 
