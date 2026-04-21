@@ -137,9 +137,25 @@ static class AlarmNotifier
                 _snoozeTimers.Remove(alarm.Id);
             }
 
+            try
+            {
+                var current = AlarmStore.GetAlarm(alarm.Id);
+                if (current != null)
+                    AlarmStore.UpdateAlarm(current with { SnoozedUntil = DateTime.Now.AddMinutes(minutes) });
+            }
+            catch (Exception ex) { Debug.WriteLine($"Snooze persist failed: {ex.Message}"); }
+
             var timer = new System.Threading.Timer(_ =>
             {
                 lock (_snoozeLock) { _snoozeTimers.Remove(alarm.Id); }
+
+                try
+                {
+                    var current = AlarmStore.GetAlarm(alarm.Id);
+                    if (current != null)
+                        AlarmStore.UpdateAlarm(current with { SnoozedUntil = null });
+                }
+                catch (Exception ex) { Debug.WriteLine($"Snooze clear failed: {ex.Message}"); }
 
                 if (_host != null)
                 {
