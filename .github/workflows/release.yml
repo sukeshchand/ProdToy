@@ -85,3 +85,4 @@ jobs:
             release/ProdToy.Plugin.Alarm.zip
             release/ProdToy.Plugin.Screenshot.zip
             release/ProdToy.Plugin.ClaudeIntegration.zip
+            release/ProdToy.Plugin.ShortCutManager.zip
