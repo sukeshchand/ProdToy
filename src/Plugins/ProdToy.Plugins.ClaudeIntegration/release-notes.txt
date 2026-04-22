@@ -1,5 +1,4 @@
-Claude Shortcuts — generic launch profiles
-  - New "Launch profile" dropdown at the top of the edit form (defaults to Claude CLI). Profiles: Claude CLI, npm, Vite (via npx), dotnet, PowerShell, Custom command.
-  - Switching the profile swaps the args label, hint text and default args; the args box is only overwritten if empty or still holding the previous profile's default, so your edits survive.
-  - Launcher now runs the profile's command (claude / npm / npx / dotnet / pwsh), not a hardcoded `claude`. Custom profile treats the args box as the full command line. The "(X --continue || X)" retry wrapper stays Claude-only.
-  - The shortcut row's footer now shows the profile's command (e.g. "wt · Command Prompt  •  npm run dev" or "wt · Command Prompt · tab  •  claude --continue").
+Shortcuts moved to a standalone plugin
+  - The "Claude Shortcuts" launcher/folder tree/recycle-bin feature has been extracted into a separate "Shortcuts" plugin (ProdToy.Plugin.ShortCutManager). This plugin keeps only the Claude-specific hooks, status line, notification popup and Telegram integration.
+  - On first launch of the new Shortcuts plugin your existing shortcut data (shortcuts.json, shortcut-folders.json, shortcut-recycled.json, owned-wt-profiles.json) is copied across automatically, so nothing is lost.
+  - The "Claude Shortcuts…" menu entry is gone from this plugin; use the new "Shortcuts…" entry from the ShortCutManager plugin.
