@@ -1,11 +1,5 @@
-Claude Shortcuts — folder tree fix + polish
-  - Fix: the hard-coded root ("★ Shortcuts") was being hidden on some setups when the owner-draw path returned zero bounds. Switched to standard tree rendering so the root row is always visible.
-  - Icons are now inline in the node text (★ for root, 📁 for folders) and the root is bolded via NodeFont.
-  - ShowRootLines and the default +/- chevron are back on so expand/collapse works on the root and its children.
-
-  (Previous) Folder tree view
-  - Left-hand tree with a hard-coded root "Shortcuts" (non-renameable, non-deletable). Create subfolders at any depth from + Folder or right-click.
-  - "+ New Shortcut" is gated on a non-root folder selection so every shortcut lands in a folder.
-  - The right list shows only the shortcuts in the selected folder (exact match); folder counts are recursive.
-  - Rename/Delete folder with a safe "move contents up to parent" path, and a Move-to-folder submenu on each row.
-  - Folder structure persisted to its own shortcut-folders.json.
+Claude Shortcuts — generic launch profiles
+  - New "Launch profile" dropdown at the top of the edit form (defaults to Claude CLI). Profiles: Claude CLI, npm, Vite (via npx), dotnet, PowerShell, Custom command.
+  - Switching the profile swaps the args label, hint text and default args; the args box is only overwritten if empty or still holding the previous profile's default, so your edits survive.
+  - Launcher now runs the profile's command (claude / npm / npx / dotnet / pwsh), not a hardcoded `claude`. Custom profile treats the args box as the full command line. The "(X --continue || X)" retry wrapper stays Claude-only.
+  - The shortcut row's footer now shows the profile's command (e.g. "wt · Command Prompt  •  npm run dev" or "wt · Command Prompt · tab  •  claude --continue").

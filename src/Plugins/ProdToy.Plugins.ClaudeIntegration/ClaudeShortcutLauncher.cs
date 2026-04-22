@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Windows.Forms;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
@@ -45,6 +46,7 @@ static class ClaudeShortcutLauncher
         {
             Process.Start(psi);
             ClaudeShortcutStore.RecordLaunch(s.Id);
+            SchedulePostLaunchKeys(s);
             return new LaunchResult(true);
         }
         catch (System.ComponentModel.Win32Exception ex) when ((uint)ex.NativeErrorCode == 0x800704C7u
@@ -68,24 +70,49 @@ static class ClaudeShortcutLauncher
             FileName = "wt.exe",
             UseShellExecute = true,   // no console window for the wt invoker itself
         };
+        // -w routes the tab into an existing WT window:
+        //   empty name → "-w 0" (most-recent window)
+        //   named       → "-w <name>" (specific named window; created on demand)
+        // Without -w, WT uses its own "new window" default.
+        if (s.WtWindowTarget == WtWindowTarget.ExistingWindow)
+        {
+            psi.ArgumentList.Add("-w");
+            psi.ArgumentList.Add(string.IsNullOrWhiteSpace(s.WtWindowName)
+                ? "0"
+                : s.WtWindowName.Trim());
+        }
         if (!string.IsNullOrWhiteSpace(s.WtProfile))
         {
             psi.ArgumentList.Add("-p");
             psi.ArgumentList.Add(s.WtProfile);
         }
+        if (!string.IsNullOrWhiteSpace(s.WindowTitle))
+        {
+            // --title is a new-tab option on wt; without an explicit subcommand
+            // wt defaults to new-tab so this names the created tab/window.
+            psi.ArgumentList.Add("--title");
+            psi.ArgumentList.Add(s.WindowTitle);
+        }
         psi.ArgumentList.Add("-d");
         psi.ArgumentList.Add(s.WorkingDirectory);
         psi.ArgumentList.Add("cmd");
         psi.ArgumentList.Add("/k");
-        psi.ArgumentList.Add(BuildClaudeCmdline(s));
+        psi.ArgumentList.Add(BuildProfileCmdline(s));
         return psi;
     }
 
     private static ProcessStartInfo BuildCmdStartInfo(ClaudeShortcut s)
     {
         // Plain cmd window fallback. We wrap the whole thing in one argument
-        // so cmd /k gets the combined "cd && claude" line.
-        var line = $"cd /d \"{s.WorkingDirectory}\" && {BuildClaudeCmdline(s)}";
+        // so cmd /k gets the combined "cd && [title &&] claude" line.
+        var line = $"cd /d \"{s.WorkingDirectory}\"";
+        if (!string.IsNullOrWhiteSpace(s.WindowTitle))
+        {
+            // cmd's built-in `title` command sets the console window title.
+            // No quoting needed — `title` consumes the rest of the line.
+            line += $" && title {s.WindowTitle}";
+        }
+        line += $" && {BuildProfileCmdline(s)}";
         return new ProcessStartInfo
         {
             FileName = "cmd.exe",
@@ -95,20 +122,33 @@ static class ClaudeShortcutLauncher
         };
     }
 
-    private static string BuildClaudeCmdline(ClaudeShortcut s)
+    private static string BuildProfileCmdline(ClaudeShortcut s)
     {
+        var profile = LaunchProfiles.GetOrDefault(s.Profile);
         string args = (s.ClaudeArgs ?? "").Trim();
-        if (string.IsNullOrEmpty(args)) return "claude";
 
-        // When the user has --continue (or -c) in their args, Claude exits with
-        // "No conversation found to continue" on a fresh project. We auto-retry
-        // without that flag via a cmd-level || chain so the shortcut still lands
-        // you in a working session instead of a dead terminal.
-        string stripped = StripContinueFlag(args);
-        if (stripped == args) return $"claude {args}";
-        return string.IsNullOrEmpty(stripped)
-            ? $"(claude {args} || claude)"
-            : $"(claude {args} || claude {stripped})";
+        // Custom profile has no fixed binary — args is the full command.
+        if (string.IsNullOrEmpty(profile.Command))
+            return args;
+
+        string cmd = profile.Command;
+        if (string.IsNullOrEmpty(args)) return cmd;
+
+        // For profiles that opt in (Claude today), a trailing --continue/-c in
+        // the args gets a "(X args || X stripped)" retry wrapper so the user
+        // doesn't land in a dead terminal when there's no prior conversation.
+        if (profile.SupportsContinueFallback)
+        {
+            string stripped = StripContinueFlag(args);
+            if (stripped != args)
+            {
+                return string.IsNullOrEmpty(stripped)
+                    ? $"({cmd} {args} || {cmd})"
+                    : $"({cmd} {args} || {cmd} {stripped})";
+            }
+        }
+
+        return $"{cmd} {args}";
     }
 
     private static string StripContinueFlag(string args)
@@ -133,6 +173,30 @@ static class ClaudeShortcutLauncher
         }
         path = null;
         return false;
+    }
+
+    /// <summary>
+    /// Fires <see cref="SendKeys.SendWait"/> with the shortcut's configured
+    /// keystrokes after the configured delay, on the UI thread. Uses a
+    /// WinForms Timer (fires on the thread that started it) so SendKeys'
+    /// message-pump requirement is satisfied. Exceptions are swallowed —
+    /// these keystrokes are an optional convenience, never load-bearing.
+    /// </summary>
+    private static void SchedulePostLaunchKeys(ClaudeShortcut s)
+    {
+        if (string.IsNullOrWhiteSpace(s.PostLaunchSendKeys)) return;
+        int delay = Math.Clamp(s.PostLaunchDelayMs, 100, 60_000);
+        string keys = s.PostLaunchSendKeys;
+
+        var timer = new System.Windows.Forms.Timer { Interval = delay };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            timer.Dispose();
+            try { SendKeys.SendWait(keys); }
+            catch (Exception ex) { Debug.WriteLine($"PostLaunchSendKeys failed: {ex.Message}"); }
+        };
+        timer.Start();
     }
 
     private static IEnumerable<string> EnumerateCandidates()

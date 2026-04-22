@@ -7,13 +7,21 @@ namespace ProdToy.Plugins.ClaudeIntegration;
 
 class ClaudeShortcutsForm : Form
 {
+    /// <summary>Sentinel Tag value for the hard-coded "recycle bin" node.</summary>
+    private const string RecycleBinTag = "__recycle__";
+
     private readonly PluginTheme _theme;
     private readonly FlowLayoutPanel _listPanel;
     private readonly TreeView _folderTree;
     private readonly RoundedButton _newShortcutBtn;
+    private readonly FolderSlotRow _recycleBinRow;
     private string? _expandedId;
 
-    /// <summary>Currently selected folder path. "" = hard-coded root.</summary>
+    /// <summary>
+    /// Currently selected node's tag. "" = hard-coded "main" root,
+    /// RecycleBinTag = recycle bin, anything else = a normalized user folder
+    /// path.
+    /// </summary>
     private string _selectedFolder = "";
 
     public ClaudeShortcutsForm(PluginTheme theme)
@@ -92,7 +100,47 @@ class ClaudeShortcutsForm : Form
         Controls.Add(split);
 
         // --- Left: folder tree + small toolbar ---
+        // WinForms docks in REVERSE z-order: last-added Dock=Top ends up
+        // topmost. Add order:
+        //   1. tree         (Fill — placed after Dock edges)
+        //   2. folderToolbar (Dock=Top — topmost)
+        //   3. recycleBinRow (Dock=Bottom — very bottom)
         split.Panel1.BackColor = theme.BgDark;
+
+        _folderTree = new TreeView
+        {
+            Dock = DockStyle.Fill,
+            BackColor = theme.BgHeader,
+            ForeColor = theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            Font = new Font("Segoe UI", 9.5f),
+            ShowLines = false,
+            ShowPlusMinus = true,
+            // ShowRootLines must be true to get +/- glyphs on root-level
+            // nodes. ShowLines = false still keeps connector lines hidden.
+            ShowRootLines = true,
+            HideSelection = false,
+            FullRowSelect = true,
+            Indent = 16,
+            ItemHeight = 26,
+        };
+        _folderTree.AfterSelect += (_, e) =>
+        {
+            if (e.Node == null) return;
+            _selectedFolder = (e.Node.Tag as string) ?? "";
+            SyncSlotSelection();
+            UpdateNewShortcutButtonState();
+            RefreshList();
+        };
+        _folderTree.NodeMouseClick += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Right)
+            {
+                _folderTree.SelectedNode = e.Node;
+                ShowTreeContextMenu(e.Node, e.Location);
+            }
+        };
+        split.Panel1.Controls.Add(_folderTree);
 
         var folderToolbar = new Panel
         {
@@ -127,42 +175,27 @@ class ClaudeShortcutsForm : Form
         newFolderBtn.Location = new Point(folderToolbar.ClientSize.Width - 86, 4);
         newFolderBtn.FlatAppearance.BorderSize = 0;
         newFolderBtn.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
+        // "+ Folder" creates under the current selection (or top-level when
+        // the hardcoded root "Shortcuts" is selected, since its Tag is "").
         newFolderBtn.Click += (_, _) => CreateFolder(parent: _selectedFolder);
         folderToolbar.Controls.Add(newFolderBtn);
 
-        // Standard (non-owner-draw) rendering. OwnerDrawAll had an issue where
-        // the hard-coded root row could render with zero bounds on some setups
-        // and silently skip drawing. Standard rendering always draws the root.
-        _folderTree = new TreeView
+        // recycleBinRow — pinned to the very bottom.
+        _recycleBinRow = new FolderSlotRow(theme, "🗑 recycle bin") { Dock = DockStyle.Bottom };
+        _recycleBinRow.Clicked += () => SelectSlot(RecycleBinTag);
+        _recycleBinRow.MouseDown += (_, e) =>
         {
-            Dock = DockStyle.Fill,
-            BackColor = theme.BgHeader,
-            ForeColor = theme.TextPrimary,
-            BorderStyle = BorderStyle.FixedSingle,
-            Font = new Font("Segoe UI", 9.5f),
-            ShowLines = false,
-            ShowPlusMinus = true,
-            ShowRootLines = true,
-            HideSelection = false,
-            FullRowSelect = true,
-            Indent = 16,
-            ItemHeight = 26,
-        };
-        _folderTree.AfterSelect += (_, e) =>
-        {
-            _selectedFolder = (e.Node?.Tag as string) ?? "";
-            UpdateNewShortcutButtonState();
-            RefreshList();
-        };
-        _folderTree.NodeMouseClick += (_, e) =>
-        {
-            if (e.Button == MouseButtons.Right)
+            if (e.Button != MouseButtons.Right) return;
+            var menu = new ContextMenuStrip { BackColor = _theme.BgHeader, ForeColor = _theme.TextPrimary };
+            var emptyItem = new ToolStripMenuItem("Empty recycle bin…")
             {
-                _folderTree.SelectedNode = e.Node;
-                ShowTreeContextMenu(e.Node, e.Location);
-            }
+                Enabled = ClaudeShortcutsRecycleBin.Count > 0,
+            };
+            emptyItem.Click += (_, _) => EmptyRecycleBin();
+            menu.Items.Add(emptyItem);
+            menu.Show(_recycleBinRow, e.Location);
         };
-        split.Panel1.Controls.Add(_folderTree);
+        split.Panel1.Controls.Add(_recycleBinRow);
 
         // --- Right: shortcut list ---
         _listPanel = new FlowLayoutPanel
@@ -196,12 +229,52 @@ class ClaudeShortcutsForm : Form
     }
 
     private bool IsRootSelected => string.IsNullOrEmpty(_selectedFolder);
+    private bool IsRecycleBinSelected => _selectedFolder == RecycleBinTag;
+    private bool IsCreatableSelection => !IsRootSelected && !IsRecycleBinSelected;
 
     private void UpdateNewShortcutButtonState()
     {
-        _newShortcutBtn.Enabled = !IsRootSelected;
-        _newShortcutBtn.BackColor = IsRootSelected ? _theme.PrimaryDim : _theme.Primary;
-        _newShortcutBtn.ForeColor = IsRootSelected ? _theme.TextSecondary : Color.White;
+        _newShortcutBtn.Enabled = IsCreatableSelection;
+        _newShortcutBtn.BackColor = IsCreatableSelection ? _theme.Primary : _theme.PrimaryDim;
+        _newShortcutBtn.ForeColor = IsCreatableSelection ? Color.White : _theme.TextSecondary;
+    }
+
+    /// <summary>
+    /// Selects either the hard-coded "main" slot ("" tag) or the "recycle bin"
+    /// slot (RecycleBinTag). Clears the TreeView's own selection so the slot
+    /// rows own the highlight exclusively.
+    /// </summary>
+    private void SelectSlot(string slotTag)
+    {
+        _selectedFolder = slotTag;
+        _folderTree.SelectedNode = null;
+        SyncSlotSelection();
+        UpdateNewShortcutButtonState();
+        RefreshList();
+    }
+
+    private void SyncSlotSelection()
+    {
+        _recycleBinRow.Selected = IsRecycleBinSelected;
+    }
+
+    /// <summary>
+    /// Returns to the "Shortcuts" root selection — used by Esc. The hard-coded
+    /// root node's Tag is "" so AfterSelect resets _selectedFolder for us.
+    /// </summary>
+    private void ClearTreeSelection()
+    {
+        if (_folderTree.Nodes.Count > 0)
+        {
+            _folderTree.SelectedNode = _folderTree.Nodes[0];
+        }
+        else
+        {
+            _selectedFolder = "";
+            SyncSlotSelection();
+            UpdateNewShortcutButtonState();
+            RefreshList();
+        }
     }
 
     private void RefreshList()
@@ -211,9 +284,32 @@ class ClaudeShortcutsForm : Form
 
         var all = ClaudeShortcutStore.Load();
 
-        // Exact-match filter: shortcuts whose normalized FolderPath equals the
-        // current selection. Root ("") shows orphans (shortcuts without a
-        // folder) so they remain accessible for moving to a proper folder.
+        if (IsRecycleBinSelected)
+        {
+            var recycled = ClaudeShortcutsRecycleBin.Load()
+                .OrderByDescending(e => e.DeletedAt)
+                .ToList();
+
+            if (recycled.Count == 0)
+            {
+                _listPanel.Controls.Add(MakeEmptyLabel("Recycle bin is empty."));
+            }
+            else
+            {
+                foreach (var entry in recycled)
+                {
+                    var row = new RecycledEntryRow(entry, _theme);
+                    row.RestoreRequested += () => RestoreRecycledEntry(entry.Id);
+                    row.PurgeRequested += () => PurgeRecycledEntry(entry.Id);
+                    _listPanel.Controls.Add(row);
+                }
+            }
+
+            ResizeRows();
+            _listPanel.ResumeLayout();
+            return;
+        }
+
         var filtered = all.Where(s => string.Equals(
             ClaudeShortcutFolders.Normalize(s.FolderPath),
             _selectedFolder,
@@ -229,19 +325,7 @@ class ClaudeShortcutsForm : Form
             string emptyText = IsRootSelected
                 ? "Select a folder on the left, or create one with \"+ Folder\".\n\nShortcuts live inside folders — pick a folder to add a new shortcut."
                 : $"No shortcuts in \"{_selectedFolder}\" yet.\nClick \"+ New Shortcut\" above to add one.";
-
-            var empty = new Label
-            {
-                Text = emptyText,
-                Font = new Font("Segoe UI", 10.5f),
-                ForeColor = _theme.TextSecondary,
-                AutoSize = false,
-                Size = new Size(_listPanel.ClientSize.Width - 24, 90),
-                TextAlign = ContentAlignment.MiddleCenter,
-                BackColor = Color.Transparent,
-                Margin = new Padding(0, 40, 0, 0),
-            };
-            _listPanel.Controls.Add(empty);
+            _listPanel.Controls.Add(MakeEmptyLabel(emptyText));
         }
         else
         {
@@ -262,6 +346,18 @@ class ClaudeShortcutsForm : Form
         if (_expandedId != null && !all.Any(s => s.Id == _expandedId))
             _expandedId = null;
     }
+
+    private Label MakeEmptyLabel(string text) => new()
+    {
+        Text = text,
+        Font = new Font("Segoe UI", 10.5f),
+        ForeColor = _theme.TextSecondary,
+        AutoSize = false,
+        Size = new Size(_listPanel.ClientSize.Width - 24, 90),
+        TextAlign = ContentAlignment.MiddleCenter,
+        BackColor = Color.Transparent,
+        Margin = new Padding(0, 40, 0, 0),
+    };
 
     // ───── Folder tree ─────
 
@@ -293,18 +389,19 @@ class ClaudeShortcutsForm : Form
 
             _folderTree.Nodes.Clear();
 
+            // Hard-coded "Shortcuts" root pinned at the top of the tree. All
+            // user-created folders become children of it, so there's always a
+            // way to return to a "no folder" state (click root) even when the
+            // tree is densely filled. Tag = "" matches _selectedFolder's root
+            // state and the empty-selection branches in RefreshList.
             int totalCount = all.Count;
-            var root = new TreeNode($"★ Shortcuts  ({totalCount})")
-            {
-                Tag = "",
-                NodeFont = new Font(_folderTree.Font, FontStyle.Bold),
-            };
-            _folderTree.Nodes.Add(root);
+            var rootNode = new TreeNode($"Shortcuts  ({totalCount})") { Tag = "" };
+            _folderTree.Nodes.Add(rootNode);
 
             foreach (var path in allFolders.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
             {
                 var parts = path.Split('/');
-                TreeNodeCollection parent = root.Nodes;
+                TreeNodeCollection parent = rootNode.Nodes;
                 string cumulative = "";
                 for (int i = 0; i < parts.Length; i++)
                 {
@@ -319,16 +416,42 @@ class ClaudeShortcutsForm : Form
                 }
             }
 
-            root.Expand();
+            rootNode.Expand();
             foreach (var key in expanded)
             {
                 var node = FindNodeByPath(_folderTree.Nodes, key);
                 node?.Expand();
             }
 
-            var sel = FindNodeByPath(_folderTree.Nodes, _selectedFolder) ?? root;
-            _folderTree.SelectedNode = sel;
-            _selectedFolder = (sel.Tag as string) ?? "";
+            int recycledCount = ClaudeShortcutsRecycleBin.Count;
+            _recycleBinRow.Suffix = recycledCount > 0 ? $"  ({recycledCount})" : "";
+
+            // Selection mapping:
+            //   recycle bin → no TreeView selection, row shows state
+            //   root ("")   → TreeView selection = rootNode
+            //   user folder → TreeView selection = that node (or root if stale)
+            if (IsRecycleBinSelected)
+            {
+                _folderTree.SelectedNode = null;
+            }
+            else if (IsRootSelected)
+            {
+                _folderTree.SelectedNode = rootNode;
+            }
+            else
+            {
+                var sel = FindNodeByPath(_folderTree.Nodes, _selectedFolder);
+                if (sel != null)
+                {
+                    _folderTree.SelectedNode = sel;
+                }
+                else
+                {
+                    _selectedFolder = "";
+                    _folderTree.SelectedNode = rootNode;
+                }
+            }
+            SyncSlotSelection();
         }
         finally { _folderTree.EndUpdate(); }
     }
@@ -375,19 +498,21 @@ class ClaudeShortcutsForm : Form
     {
         if (node == null) return;
         var path = (node.Tag as string) ?? "";
+        if (string.IsNullOrEmpty(path) || path == RecycleBinTag) return;
+
         var menu = new ContextMenuStrip { BackColor = _theme.BgHeader, ForeColor = _theme.TextPrimary };
         menu.Items.Add("New subfolder…", null, (_, _) => CreateFolder(parent: path));
-        // Root is hard-coded — rename/delete hidden for it.
-        if (!string.IsNullOrEmpty(path))
-        {
-            menu.Items.Add("Rename folder…", null, (_, _) => RenameFolder(path));
-            menu.Items.Add("Delete folder…", null, (_, _) => DeleteFolder(path));
-        }
+        menu.Items.Add("Rename folder…", null, (_, _) => RenameFolder(path));
+        menu.Items.Add("Delete folder…", null, (_, _) => DeleteFolder(path));
         menu.Show(_folderTree, location);
     }
 
     private void CreateFolder(string parent)
     {
+        // If the caller passed the recycle-bin sentinel (e.g. + Folder was
+        // clicked while the recycle bin was selected), fall back to root.
+        if (parent == RecycleBinTag) parent = "";
+
         var name = TextInputDialog.Prompt(this, _theme,
             "New folder",
             string.IsNullOrEmpty(parent)
@@ -438,42 +563,107 @@ class ClaudeShortcutsForm : Form
     {
         if (string.IsNullOrEmpty(path)) return;
         var all = ClaudeShortcutStore.Load();
-        var under = all.Where(s => ClaudeShortcutFolders.IsSelfOrDescendant(
+
+        var shortcutsInside = all.Where(s => ClaudeShortcutFolders.IsSelfOrDescendant(
             ClaudeShortcutFolders.Normalize(s.FolderPath), path)).ToList();
 
-        if (under.Count == 0)
+        // Union every folder path under (or equal to) the anchor, from both
+        // shortcuts and the persisted folder store. We preserve them all so
+        // restoring rebuilds the exact hierarchy, including empty subfolders.
+        var allFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in all)
         {
-            var res = MessageBox.Show(this,
-                $"Delete folder \"{path}\"?",
-                "Confirm Delete",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
-            if (res != DialogResult.Yes) return;
-            ClaudeShortcutFolders.RemoveRecursive(path);
+            var p = ClaudeShortcutFolders.Normalize(s.FolderPath);
+            if (!string.IsNullOrEmpty(p)) allFolders.Add(p);
+        }
+        foreach (var f in ClaudeShortcutFolders.Load())
+            allFolders.Add(ClaudeShortcutFolders.Normalize(f));
+        allFolders.Add(path);
+        var subfolders = allFolders
+            .Where(p => ClaudeShortcutFolders.IsSelfOrDescendant(p, path))
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        string msg;
+        int subCount = Math.Max(0, subfolders.Count - 1);
+        if (shortcutsInside.Count == 0 && subCount == 0)
+        {
+            msg = $"Move folder \"{path}\" to recycle bin?";
         }
         else
         {
-            var res = MessageBox.Show(this,
-                $"\"{path}\" contains {under.Count} shortcut(s).\n\n"
-                + "Move them up to the parent folder and delete \"" + path + "\"?\n"
-                + "(No will cancel and leave everything in place.)",
-                "Confirm Delete",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
-            if (res != DialogResult.Yes) return;
-            var parent = ClaudeShortcutFolders.ParentOf(path) ?? "";
-            foreach (var s in under)
-            {
-                var normalized = ClaudeShortcutFolders.Normalize(s.FolderPath);
-                string target = string.Equals(normalized, path, StringComparison.OrdinalIgnoreCase)
-                    ? parent
-                    : ClaudeShortcutFolders.RewritePrefix(normalized, path, parent);
-                ClaudeShortcutStore.Update(s with { FolderPath = target });
-            }
-            ClaudeShortcutFolders.RemoveRecursive(path);
+            var parts = new List<string>();
+            if (subCount > 0) parts.Add($"{subCount} subfolder(s)");
+            if (shortcutsInside.Count > 0) parts.Add($"{shortcutsInside.Count} shortcut(s)");
+            msg = $"Move \"{path}\" to recycle bin?\n\nThis includes {string.Join(" and ", parts)}.\nYou can restore it from the recycle bin later.";
         }
+
+        var res = MessageBox.Show(this, msg, "Move to recycle bin",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
+        if (res != DialogResult.Yes) return;
+
+        ClaudeShortcutsRecycleBin.Add(new RecycleBinEntry
+        {
+            FolderPath = path,
+            Subfolders = subfolders,
+            Shortcuts = shortcutsInside,
+        });
+
+        foreach (var s in shortcutsInside)
+            ClaudeShortcutStore.Delete(s.Id);
+        ClaudeShortcutFolders.RemoveRecursive(path);
 
         _selectedFolder = ClaudeShortcutFolders.ParentOf(path) ?? "";
         RebuildTree();
         UpdateNewShortcutButtonState();
+        RefreshList();
+    }
+
+    private void RestoreRecycledEntry(string id)
+    {
+        var entry = ClaudeShortcutsRecycleBin.Get(id);
+        if (entry == null) return;
+
+        foreach (var f in entry.Subfolders)
+            ClaudeShortcutFolders.Add(f);
+        if (!string.IsNullOrEmpty(entry.FolderPath))
+            ClaudeShortcutFolders.Add(entry.FolderPath);
+        foreach (var s in entry.Shortcuts)
+            ClaudeShortcutStore.Add(s);
+
+        ClaudeShortcutsRecycleBin.Remove(id);
+
+        _selectedFolder = entry.FolderPath;
+        RebuildTree();
+        UpdateNewShortcutButtonState();
+        RefreshList();
+    }
+
+    private void PurgeRecycledEntry(string id)
+    {
+        var entry = ClaudeShortcutsRecycleBin.Get(id);
+        if (entry == null) return;
+        var res = MessageBox.Show(this,
+            $"Permanently delete \"{entry.FolderPath}\" and its contents?\n\nThis cannot be undone.",
+            "Delete permanently",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+        if (res != DialogResult.Yes) return;
+        ClaudeShortcutsRecycleBin.Remove(id);
+        RebuildTree();
+        RefreshList();
+    }
+
+    private void EmptyRecycleBin()
+    {
+        int n = ClaudeShortcutsRecycleBin.Count;
+        if (n == 0) return;
+        var res = MessageBox.Show(this,
+            $"Permanently delete all {n} item(s) from the recycle bin?\n\nThis cannot be undone.",
+            "Empty recycle bin",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+        if (res != DialogResult.Yes) return;
+        ClaudeShortcutsRecycleBin.Clear();
+        RebuildTree();
         RefreshList();
     }
 
@@ -482,7 +672,10 @@ class ClaudeShortcutsForm : Form
         int w = _listPanel.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 6;
         if (w < 120) w = 120;
         foreach (Control c in _listPanel.Controls)
-            if (c is ClaudeShortcutRow r) r.Width = w;
+        {
+            if (c is ClaudeShortcutRow or RecycledEntryRow or Label)
+                c.Width = w;
+        }
     }
 
     private void ToggleExpand(string id)
@@ -494,7 +687,7 @@ class ClaudeShortcutsForm : Form
 
     private void NewShortcut()
     {
-        if (IsRootSelected) return;
+        if (!IsCreatableSelection) return;
         using var dlg = new ClaudeShortcutEditForm(_theme, defaultFolder: _selectedFolder);
         if (dlg.ShowDialog(this) == DialogResult.OK && dlg.Result != null)
         {
@@ -650,13 +843,22 @@ class ClaudeShortcutsForm : Form
 
     private void OnKey(object? sender, KeyEventArgs e)
     {
-        if (e.Control && e.KeyCode == Keys.N && !IsRootSelected) { NewShortcut(); e.Handled = true; return; }
-        if (e.KeyCode == Keys.Escape && _expandedId != null && ActiveControl is not TextBox)
+        if (e.Control && e.KeyCode == Keys.N && IsCreatableSelection) { NewShortcut(); e.Handled = true; return; }
+        if (e.KeyCode == Keys.Escape && ActiveControl is not TextBox)
         {
-            _expandedId = null;
-            foreach (Control c in _listPanel.Controls)
-                if (c is ClaudeShortcutRow r) r.Expanded = false;
-            e.Handled = true;
+            if (_expandedId != null)
+            {
+                _expandedId = null;
+                foreach (Control c in _listPanel.Controls)
+                    if (c is ClaudeShortcutRow r) r.Expanded = false;
+                e.Handled = true;
+                return;
+            }
+            if (_folderTree.SelectedNode != null)
+            {
+                ClearTreeSelection();
+                e.Handled = true;
+            }
         }
     }
 
@@ -837,10 +1039,21 @@ class ClaudeShortcutRow : Panel
                 subFont, subBrush, new RectangleF(textLeft, 36, textRight - textLeft, 18), sf);
         }
 
-        string launcher = _shortcut.LauncherMode == ClaudeLauncherMode.WindowsTerminal
-            ? (string.IsNullOrEmpty(_shortcut.WtProfile) ? "wt" : $"wt · {_shortcut.WtProfile}")
-            : "cmd";
-        string thirdLine = $"claude {_shortcut.ClaudeArgs}".Trim();
+        string launcher;
+        if (_shortcut.LauncherMode == ClaudeLauncherMode.WindowsTerminal)
+        {
+            string baseLabel = string.IsNullOrEmpty(_shortcut.WtProfile) ? "wt" : $"wt · {_shortcut.WtProfile}";
+            launcher = _shortcut.WtWindowTarget == WtWindowTarget.ExistingWindow
+                ? $"{baseLabel} · tab"
+                : baseLabel;
+        }
+        else
+        {
+            launcher = "cmd";
+        }
+        var profile = LaunchProfiles.GetOrDefault(_shortcut.Profile);
+        string cmd = string.IsNullOrEmpty(profile.Command) ? "custom" : profile.Command;
+        string thirdLine = $"{cmd} {_shortcut.ClaudeArgs}".Trim();
         thirdLine = $"{launcher}  •  {thirdLine}";
         using (var smFont = new Font("Segoe UI", 8.5f))
         using (var smBrush = new SolidBrush(_theme.TextSecondary))
@@ -884,6 +1097,252 @@ class ClaudeShortcutRow : Panel
     }
 
     private static GraphicsPath RoundedRect(Rectangle rect, int radius)
+    {
+        var path = new GraphicsPath();
+        int d = Math.Min(radius, Math.Min(rect.Width, rect.Height)) * 2;
+        if (d <= 0) { path.AddRectangle(rect); return path; }
+        path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+        path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+        path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+        path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+}
+
+/// <summary>
+/// Fixed "slot" row used for the hard-coded "main" and "recycle bin" entries
+/// in the Claude Shortcuts folder panel. Lives outside the TreeView so it
+/// renders reliably; paints its own themed background + label and raises
+/// <see cref="Clicked"/> when pressed.
+/// </summary>
+class FolderSlotRow : Panel
+{
+    private const int ChevronRegionWidth = 20;
+
+    private readonly PluginTheme _theme;
+    private readonly string _baseLabel;
+    private bool _selected;
+    private bool _hover;
+    private string _suffix = "";
+    private bool _showChevron;
+    private bool _chevronExpanded = true;
+
+    public event Action? Clicked;
+
+    /// <summary>Raised when the user clicks the chevron region (left edge).</summary>
+    public event Action? ChevronClicked;
+
+    public bool Selected
+    {
+        get => _selected;
+        set { if (_selected == value) return; _selected = value; Invalidate(); }
+    }
+
+    /// <summary>Appended to the base label — e.g. "  (5)" to show a count.</summary>
+    public string Suffix
+    {
+        get => _suffix;
+        set { if (_suffix == value) return; _suffix = value ?? ""; Invalidate(); }
+    }
+
+    /// <summary>Whether to draw an expand/collapse chevron on the left edge.</summary>
+    public bool ShowChevron
+    {
+        get => _showChevron;
+        set { if (_showChevron == value) return; _showChevron = value; Invalidate(); }
+    }
+
+    /// <summary>True = chevron points down (▾, "expanded"); false = right (▸, "collapsed").</summary>
+    public bool ChevronExpanded
+    {
+        get => _chevronExpanded;
+        set { if (_chevronExpanded == value) return; _chevronExpanded = value; Invalidate(); }
+    }
+
+    public FolderSlotRow(PluginTheme theme, string label)
+    {
+        _theme = theme;
+        _baseLabel = label;
+        Height = 30;
+        Cursor = Cursors.Hand;
+        BackColor = theme.BgHeader;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+               | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        MouseEnter += (_, _) => { _hover = true; Invalidate(); };
+        MouseLeave += (_, _) => { _hover = false; Invalidate(); };
+    }
+
+    protected override void OnMouseClick(MouseEventArgs e)
+    {
+        base.OnMouseClick(e);
+        if (e.Button != MouseButtons.Left) return;
+
+        if (_showChevron && e.X < ChevronRegionWidth)
+            ChevronClicked?.Invoke();
+        else
+            Clicked?.Invoke();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+        var bg = _selected ? _theme.Primary
+               : _hover ? _theme.BgDark
+               : _theme.BgHeader;
+        using (var brush = new SolidBrush(bg))
+            g.FillRectangle(brush, ClientRectangle);
+
+        var fg = _selected ? Color.White : _theme.TextPrimary;
+        int textLeft = 10;
+
+        if (_showChevron)
+        {
+            using var chevFont = new Font("Segoe UI", 10f, FontStyle.Bold);
+            using var chevBrush = new SolidBrush(fg);
+            string chev = _chevronExpanded ? "▾" : "▸";
+            using var sfChev = new StringFormat
+            {
+                LineAlignment = StringAlignment.Center,
+                Alignment = StringAlignment.Center,
+            };
+            g.DrawString(chev, chevFont, chevBrush,
+                new RectangleF(0, 0, ChevronRegionWidth, Height), sfChev);
+            textLeft = ChevronRegionWidth + 2;
+        }
+
+        // Use TextRenderer (GDI) instead of Graphics.DrawString (GDI+) so the
+        // emoji in "🗑 recycle bin" falls back to Segoe UI Emoji when the
+        // label font doesn't carry that glyph. Without this, users whose
+        // Segoe UI Semibold lacks 🗑 see a tofu box.
+        using var font = new Font("Segoe UI Semibold", 10f, FontStyle.Bold);
+        var bounds = new Rectangle(textLeft, 0, Width - textLeft - 10, Height);
+        TextRenderer.DrawText(g, _baseLabel + _suffix, font, bounds, fg,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter
+            | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis
+            | TextFormatFlags.NoPadding);
+    }
+}
+
+/// <summary>
+/// Row representing a single recycle-bin entry in the right-hand list.
+/// Shows the recycled folder path, a summary of contents and the deleted
+/// timestamp, with "Restore" and permanent-delete buttons.
+/// </summary>
+class RecycledEntryRow : Panel
+{
+    private const int RowHeight = 72;
+
+    private readonly RecycleBinEntry _entry;
+    private readonly PluginTheme _theme;
+    private readonly RoundedButton _restoreBtn;
+    private readonly Button _purgeBtn;
+
+    public event Action? RestoreRequested;
+    public event Action? PurgeRequested;
+
+    public RecycledEntryRow(RecycleBinEntry entry, PluginTheme theme)
+    {
+        _entry = entry;
+        _theme = theme;
+        Height = RowHeight;
+        Margin = new Padding(6, 3, 6, 3);
+        BackColor = theme.BgDark;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+            | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+
+        _restoreBtn = new RoundedButton
+        {
+            Text = "↶ Restore",
+            Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
+            Size = new Size(100, 32),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.Primary,
+            ForeColor = Color.White,
+            Cursor = Cursors.Hand,
+            TabStop = false,
+        };
+        _restoreBtn.FlatAppearance.BorderSize = 0;
+        _restoreBtn.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
+        _restoreBtn.Click += (_, _) => RestoreRequested?.Invoke();
+        Controls.Add(_restoreBtn);
+
+        _purgeBtn = new Button
+        {
+            Text = "🗑",
+            Font = new Font("Segoe UI Emoji", 11f, FontStyle.Bold),
+            FlatStyle = FlatStyle.Flat,
+            ForeColor = theme.ErrorColor,
+            BackColor = theme.BgDark,
+            Size = new Size(32, 32),
+            Cursor = Cursors.Hand,
+            TabStop = false,
+        };
+        _purgeBtn.FlatAppearance.BorderSize = 0;
+        _purgeBtn.FlatAppearance.MouseOverBackColor = theme.BgHeader;
+        _purgeBtn.Click += (_, _) => PurgeRequested?.Invoke();
+        Controls.Add(_purgeBtn);
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (_restoreBtn == null || _purgeBtn == null) return;
+        _purgeBtn.Location = new Point(Width - _purgeBtn.Width - 10, 20);
+        _restoreBtn.Location = new Point(Width - _purgeBtn.Width - 10 - _restoreBtn.Width - 6, 20);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (_restoreBtn == null || _purgeBtn == null) return;
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+        var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+        using var path = RoundedRectPath(rect, 8);
+        using (var bg = new SolidBrush(_theme.BgHeader))
+            g.FillPath(bg, path);
+
+        int textLeft = 20;
+        int textRight = _restoreBtn.Left - 14;
+        if (textRight < textLeft + 60) textRight = Width - 40;
+
+        // TextRenderer (GDI) for the title so the 📁 emoji falls back to
+        // Segoe UI Emoji when the label font doesn't have it (prevents tofu).
+        using var titleFont = new Font("Segoe UI Semibold", 11f, FontStyle.Bold);
+        TextRenderer.DrawText(g, $"📁 {_entry.FolderPath}", titleFont,
+            new Rectangle(textLeft, 10, textRight - textLeft, 24),
+            _theme.TextPrimary,
+            TextFormatFlags.Left | TextFormatFlags.Top
+            | TextFormatFlags.SingleLine | TextFormatFlags.PathEllipsis
+            | TextFormatFlags.NoPadding);
+
+        int subCount = Math.Max(0, _entry.Subfolders.Count - 1);
+        var parts = new List<string>();
+        if (subCount > 0) parts.Add($"{subCount} subfolder" + (subCount == 1 ? "" : "s"));
+        parts.Add($"{_entry.Shortcuts.Count} shortcut" + (_entry.Shortcuts.Count == 1 ? "" : "s"));
+        string summary = string.Join("  ·  ", parts);
+
+        using var subFont = new Font("Segoe UI", 9f);
+        using var subBrush = new SolidBrush(_theme.TextSecondary);
+        using var sfChar = new StringFormat
+        {
+            Trimming = StringTrimming.EllipsisCharacter,
+            FormatFlags = StringFormatFlags.NoWrap,
+        };
+        g.DrawString(summary, subFont, subBrush,
+            new RectangleF(textLeft, 36, textRight - textLeft, 18), sfChar);
+
+        string when = $"deleted {_entry.DeletedAt:ddd, MMM d yyyy  HH:mm}";
+        using var whenFont = new Font("Segoe UI", 8.5f);
+        g.DrawString(when, whenFont, subBrush,
+            new RectangleF(textLeft, 52, textRight - textLeft, 18), sfChar);
+    }
+
+    private static GraphicsPath RoundedRectPath(Rectangle rect, int radius)
     {
         var path = new GraphicsPath();
         int d = Math.Min(radius, Math.Min(rect.Width, rect.Height)) * 2;

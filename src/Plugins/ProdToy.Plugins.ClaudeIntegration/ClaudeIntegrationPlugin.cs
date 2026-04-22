@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.384",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.401",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -87,6 +87,7 @@ public class ClaudeIntegrationPlugin : IPlugin
         ClaudePaths.Initialize(context.DataDirectory);
         ClaudeShortcutStore.Initialize(context.DataDirectory);
         ClaudeShortcutFolders.Initialize(context.DataDirectory);
+        ClaudeShortcutsRecycleBin.Initialize(context.DataDirectory);
         OwnedWtProfilesStore.Initialize(context.DataDirectory);
 
         _chatHistory = new ChatHistory(

@@ -13,7 +13,15 @@ class ClaudeShortcutEditForm : Form
     private readonly TextBox _dirBox;
     private readonly TextBox _argsBox;
     private readonly ComboBox _profileCombo;
+    private readonly ComboBox _launchProfileCombo;
+    private readonly Label _argsLabel;
+    private readonly Label _argsHintLabel;
     private readonly ComboBox _launcherCombo;
+    private readonly ComboBox _windowTargetCombo;
+    private readonly TextBox _tabGroupBox;
+    private readonly TextBox _titleBox;
+    private readonly TextBox _sendKeysBox;
+    private readonly NumericUpDown _sendKeysDelayBox;
     private readonly ToggleSwitch _adminToggle;
     private readonly TextBox _notesBox;
     private readonly Label _validationLabel;
@@ -78,12 +86,22 @@ class ClaudeShortcutEditForm : Form
         Controls.Add(folderReadout);
         y += 40;
 
-        y = AddSection("PROJECT", y);
+        // Launch profile sits at the very top — selecting it swaps the
+        // command's default args, label, and hint so the edit form works for
+        // any CLI (npm, dotnet, vite, …), not just claude.
+        y = AddSection("PROFILE", y);
 
-        AddLabel("Name", pad, y);
-        _nameBox = MakeTextBox(inputX, y, inputW);
-        _nameBox.Text = existing?.Name ?? "";
+        AddLabel("Launch profile", pad, y);
+        _launchProfileCombo = MakeCombo(inputX, y, 240);
+        foreach (var p in LaunchProfiles.All)
+            _launchProfileCombo.Items.Add(p.DisplayName);
+        var initialProfile = LaunchProfiles.GetOrDefault(existing?.Profile);
+        _launchProfileCombo.SelectedIndex = Array.FindIndex(
+            LaunchProfiles.All, p => p.Id == initialProfile.Id);
+        if (_launchProfileCombo.SelectedIndex < 0) _launchProfileCombo.SelectedIndex = 0;
         y += 34;
+
+        y = AddSection("PROJECT", y);
 
         AddLabel("Working directory", pad, y);
         _dirBox = MakeTextBox(inputX, y, inputW - 90);
@@ -109,30 +127,63 @@ class ClaudeShortcutEditForm : Form
                 UseDescriptionForTitle = true,
                 InitialDirectory = Directory.Exists(_dirBox.Text) ? _dirBox.Text : "",
             };
-            if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrEmpty(dlg.SelectedPath))
-                _dirBox.Text = dlg.SelectedPath;
+            if (dlg.ShowDialog(this) != DialogResult.OK || string.IsNullOrEmpty(dlg.SelectedPath))
+                return;
+            _dirBox.Text = dlg.SelectedPath;
+            // Auto-fill Name with the selected folder's leaf name when empty
+            // so the common case of "name after the project folder" is one
+            // click. Existing text is preserved (user may have named it first).
+            if (string.IsNullOrWhiteSpace(_nameBox.Text))
+            {
+                string leaf = Path.GetFileName(dlg.SelectedPath.TrimEnd('\\', '/'));
+                if (!string.IsNullOrWhiteSpace(leaf)) _nameBox.Text = leaf;
+            }
         };
         Controls.Add(browseBtn);
         y += 34;
 
-        y = AddSection("CLAUDE", y);
-
-        AddLabel("Claude args", pad, y);
-        _argsBox = MakeTextBox(inputX, y, inputW);
-        _argsBox.Text = existing?.ClaudeArgs ?? "--dangerously-skip-permissions --continue";
+        AddLabel("Name", pad, y);
+        _nameBox = MakeTextBox(inputX, y, inputW);
+        _nameBox.Text = existing?.Name ?? "";
         y += 34;
 
-        var argsHint = new Label
+        y = AddSection("COMMAND", y);
+
+        _argsLabel = AddLabel($"{initialProfile.DisplayName} args", pad, y);
+        _argsBox = MakeTextBox(inputX, y, inputW);
+        _argsBox.Text = existing?.ClaudeArgs ?? initialProfile.DefaultArgs;
+        y += 34;
+
+        _argsHintLabel = new Label
         {
-            Text = "Appended to `claude` — e.g. --continue, --model, -p, --dangerously-skip-permissions",
+            Text = initialProfile.ArgsHint,
             Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
-            AutoSize = true,
+            AutoSize = false,
+            // Reserve height for two wrapped lines; width matches the input.
+            Size = new Size(inputW, 32),
             Location = new Point(inputX, y),
             BackColor = Color.Transparent,
         };
-        Controls.Add(argsHint);
-        y += 22;
+        Controls.Add(_argsHintLabel);
+        y += 34;
+
+        // When the profile changes, update the label + hint immediately. The
+        // args textbox is only overwritten if it's empty or still holds the
+        // previous profile's default (so we don't clobber the user's edits).
+        string prevDefault = initialProfile.DefaultArgs;
+        _launchProfileCombo.SelectedIndexChanged += (_, _) =>
+        {
+            int idx = _launchProfileCombo.SelectedIndex;
+            if (idx < 0 || idx >= LaunchProfiles.All.Length) return;
+            var p = LaunchProfiles.All[idx];
+            _argsLabel.Text = $"{p.DisplayName} args";
+            _argsHintLabel.Text = p.ArgsHint;
+            string current = _argsBox.Text ?? "";
+            if (string.IsNullOrWhiteSpace(current) || current == prevDefault)
+                _argsBox.Text = p.DefaultArgs;
+            prevDefault = p.DefaultArgs;
+        };
 
         y = AddSection("TERMINAL", y);
 
@@ -141,6 +192,98 @@ class ClaudeShortcutEditForm : Form
         _launcherCombo.Items.Add("Windows Terminal");
         _launcherCombo.Items.Add("Plain cmd window");
         _launcherCombo.SelectedIndex = existing?.LauncherMode == ClaudeLauncherMode.CmdWindow ? 1 : 0;
+        y += 34;
+
+        // Only meaningful when launcher = Windows Terminal. Disabled for cmd
+        // fallback since cmd.exe can't attach to an existing WT window.
+        AddLabel("Open in", pad, y);
+        _windowTargetCombo = MakeCombo(inputX, y, 240);
+        _windowTargetCombo.Items.Add("New window");
+        _windowTargetCombo.Items.Add("Existing window (new tab)");
+        _windowTargetCombo.SelectedIndex = existing?.WtWindowTarget == WtWindowTarget.ExistingWindow ? 1 : 0;
+
+        // Tab group name — routes the tab into a specific named WT window via
+        // `-w <name>`. Only relevant when "Existing window" is selected.
+        int tabGroupX = inputX + 248;
+        int tabGroupW = Math.Max(120, ClientSize.Width - tabGroupX - pad);
+        _tabGroupBox = new TextBox
+        {
+            Font = new Font("Segoe UI", 10f),
+            BackColor = theme.BgHeader,
+            ForeColor = theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            Size = new Size(tabGroupW, 26),
+            Location = new Point(tabGroupX, y),
+            PlaceholderText = "Tab group (optional)",
+            Text = existing?.WtWindowName ?? "",
+        };
+        Controls.Add(_tabGroupBox);
+
+        void RefreshWindowTargetEnabled()
+        {
+            bool launcherIsWt = _launcherCombo.SelectedIndex == 0;
+            _windowTargetCombo.Enabled = launcherIsWt;
+            // Tab group only makes sense for "Existing window (new tab)".
+            _tabGroupBox.Enabled = launcherIsWt && _windowTargetCombo.SelectedIndex == 1;
+        }
+        _launcherCombo.SelectedIndexChanged += (_, _) => RefreshWindowTargetEnabled();
+        _windowTargetCombo.SelectedIndexChanged += (_, _) => RefreshWindowTargetEnabled();
+        RefreshWindowTargetEnabled();
+        y += 34;
+
+        // Optional custom tab/window title. Empty = "leave it alone".
+        AddLabel("Window title", pad, y);
+        _titleBox = MakeTextBox(inputX, y, inputW);
+        _titleBox.Text = existing?.WindowTitle ?? "";
+        y += 30;
+
+        var titleHint = new Label
+        {
+            Text = "Leave empty to keep the default terminal title. Used for wt --title or cmd title.",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(titleHint);
+        y += 26;
+
+        // Optional keystrokes fired with SendKeys after the launch completes.
+        // Useful for apps that rewrite the tab title on startup — you can bind
+        // your preferred rename shortcut and replay it here.
+        AddLabel("Send keys after launch", pad, y);
+        _sendKeysBox = MakeTextBox(inputX, y, inputW);
+        _sendKeysBox.Text = existing?.PostLaunchSendKeys ?? "";
+        y += 30;
+
+        var sendKeysHint = new Label
+        {
+            Text = "Leave empty to skip. SendKeys syntax: {ENTER}, {TAB}, ^+p = Ctrl+Shift+P, etc.",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(sendKeysHint);
+        y += 22;
+
+        AddLabel("Delay (ms)", pad, y);
+        _sendKeysDelayBox = new NumericUpDown
+        {
+            Font = new Font("Segoe UI", 10f),
+            BackColor = theme.BgHeader,
+            ForeColor = theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            Minimum = 100,
+            Maximum = 60_000,
+            Increment = 500,
+            Value = Math.Clamp(existing?.PostLaunchDelayMs ?? 3000, 100, 60_000),
+            Size = new Size(100, 26),
+            Location = new Point(inputX, y),
+        };
+        Controls.Add(_sendKeysDelayBox);
         y += 34;
 
         AddLabel("WT profile", pad, y);
@@ -398,10 +541,21 @@ class ClaudeShortcutEditForm : Form
         {
             Id = _existing?.Id ?? Guid.NewGuid().ToString("N"),
             Name = _nameBox.Text.Trim(),
+            Profile = (_launchProfileCombo.SelectedIndex >= 0
+                && _launchProfileCombo.SelectedIndex < LaunchProfiles.All.Length)
+                ? LaunchProfiles.All[_launchProfileCombo.SelectedIndex].Id
+                : LaunchProfiles.Default.Id,
             WorkingDirectory = _dirBox.Text.Trim(),
             ClaudeArgs = _argsBox.Text.Trim(),
             WtProfile = _profileCombo.Text.Trim(),
             LauncherMode = launcher,
+            WtWindowTarget = _windowTargetCombo.SelectedIndex == 1
+                ? WtWindowTarget.ExistingWindow
+                : WtWindowTarget.NewWindow,
+            WtWindowName = _tabGroupBox.Text.Trim(),
+            WindowTitle = _titleBox.Text.Trim(),
+            PostLaunchSendKeys = _sendKeysBox.Text,
+            PostLaunchDelayMs = (int)_sendKeysDelayBox.Value,
             RequireAdmin = _adminToggle.Checked,
             Notes = _notesBox.Text,
             FolderPath = _folderPath,
