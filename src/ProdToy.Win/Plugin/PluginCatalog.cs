@@ -108,7 +108,7 @@ static class PluginCatalog
     /// local copy for local/UNC paths, HTTP download via AssetDownloader for URLs —
     /// then extracting into PluginsBinDir\{id}\ and hot-loading it via PluginManager.
     /// </summary>
-    public static (bool Success, string Message) InstallPlugin(CatalogEntry entry)
+    public static async Task<(bool Success, string Message)> InstallPluginAsync(CatalogEntry entry)
     {
         try
         {
@@ -133,9 +133,11 @@ static class PluginCatalog
             {
                 try
                 {
-                    tempFileToDelete = AssetDownloader
-                        .DownloadRelativeAssetAsync(location, relZip)
-                        .GetAwaiter().GetResult();
+                    // No ConfigureAwait(false): the post-await work touches
+                    // WinForms via PluginManager.DiscoverAndLoad, so we need
+                    // the UI SyncContext preserved for the continuation.
+                    tempFileToDelete = await AssetDownloader
+                        .DownloadRelativeAssetAsync(location, relZip);
                     zipToExtract = tempFileToDelete;
                 }
                 catch (Exception ex)

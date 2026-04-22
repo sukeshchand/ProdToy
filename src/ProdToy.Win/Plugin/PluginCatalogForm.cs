@@ -277,7 +277,7 @@ class PluginCatalogForm : Form
             case "Install":
             {
                 _statusLabel.Text = $"Installing {entry.Name}...";
-                var (success, message) = PluginCatalog.InstallPlugin(entry);
+                var (success, message) = await PluginCatalog.InstallPluginAsync(entry);
                 _statusLabel.Text = message;
                 _statusLabel.ForeColor = success ? _theme.SuccessColor : _theme.ErrorColor;
                 break;
@@ -286,7 +286,7 @@ class PluginCatalogForm : Form
             {
                 _statusLabel.Text = $"Updating {entry.Name}...";
                 PluginManager.UninstallPlugin(entry.Id);
-                var (success, message) = PluginCatalog.InstallPlugin(entry);
+                var (success, message) = await PluginCatalog.InstallPluginAsync(entry);
                 _statusLabel.Text = success ? $"Updated {entry.Name} to v{entry.Version}" : message;
                 _statusLabel.ForeColor = success ? _theme.SuccessColor : _theme.ErrorColor;
                 break;

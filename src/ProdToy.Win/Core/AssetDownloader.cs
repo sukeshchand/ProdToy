@@ -36,9 +36,12 @@ static class AssetDownloader
         string siblingUrl = baseDir + "/" + cleanedRel;
         string flatUrl = baseDir + "/" + Path.GetFileName(cleanedRel);
 
+        // Flat-first: GitHub Releases (the default update host) uses a flat
+        // asset namespace, so the sibling-dir URL would 404 there. Sibling
+        // stays as a fallback for HTTP mirrors that replicate the local layout.
         var attempts = siblingUrl == flatUrl
-            ? new[] { siblingUrl }
-            : new[] { siblingUrl, flatUrl };
+            ? new[] { flatUrl }
+            : new[] { flatUrl, siblingUrl };
 
         Log.Info($"AssetDownloader: {relPath} → {attempts.Length} attempt(s): {string.Join(" | ", attempts)}");
 
@@ -49,7 +52,7 @@ static class AssetDownloader
             try
             {
                 Log.Info($"GET {url}");
-                using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+                using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
                 Log.Info($"  status={(int)resp.StatusCode} {resp.StatusCode} len={resp.Content.Headers.ContentLength?.ToString() ?? "?"} in {sw.ElapsedMilliseconds}ms");
                 resp.EnsureSuccessStatusCode();
 
@@ -57,7 +60,7 @@ static class AssetDownloader
                     $"prodtoy_{Guid.NewGuid():N}_{Path.GetFileName(cleanedRel)}");
                 using (var fs = File.Create(tempFile))
                 {
-                    await resp.Content.CopyToAsync(fs);
+                    await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
                 }
                 var info = new FileInfo(tempFile);
                 Log.Info($"  saved {info.Length} bytes to {tempFile} in {sw.ElapsedMilliseconds}ms total");
