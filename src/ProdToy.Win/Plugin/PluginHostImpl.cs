@@ -34,7 +34,14 @@ sealed class PluginHostImpl : IPluginHost
 
     public void ShowBalloonNotification(string title, string message, ToolTipIcon icon = ToolTipIcon.Info)
     {
-        _trayIcon.ShowBalloonTip(3000, title, message, icon);
+        try
+        {
+            _trayIcon.ShowBalloonTip(3000, title, message, icon);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"ShowBalloonNotification failed: {ex.Message}");
+        }
     }
 
     public IHotkeyRegistration? RegisterHotkey(string hotkeyString, Action callback)

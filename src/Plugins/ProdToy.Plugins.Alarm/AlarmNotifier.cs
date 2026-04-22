@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Media;
 using ProdToy.Sdk;
 
@@ -41,7 +40,7 @@ static class AlarmNotifier
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"AlarmNotifier dispatch failed: {ex.Message}");
+                PluginLog.Error("AlarmNotifier dispatch failed", ex);
             }
         });
     }
@@ -67,7 +66,7 @@ static class AlarmNotifier
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Sound play failed: {ex.Message}");
+                    PluginLog.Warn($"Alarm sound play failed: {ex.Message}");
                 }
             }
 
@@ -123,7 +122,7 @@ static class AlarmNotifier
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"AlarmNotifier.ShowAlarm failed: {ex.Message}");
+            PluginLog.Error($"ShowAlarm failed for '{alarm.Title}'", ex);
             AlarmStore.AddHistoryEntry(new AlarmHistoryEntry
             {
                 AlarmId = alarm.Id,
@@ -150,7 +149,7 @@ static class AlarmNotifier
                 if (current != null)
                     AlarmStore.UpdateAlarm(current with { SnoozedUntil = DateTime.Now.AddMinutes(minutes) });
             }
-            catch (Exception ex) { Debug.WriteLine($"Snooze persist failed: {ex.Message}"); }
+            catch (Exception ex) { PluginLog.Warn($"Snooze persist failed: {ex.Message}"); }
 
             var timer = new System.Threading.Timer(_ =>
             {
@@ -162,12 +161,12 @@ static class AlarmNotifier
                     if (current != null)
                         AlarmStore.UpdateAlarm(current with { SnoozedUntil = null });
                 }
-                catch (Exception ex) { Debug.WriteLine($"Snooze clear failed: {ex.Message}"); }
+                catch (Exception ex) { PluginLog.Warn($"Snooze clear failed: {ex.Message}"); }
 
                 if (_host != null)
                 {
                     try { _host.InvokeOnUI(() => ShowAlarm(alarm)); }
-                    catch (Exception ex) { Debug.WriteLine($"Snooze re-trigger failed: {ex.Message}"); }
+                    catch (Exception ex) { PluginLog.Error("Snooze re-trigger failed", ex); }
                 }
             }, null, TimeSpan.FromMinutes(minutes), Timeout.InfiniteTimeSpan);
 

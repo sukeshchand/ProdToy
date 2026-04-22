@@ -1203,7 +1203,7 @@ class SettingsForm : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"SetStartWithWindows failed: {ex.Message}");
+            Log.Warn($"SetStartWithWindows failed: {ex.Message}");
         }
     }
 }

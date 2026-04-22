@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -43,7 +42,7 @@ static class AppSettings
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to load settings: {ex.Message}");
+            Log.Error("Failed to load settings", ex);
         }
 
         _cached = new AppSettingsData();
@@ -61,7 +60,7 @@ static class AppSettings
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to save settings: {ex.Message}");
+            Log.Error("Failed to save settings", ex);
         }
     }
 }

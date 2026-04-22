@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text.Json;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
@@ -149,7 +149,7 @@ sealed class ChatHistory
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to load history entry: {ex.Message}");
+            PluginLog.Error("Failed to load history entry", ex);
         }
         return null;
     }
@@ -181,13 +181,13 @@ sealed class ChatHistory
                     }
                     catch (Exception ex)
                     {
-                        Debug.WriteLine($"Failed to read history file {file}: {ex.Message}");
+                        PluginLog.Warn($"Failed to read history file {file}: {ex.Message}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to load history index: {ex.Message}");
+                PluginLog.Error("Failed to load history index", ex);
             }
 
             _cachedIndex = index;
@@ -208,7 +208,7 @@ sealed class ChatHistory
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to load day entries: {ex.Message}");
+            PluginLog.Error("Failed to load day entries", ex);
         }
 
         return new List<HistoryEntry>();
@@ -225,7 +225,7 @@ sealed class ChatHistory
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to write history: {ex.Message}");
+            PluginLog.Error("Failed to write history", ex);
         }
     }
 
@@ -250,7 +250,7 @@ sealed class ChatHistory
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to load day index for {date:yyyyMMdd}: {ex.Message}");
+            PluginLog.Warn($"Failed to load day index for {date:yyyyMMdd}: {ex.Message}");
         }
         return index.OrderBy(i => i.Timestamp).ToList();
     }
@@ -296,7 +296,7 @@ sealed class ChatHistory
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to get available dates: {ex.Message}");
+            PluginLog.Error("Failed to get available dates", ex);
         }
         return dates;
     }

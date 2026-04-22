@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using Microsoft.Web.WebView2.Core;
@@ -562,7 +561,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"ChatPopupForm WebView2 init failed: {ex.Message}");
+            PluginLog.Error("ChatPopupForm WebView2 init failed", ex);
             try { _context.LogError("ChatPopupForm WebView2 init failed", ex); } catch { }
             _webViewFailed = true;
             _webViewInitStarted = false;
@@ -738,7 +737,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Smart resize failed (non-fatal): {ex.Message}");
+            PluginLog.Warn($"ChatPopup smart resize failed (non-fatal): {ex.Message}");
         }
 
         if (_webViewReady)
@@ -839,7 +838,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"CopyAs({format}) failed: {ex.Message}");
+            PluginLog.Warn($"ChatPopup CopyAs({format}) failed: {ex.Message}");
             link.Text = "Failed";
             link.ForeColor = _theme.ErrorColor;
             var resetTimer = new System.Windows.Forms.Timer { Interval = 2000 };

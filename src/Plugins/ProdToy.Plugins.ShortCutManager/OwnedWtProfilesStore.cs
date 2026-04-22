@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text.Json;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
@@ -48,7 +48,7 @@ static class OwnedWtProfilesStore
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"OwnedWtProfilesStore: load failed: {ex.Message}");
+                PluginLog.Error("OwnedWtProfilesStore: load failed", ex);
                 _cache = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             }
             return new HashSet<string>(_cache, StringComparer.OrdinalIgnoreCase);
@@ -117,7 +117,7 @@ static class OwnedWtProfilesStore
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"OwnedWtProfilesStore: save failed: {ex.Message}");
+            PluginLog.Error("OwnedWtProfilesStore: save failed", ex);
         }
     }
 }

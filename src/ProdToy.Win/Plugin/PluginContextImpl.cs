@@ -57,13 +57,14 @@ sealed class PluginContextImpl : IPluginContext
     }
 
     public void Log(string message)
-    {
-        WriteLog("INFO", message);
-    }
+        => WriteLog("INFO", message);
+
+    public void LogWarn(string message)
+        => WriteLog("WARN", message);
 
     public void LogError(string message, Exception? ex = null)
     {
-        string detail = ex != null ? $"{message}: {ex.Message}" : message;
+        string detail = ex != null ? $"{message}: {ex}" : message;
         WriteLog("ERROR", detail);
     }
 

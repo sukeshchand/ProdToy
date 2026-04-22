@@ -84,6 +84,7 @@ public class ClaudeIntegrationPlugin : IPlugin
     public void Initialize(IPluginContext context)
     {
         _context = context;
+        PluginLog.Bootstrap(context);
         ClaudePaths.Initialize(context.DataDirectory);
 
         _chatHistory = new ChatHistory(

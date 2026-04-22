@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text.Json;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
@@ -39,7 +39,7 @@ static class ShortcutStore
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"ShortcutStore: load failed: {ex.Message}");
+                PluginLog.Error("ShortcutStore: load failed", ex);
                 _cache = new();
             }
             return new List<Shortcut>(_cache);
@@ -62,7 +62,7 @@ static class ShortcutStore
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"ShortcutStore: save failed: {ex.Message}");
+            PluginLog.Error("ShortcutStore: save failed", ex);
         }
     }
 

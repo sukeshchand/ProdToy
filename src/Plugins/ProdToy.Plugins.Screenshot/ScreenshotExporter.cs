@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Screenshot;
 
@@ -61,7 +61,7 @@ static class ScreenshotExporter
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Clipboard copy failed: {ex.Message}");
+            PluginLog.Warn($"Clipboard copy failed: {ex.Message}");
         }
     }
 

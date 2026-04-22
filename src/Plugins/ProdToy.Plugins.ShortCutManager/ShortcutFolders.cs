@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text.Json;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
@@ -40,7 +40,7 @@ static class ShortcutFolders
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"ShortcutFolders: load failed: {ex.Message}");
+                PluginLog.Error("ShortcutFolders: load failed", ex);
                 _cache = new();
             }
             return new List<string>(_cache);
@@ -180,7 +180,7 @@ static class ShortcutFolders
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"ShortcutFolders: save failed: {ex.Message}");
+            PluginLog.Error("ShortcutFolders: save failed", ex);
         }
     }
 }

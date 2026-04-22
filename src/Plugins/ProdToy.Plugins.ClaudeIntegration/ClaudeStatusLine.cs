@@ -1,9 +1,9 @@
-using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
@@ -46,7 +46,7 @@ static class ClaudeStatusLine
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to install status line: {ex.Message}");
+            PluginLog.Error("Failed to install status line", ex);
         }
     }
 
@@ -83,7 +83,7 @@ static class ClaudeStatusLine
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to bump status line script: {ex.Message}");
+            PluginLog.Error("Failed to bump status line script", ex);
         }
     }
 
@@ -114,7 +114,7 @@ static class ClaudeStatusLine
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to uninstall status line from {install.SettingsFile}: {ex.Message}");
+                PluginLog.Error($"Failed to uninstall status line from {install.SettingsFile}", ex);
             }
         }
     }
@@ -156,12 +156,12 @@ static class ClaudeStatusLine
                 if (string.Equals(file, except, StringComparison.OrdinalIgnoreCase)) continue;
                 if (!ScriptNameRegex.IsMatch(Path.GetFileName(file))) continue;
                 try { File.Delete(file); }
-                catch (Exception ex) { Debug.WriteLine($"Could not delete old script {file}: {ex.Message}"); }
+                catch (Exception ex) { PluginLog.Warn($"Could not delete old status-line script {file}: {ex.Message}"); }
             }
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"DeleteOldScripts failed: {ex.Message}");
+            PluginLog.Warn($"DeleteOldScripts enumeration failed: {ex.Message}");
         }
     }
 
@@ -193,7 +193,7 @@ static class ClaudeStatusLine
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to write statusLine to {settingsPath}: {ex.Message}");
+            PluginLog.Error($"Failed to write statusLine to {settingsPath}", ex);
         }
     }
 
@@ -227,7 +227,7 @@ static class ClaudeStatusLine
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to write status line config: {ex.Message}");
+            PluginLog.Error("Failed to write status line config", ex);
         }
     }
 

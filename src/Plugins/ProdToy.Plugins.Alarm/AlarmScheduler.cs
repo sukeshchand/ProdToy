@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Alarm;
 
@@ -24,7 +24,7 @@ static class AlarmScheduler
         // to paint the popup while the UI thread was still busy, producing the
         // "Alarm (Not Responding)" window seen right after an update.
         _timer = new System.Threading.Timer(_ => Tick(), null, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(30));
-        Debug.WriteLine("AlarmScheduler started");
+        PluginLog.Info("AlarmScheduler started");
     }
 
     public static void Stop()
@@ -32,7 +32,7 @@ static class AlarmScheduler
         _timer?.Dispose();
         _timer = null;
         lock (_lock) { _firedKeys.Clear(); }
-        Debug.WriteLine("AlarmScheduler stopped");
+        PluginLog.Info("AlarmScheduler stopped");
     }
 
     public static void Refresh()
@@ -110,7 +110,7 @@ static class AlarmScheduler
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"Alarm trigger failed for {alarm.Id}: {ex.Message}");
+                            PluginLog.Error($"Alarm trigger failed for '{alarm.Title}' ({alarm.Id})", ex);
                             AlarmStore.AddHistoryEntry(new AlarmHistoryEntry
                             {
                                 AlarmId = alarm.Id,
@@ -131,7 +131,7 @@ static class AlarmScheduler
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"AlarmScheduler tick error: {ex.Message}");
+            PluginLog.Error("AlarmScheduler tick error", ex);
         }
     }
 

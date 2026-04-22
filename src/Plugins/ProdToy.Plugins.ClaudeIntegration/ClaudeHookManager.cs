@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
@@ -29,7 +29,7 @@ static class ClaudeHookManager
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to set auto-title in {install.ClaudeMdFile}: {ex.Message}");
+                PluginLog.Error($"Failed to set auto-title in {install.ClaudeMdFile}", ex);
             }
         }
     }
@@ -172,7 +172,7 @@ Where <current_folder_name> is the name of the current working directory (just t
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"UpdateClaudeHook({settingsPath}) failed: {ex.Message}");
+            PluginLog.Error($"UpdateClaudeHook({settingsPath}) failed", ex);
         }
     }
 
@@ -219,7 +219,7 @@ Where <current_folder_name> is the name of the current working directory (just t
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"RemoveAllProdToyHooks({install.SettingsFile}) failed: {ex.Message}");
+                PluginLog.Error($"RemoveAllProdToyHooks({install.SettingsFile}) failed", ex);
             }
         }
     }

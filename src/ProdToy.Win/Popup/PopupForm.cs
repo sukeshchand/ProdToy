@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using Microsoft.Web.WebView2.Core;
@@ -263,7 +262,7 @@ class PopupForm : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"WebView2 init failed: {ex.Message}");
+            Log.Error("PopupForm WebView2 init failed", ex);
         }
     }
 
@@ -441,7 +440,7 @@ class PopupForm : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"WebView2 cleanup failed: {ex.Message}");
+            Log.Warn($"PopupForm WebView2 cleanup failed: {ex.Message}");
         }
         Close();
     }

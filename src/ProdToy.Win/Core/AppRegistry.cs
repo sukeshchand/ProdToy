@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Win32;
 
 namespace ProdToy;
@@ -22,7 +21,7 @@ static class AppRegistry
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"AppRegistry.IsRegistered failed: {ex.Message}");
+            Log.Warn($"AppRegistry.IsRegistered failed: {ex.Message}");
             return false;
         }
     }
@@ -36,7 +35,7 @@ static class AppRegistry
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"AppRegistry.GetInstalledVersion failed: {ex.Message}");
+            Log.Warn($"AppRegistry.GetInstalledVersion failed: {ex.Message}");
             return null;
         }
     }
@@ -58,7 +57,7 @@ static class AppRegistry
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"AppRegistry.SyncDisplayVersion failed: {ex.Message}");
+            Log.Warn($"AppRegistry.SyncDisplayVersion failed: {ex.Message}");
         }
     }
 }

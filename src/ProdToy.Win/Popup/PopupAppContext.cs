@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -24,7 +23,11 @@ class PopupAppContext : ApplicationContext
     {
         if (string.IsNullOrEmpty(envelopeCommand)) return;
         var json = JsonSerializer.Serialize(new { command = envelopeCommand, payload = envelopePayloadJson });
-        _popupForm.BeginInvoke(() => _pluginHost?.PipeRouter.TryDispatch(json));
+        _popupForm.BeginInvoke(() =>
+        {
+            try { _pluginHost?.PipeRouter.TryDispatch(json); }
+            catch (Exception ex) { Log.Error($"Initial envelope dispatch failed for command '{envelopeCommand}'", ex); }
+        });
     }
 
     public PopupAppContext(string initialTitle, string initialMessage, string initialType, bool startHidden = false)
@@ -256,7 +259,7 @@ class PopupAppContext : ApplicationContext
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Pipe server error: {ex.Message}");
+                Log.Warn($"Pipe server error: {ex.Message}");
                 await Task.Delay(100, ct);
             }
         }

@@ -20,9 +20,12 @@ public interface IPluginContext
     /// <summary>The plugin's metadata from its [Plugin] attribute.</summary>
     PluginAttribute Metadata { get; }
 
-    /// <summary>Log a diagnostic message to ~/.prod-toy/logs/plugins.log.</summary>
+    /// <summary>Log an informational message to the host's daily log, tagged with this plugin's id.</summary>
     void Log(string message);
 
-    /// <summary>Log an error.</summary>
+    /// <summary>Log a warning to the host's daily log, tagged with this plugin's id.</summary>
+    void LogWarn(string message);
+
+    /// <summary>Log an error to the host's daily log, tagged with this plugin's id.</summary>
     void LogError(string message, Exception? ex = null);
 }

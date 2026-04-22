@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 
@@ -85,7 +84,7 @@ static class UpdateChecker
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Update check failed: {ex.Message}");
+            Log.Warn($"Update check failed: {ex.Message}");
         }
     }
 
@@ -182,7 +181,7 @@ static class UpdateChecker
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Update enquiry log failed: {ex.Message}");
+            Log.Warn($"Update enquiry log failed: {ex.Message}");
         }
     }
 

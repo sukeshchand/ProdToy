@@ -1,7 +1,6 @@
-using ProdToy.Sdk;
-using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Screenshot;
 
@@ -138,7 +137,7 @@ class RecentImagesPanel : Panel
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to list screenshots: {ex.Message}");
+            PluginLog.Warn($"Failed to list screenshots: {ex.Message}");
             return;
         }
 
@@ -222,7 +221,7 @@ class RecentImagesPanel : Panel
             }
             thumb.Image = bmp;
         }
-        catch (Exception ex) { Debug.WriteLine($"Thumb load failed: {ex.Message}"); }
+        catch (Exception ex) { PluginLog.Warn($"Thumb load failed: {ex.Message}"); }
         panel.Controls.Add(thumb);
 
         var label = new Label

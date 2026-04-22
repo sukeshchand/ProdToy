@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Windows.Forms;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
@@ -195,7 +196,7 @@ static class ShortcutLauncher
             timer.Stop();
             timer.Dispose();
             try { SendKeys.SendWait(keys); }
-            catch (Exception ex) { Debug.WriteLine($"PostLaunchSendKeys failed: {ex.Message}"); }
+            catch (Exception ex) { PluginLog.Warn($"PostLaunchSendKeys failed: {ex.Message}"); }
         };
         timer.Start();
     }

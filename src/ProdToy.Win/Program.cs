@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -267,7 +266,7 @@ static class Program
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"SendToPipe failed: {ex.Message}");
+            Log.Warn($"SendToPipe failed: {ex.Message}");
         }
     }
 
@@ -286,7 +285,7 @@ static class Program
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"SendEnvelopeToPipe failed: {ex.Message}");
+            Log.Warn($"SendEnvelopeToPipe failed: {ex.Message}");
         }
     }
 }

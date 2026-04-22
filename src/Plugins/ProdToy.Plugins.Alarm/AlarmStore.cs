@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text.Json;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Alarm;
 
@@ -59,7 +59,7 @@ static class AlarmStore
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to load alarms: {ex.Message}");
+                PluginLog.Error("Failed to load alarms", ex);
             }
             _cachedAlarms = new();
             return _cachedAlarms;
@@ -81,7 +81,7 @@ static class AlarmStore
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to save alarms: {ex.Message}");
+            PluginLog.Error("Failed to save alarms", ex);
         }
     }
 
@@ -200,7 +200,7 @@ static class AlarmStore
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to load alarm history: {ex.Message}");
+                PluginLog.Error("Failed to load alarm history", ex);
                 _cachedHistory = new();
             }
             if (_historyBuffer.Count > 0)
@@ -267,7 +267,7 @@ static class AlarmStore
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to flush alarm history: {ex.Message}");
+            PluginLog.Error("Failed to flush alarm history", ex);
             lock (_historyLock)
             {
                 _historyBuffer.InsertRange(0, toFlush);

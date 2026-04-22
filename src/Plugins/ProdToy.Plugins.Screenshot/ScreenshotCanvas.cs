@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Screenshot;
 
@@ -176,7 +176,7 @@ class ScreenshotCanvas : Control
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Drop failed: {ex.Message}");
+            PluginLog.Warn($"ScreenshotCanvas drop failed: {ex.Message}");
         }
     }
 

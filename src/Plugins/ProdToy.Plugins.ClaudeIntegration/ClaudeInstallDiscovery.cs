@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text.Json.Nodes;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
@@ -43,7 +43,7 @@ static class ClaudeInstallDiscovery
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"ClaudeInstallDiscovery: cannot enumerate {root}: {ex.Message}");
+                PluginLog.Warn($"ClaudeInstallDiscovery: cannot enumerate {root}: {ex.Message}");
                 continue;
             }
 
@@ -68,7 +68,7 @@ static class ClaudeInstallDiscovery
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"ClaudeInstallDiscovery: skipped {dir}: {ex.Message}");
+                    PluginLog.Warn($"ClaudeInstallDiscovery: skipped {dir}: {ex.Message}");
                 }
             }
         }
@@ -92,7 +92,7 @@ static class ClaudeInstallDiscovery
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"ClaudeInstallDiscovery: cannot parse {settingsFile}: {ex.Message}");
+            PluginLog.Warn($"ClaudeInstallDiscovery: cannot parse {settingsFile}: {ex.Message}");
             return false;
         }
     }

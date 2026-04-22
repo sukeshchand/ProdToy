@@ -25,6 +25,7 @@ public class AlarmPlugin : IPlugin
     public void Initialize(IPluginContext context)
     {
         _context = context;
+        PluginLog.Bootstrap(context);
 
         // Initialize store with plugin data directory
         AlarmStore.Initialize(context.DataDirectory, () =>

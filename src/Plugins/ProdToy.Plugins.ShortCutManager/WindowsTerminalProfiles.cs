@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
@@ -86,7 +86,7 @@ static class WindowsTerminalProfiles
                     if (schemes.Count > 0) break;
                 }
             }
-            catch (Exception ex) { Debug.WriteLine($"DiscoverSchemes: {path}: {ex.Message}"); }
+            catch (Exception ex) { PluginLog.Warn($"DiscoverSchemes failed for {path}: {ex.Message}"); }
         }
         foreach (var f in FallbackSchemes)
             if (seen.Add(f)) schemes.Add(f);
@@ -283,7 +283,7 @@ static class WindowsTerminalProfiles
                 }
                 if (result.Count > 0) { settingsPath = path; rootNode = node; return result; }
             }
-            catch (Exception ex) { Debug.WriteLine($"WindowsTerminalProfiles read {path}: {ex.Message}"); }
+            catch (Exception ex) { PluginLog.Warn($"WindowsTerminalProfiles read failed for {path}: {ex.Message}"); }
         }
         return result;
     }
@@ -297,7 +297,7 @@ static class WindowsTerminalProfiles
         {
             IEnumerable<string> pkgDirs = Array.Empty<string>();
             try { pkgDirs = Directory.EnumerateDirectories(packagesDir, "Microsoft.WindowsTerminal*"); }
-            catch (Exception ex) { Debug.WriteLine($"enum packages: {ex.Message}"); }
+            catch (Exception ex) { PluginLog.Warn($"WindowsTerminalProfiles enumerate packages failed: {ex.Message}"); }
             foreach (var dir in pkgDirs)
                 yield return Path.Combine(dir, "LocalState", "settings.json");
         }

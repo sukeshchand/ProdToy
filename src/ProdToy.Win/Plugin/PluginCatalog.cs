@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
 
@@ -68,7 +67,7 @@ static class PluginCatalog
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to fetch plugin catalog: {ex.Message}");
+            Log.Error("Failed to fetch plugin catalog", ex);
             return new List<CatalogEntry>();
         }
     }
@@ -98,7 +97,7 @@ static class PluginCatalog
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"ReadTextAsync failed for {fileName}: {ex.Message}");
+            Log.Warn($"ReadTextAsync failed for {fileName}: {ex.Message}");
             return "";
         }
     }
@@ -185,7 +184,7 @@ static class PluginCatalog
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Plugin install failed: {ex}");
+            Log.Error("Plugin install failed", ex);
             return (false, $"Install failed: {ex.Message}");
         }
     }
@@ -202,7 +201,7 @@ static class PluginCatalog
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Plugin uninstall failed: {ex}");
+            Log.Error("Plugin uninstall failed", ex);
             return (false, $"Uninstall failed: {ex.Message}");
         }
     }

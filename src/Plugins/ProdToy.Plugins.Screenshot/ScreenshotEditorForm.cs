@@ -1,6 +1,5 @@
-using ProdToy.Sdk;
-using System.Diagnostics;
 using System.Drawing;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Screenshot;
 
@@ -349,7 +348,7 @@ class ScreenshotEditorForm : Form
             ScreenshotExporter.SaveToFile(_session, GetLinkedSavePath());
             SavePreview();
         }
-        catch (Exception ex) { Debug.WriteLine($"AutoSave failed: {ex.Message}"); }
+        catch (Exception ex) { PluginLog.Warn($"AutoSave failed: {ex.Message}"); }
     }
 
     private void DoSaveAs()
@@ -369,7 +368,7 @@ class ScreenshotEditorForm : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Save As failed: {ex.Message}");
+            PluginLog.Error("Save As failed", ex);
             MessageBox.Show(this, $"Save failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
@@ -382,7 +381,7 @@ class ScreenshotEditorForm : Form
             ScreenshotExporter.CopyToClipboard(_session);
             WindowState = FormWindowState.Minimized;
         }
-        catch (Exception ex) { Debug.WriteLine($"Copy failed: {ex.Message}"); }
+        catch (Exception ex) { PluginLog.Warn($"Screenshot Copy failed: {ex.Message}"); }
     }
 
     private void DoCopyPath()
@@ -399,7 +398,7 @@ class ScreenshotEditorForm : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Copy Path failed: {ex.Message}");
+            PluginLog.Error("Copy Path failed", ex);
             MessageBox.Show(this, $"Copy Path failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
@@ -413,7 +412,7 @@ class ScreenshotEditorForm : Form
             Clipboard.SetText(GetLinkedSavePath());
             WindowState = FormWindowState.Minimized;
         }
-        catch (Exception ex) { Debug.WriteLine($"Copy Path Text failed: {ex.Message}"); }
+        catch (Exception ex) { PluginLog.Warn($"Copy Path Text failed: {ex.Message}"); }
     }
 
     /// <summary>
@@ -573,7 +572,7 @@ class ScreenshotEditorForm : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Compare failed: {ex.Message}");
+            PluginLog.Error("Compare failed", ex);
             MessageBox.Show(this, $"Compare failed: {ex.Message}", "Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -596,7 +595,7 @@ class ScreenshotEditorForm : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"InitEditFolder failed: {ex.Message}");
+            PluginLog.Error("InitEditFolder failed", ex);
         }
     }
 
@@ -708,7 +707,7 @@ class ScreenshotEditorForm : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"OpenFromList failed: {ex.Message}");
+            PluginLog.Error("OpenFromList failed", ex);
             MessageBox.Show(this, $"Failed to open: {ex.Message}", "Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -749,7 +748,7 @@ class ScreenshotEditorForm : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Auto-save on close failed: {ex.Message}");
+            PluginLog.Warn($"Auto-save on close failed: {ex.Message}");
         }
 
         // Hide instead of dispose — reuse the form next time
@@ -775,7 +774,7 @@ class ScreenshotEditorForm : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"SavePreview failed: {ex.Message}");
+            PluginLog.Warn($"SavePreview failed: {ex.Message}");
         }
     }
 

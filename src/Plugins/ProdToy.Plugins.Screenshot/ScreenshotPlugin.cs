@@ -40,6 +40,7 @@ public class ScreenshotPlugin : IPlugin
     {
         _context = context;
         _host = context.Host;
+        PluginLog.Bootstrap(context);
         ScreenshotPaths.Initialize(context.DataDirectory);
     }
 
@@ -116,7 +117,7 @@ public class ScreenshotPlugin : IPlugin
     private static void TryDispose<T>(ref T? reg) where T : class, IDisposable
     {
         try { reg?.Dispose(); }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Screenshot dispose failed: {ex.Message}"); }
+        catch (Exception ex) { PluginLog.Warn($"Screenshot dispose failed: {ex.Message}"); }
         reg = null;
     }
 

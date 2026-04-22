@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -44,8 +43,11 @@ static class PluginManager
         if (!Directory.Exists(pluginsBinDir))
         {
             Directory.CreateDirectory(pluginsBinDir);
+            Log.Info($"PluginManager.Initialize: created empty plugins bin dir at {pluginsBinDir}");
             return;
         }
+
+        Log.Info($"PluginManager.Initialize: scanning {pluginsBinDir}");
 
         // Each subdirectory under plugins/bin/ is a plugin. Plugins are always
         // active once they exist on disk — enable/disable has been removed.
@@ -71,6 +73,10 @@ static class PluginManager
         }
 
         SaveInstalledIds();
+
+        int loaded = _plugins.Count(p => p.Instance != null);
+        int failed = _plugins.Count - loaded;
+        Log.Info($"PluginManager.Initialize: {loaded} loaded, {failed} failed to load");
     }
 
     /// <summary>
@@ -87,11 +93,10 @@ static class PluginManager
             var context = new PluginContextImpl(_host!, info.Metadata!);
             info.Instance.Install(context);
             _installedIds.Add(info.Id);
-            Debug.WriteLine($"Plugin {info.Id} Install() completed");
+            Log.Tagged("INFO", info.Id, "Install() completed");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Plugin {info.Id} Install() failed: {ex}");
             LogPluginError(info.Id, "Install", ex);
         }
     }
@@ -101,6 +106,7 @@ static class PluginManager
     /// </summary>
     public static void StartAll()
     {
+        int started = 0, failed = 0;
         foreach (var info in _plugins)
         {
             if (info.Enabled && info.Instance != null)
@@ -108,15 +114,17 @@ static class PluginManager
                 try
                 {
                     info.Instance.Start();
+                    started++;
                 }
                 catch (Exception ex)
                 {
                     info.LoadError = $"Start failed: {ex.Message}";
-                    Debug.WriteLine($"Plugin {info.Id} Start failed: {ex}");
                     LogPluginError(info.Id, "Start", ex);
+                    failed++;
                 }
             }
         }
+        Log.Info($"PluginManager.StartAll: started {started}, failed {failed}");
     }
 
     /// <summary>
@@ -124,6 +132,7 @@ static class PluginManager
     /// </summary>
     public static void StopAll()
     {
+        Log.Info($"PluginManager.StopAll: stopping {_plugins.Count} plugin(s)");
         foreach (var info in _plugins)
         {
             if (info.Instance != null)
@@ -135,7 +144,7 @@ static class PluginManager
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Plugin {info.Id} Stop/Dispose failed: {ex}");
+                    Log.Tagged("ERROR", info.Id, $"Stop/Dispose failed: {ex}");
                 }
 
                 info.Instance = null;
@@ -143,7 +152,14 @@ static class PluginManager
 
             if (info.LoadContext != null)
             {
-                info.LoadContext.Unload();
+                try
+                {
+                    info.LoadContext.Unload();
+                }
+                catch (Exception ex)
+                {
+                    Log.Tagged("WARN", info.Id, $"AssemblyLoadContext.Unload failed: {ex.Message}");
+                }
                 info.LoadContext = null;
             }
         }
@@ -181,7 +197,6 @@ static class PluginManager
             catch (Exception ex)
             {
                 info.LoadError = $"Start failed: {ex.Message}";
-                Debug.WriteLine($"Plugin {info.Id} Start failed: {ex}");
                 LogPluginError(info.Id, "Start", ex);
             }
         }
@@ -204,14 +219,21 @@ static class PluginManager
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Plugin {info.Id} Stop/Dispose failed: {ex}");
+                Log.Tagged("ERROR", info.Id, $"Stop/Dispose failed: {ex}");
             }
             info.Instance = null;
         }
 
         if (info.LoadContext != null)
         {
-            info.LoadContext.Unload();
+            try
+            {
+                info.LoadContext.Unload();
+            }
+            catch (Exception ex)
+            {
+                Log.Tagged("WARN", info.Id, $"AssemblyLoadContext.Unload failed: {ex.Message}");
+            }
             info.LoadContext = null;
         }
 
@@ -236,11 +258,10 @@ static class PluginManager
             {
                 var context = new PluginContextImpl(_host, info.Metadata);
                 info.Instance.Uninstall(context);
-                Debug.WriteLine($"Plugin {info.Id} Uninstall() completed");
+                Log.Tagged("INFO", info.Id, "Uninstall() completed");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Plugin {info.Id} Uninstall() failed: {ex}");
                 LogPluginError(info.Id, "Uninstall", ex);
             }
         }
@@ -258,7 +279,7 @@ static class PluginManager
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to delete plugin dir: {ex.Message}");
+            Log.Tagged("WARN", info.Id, $"Failed to delete plugin dir: {ex.Message}");
         }
 
         PluginsChanged?.Invoke();
@@ -296,7 +317,7 @@ static class PluginManager
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Plugin install failed: {ex}");
+            Log.Error("PluginManager.InstallPlugin (from dll path) failed", ex);
             return false;
         }
     }
@@ -317,7 +338,7 @@ static class PluginManager
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Plugin {info.Id} GetMenuItems failed: {ex}");
+                    Log.Tagged("ERROR", info.Id, $"GetMenuItems failed: {ex}");
                 }
             }
         }
@@ -345,7 +366,7 @@ static class PluginManager
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Plugin {info.Id} GetMenuItems failed: {ex}");
+                    Log.Tagged("ERROR", info.Id, $"GetMenuItems failed: {ex}");
                 }
             }
         }
@@ -371,7 +392,7 @@ static class PluginManager
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Plugin {info.Id} GetDashboardItems failed: {ex}");
+                    Log.Tagged("ERROR", info.Id, $"GetDashboardItems failed: {ex}");
                 }
             }
         }
@@ -396,7 +417,7 @@ static class PluginManager
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Plugin {info.Id} GetSettingsPage failed: {ex}");
+                    Log.Tagged("ERROR", info.Id, $"GetSettingsPage failed: {ex}");
                 }
             }
         }
@@ -454,7 +475,7 @@ static class PluginManager
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to discover plugin in {pluginDir}: {ex.Message}");
+            Log.Warn($"Failed to discover plugin in {pluginDir}: {ex.Message}");
             return null;
         }
     }
@@ -485,11 +506,11 @@ static class PluginManager
             info.LoadContext = loadContext;
             info.Metadata = attr;
             info.LoadError = null;
+            Log.Tagged("INFO", info.Id, $"Loaded v{info.Version} from {info.DllPath}");
         }
         catch (Exception ex)
         {
             info.LoadError = $"Load failed: {ex.Message}";
-            Debug.WriteLine($"Plugin {info.Id} load failed: {ex}");
             LogPluginError(info.Id, "Load", ex);
         }
     }
@@ -541,7 +562,7 @@ static class PluginManager
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to load plugin state: {ex.Message}");
+            Log.Warn($"Failed to load plugin state: {ex.Message}");
         }
         return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
@@ -558,20 +579,11 @@ static class PluginManager
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to save plugin state: {ex.Message}");
+            Log.Error("Failed to save plugin state", ex);
         }
     }
 
     private static void LogPluginError(string pluginId, string phase, Exception ex)
-    {
-        try
-        {
-            Directory.CreateDirectory(AppPaths.LogsDir);
-            string logPath = Path.Combine(AppPaths.LogsDir, "plugins.log");
-            string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [ERROR] [{pluginId}] {phase}: {ex.Message}";
-            File.AppendAllText(logPath, line + Environment.NewLine);
-        }
-        catch { }
-    }
+        => Log.Tagged("ERROR", pluginId, $"{phase}: {ex}");
 
 }

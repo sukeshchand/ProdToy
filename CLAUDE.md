@@ -136,7 +136,7 @@ Plugin lifecycle: `Initialize(context)` → `Start()` → (running) → `Stop()`
         settings.json
   history/claude/chats/                 Response history (host-managed)
   scripts/                             Status line script (plugin-managed)
-  logs/plugins.log                     Plugin error log
+  logs/prod-toy-yyyyMMdd.log           Unified daily log (host + plugins, 30-day retention)
 ```
 
 ### Execution Flow

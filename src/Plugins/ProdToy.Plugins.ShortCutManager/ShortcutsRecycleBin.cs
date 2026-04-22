@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text.Json;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
@@ -50,7 +50,7 @@ static class ShortcutsRecycleBin
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"RecycleBin: load failed: {ex.Message}");
+                PluginLog.Error("RecycleBin: load failed", ex);
                 _cache = new();
             }
             return new List<RecycleBinEntry>(_cache);
@@ -73,7 +73,7 @@ static class ShortcutsRecycleBin
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"RecycleBin: save failed: {ex.Message}");
+            PluginLog.Error("RecycleBin: save failed", ex);
         }
     }
 

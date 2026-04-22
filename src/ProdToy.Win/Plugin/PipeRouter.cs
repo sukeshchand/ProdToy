@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ProdToy.Sdk;
@@ -60,13 +59,13 @@ sealed class PipeRouter
         }
         catch (JsonException ex)
         {
-            Debug.WriteLine($"PipeRouter: malformed envelope: {ex.Message}");
+            Log.Warn($"PipeRouter: malformed envelope: {ex.Message}");
             return false;
         }
 
         if (!_handlers.TryGetValue(command!, out var handler))
         {
-            Debug.WriteLine($"PipeRouter: no handler for command '{command}'");
+            Log.Warn($"PipeRouter: no handler for command '{command}'");
             return false;
         }
 
@@ -74,7 +73,7 @@ sealed class PipeRouter
         _invokeOnUI(() =>
         {
             try { handler(cmd); }
-            catch (Exception ex) { Debug.WriteLine($"PipeRouter handler '{command}' threw: {ex}"); }
+            catch (Exception ex) { Log.Error($"PipeRouter handler '{command}' threw", ex); }
         });
         return true;
     }

@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Screenshot;
 
@@ -220,7 +220,7 @@ class ScreenshotOverlay : Form
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Screenshot capture failed: {ex.Message}");
+            PluginLog.Error("Screenshot capture failed", ex);
         }
 
         Close();

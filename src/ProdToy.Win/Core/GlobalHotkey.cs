@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace ProdToy;
 
 /// <summary>
@@ -35,7 +33,7 @@ class GlobalHotkey : IDisposable
             vk);
 
         if (!_registered)
-            Debug.WriteLine($"Failed to register hotkey: {hotkeyString}");
+            Log.Warn($"Failed to register hotkey: {hotkeyString}");
 
         return _registered;
     }

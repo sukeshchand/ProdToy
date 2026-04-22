@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using System.Drawing;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Screenshot;
 
@@ -71,7 +71,7 @@ static class SessionSerializer
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"SessionSerializer.Save failed: {ex.Message}");
+            PluginLog.Error("SessionSerializer.Save failed", ex);
         }
     }
 
@@ -149,7 +149,7 @@ static class SessionSerializer
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"SessionSerializer.Restore failed: {ex.Message}");
+            PluginLog.Error("SessionSerializer.Restore failed", ex);
             return false;
         }
     }
@@ -308,7 +308,7 @@ static class SessionSerializer
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"LoadImageObject failed: {ex.Message}");
+            PluginLog.Warn($"SessionSerializer LoadImageObject failed: {ex.Message}");
             return null;
         }
     }

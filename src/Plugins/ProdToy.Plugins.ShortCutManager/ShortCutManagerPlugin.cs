@@ -25,6 +25,7 @@ public class ShortCutManagerPlugin : IPlugin
     public void Initialize(IPluginContext context)
     {
         _context = context;
+        PluginLog.Bootstrap(context);
 
         // If shortcut data was previously saved under the ClaudeIntegration
         // plugin (before shortcuts were extracted into this standalone
