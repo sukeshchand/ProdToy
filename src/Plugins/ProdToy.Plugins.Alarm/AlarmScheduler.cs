@@ -19,7 +19,11 @@ static class AlarmScheduler
         _getMissedGraceMinutes = getMissedGraceMinutes;
         _missedCheckDone = false;
         _tickCount = 0;
-        _timer = new System.Threading.Timer(_ => Tick(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30));
+        // First tick deferred to 20s to let host startup settle (tray icon, plugin
+        // loads, WebView2 prewarm in the Claude plugin, etc.). Firing at 5s used
+        // to paint the popup while the UI thread was still busy, producing the
+        // "Alarm (Not Responding)" window seen right after an update.
+        _timer = new System.Threading.Timer(_ => Tick(), null, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(30));
         Debug.WriteLine("AlarmScheduler started");
     }
 
@@ -78,6 +82,19 @@ static class AlarmScheduler
 
                     if (isNew)
                     {
+                        if (alarm.SkipNextOccurrence)
+                        {
+                            AlarmStore.UpdateAlarm(alarm with { SkipNextOccurrence = false });
+                            AlarmStore.AddHistoryEntry(new AlarmHistoryEntry
+                            {
+                                AlarmId = alarm.Id,
+                                AlarmTitle = alarm.Title,
+                                EventType = AlarmHistoryEventType.Skipped,
+                                Detail = $"Skipped scheduled fire at {now:HH:mm:ss}",
+                            });
+                            continue;
+                        }
+
                         try
                         {
                             AlarmStore.AddHistoryEntry(new AlarmHistoryEntry
@@ -120,6 +137,17 @@ static class AlarmScheduler
 
     private static bool ShouldFire(AlarmEntry alarm, DateTime now)
     {
+        if (alarm.PausedUntil is DateTime pu && pu > now) return false;
+
+        if (alarm.StartDate != null && DateTime.TryParse(alarm.StartDate, out var sd) && now.Date < sd.Date)
+            return false;
+
+        if (alarm.ExceptionDates is { Length: > 0 } exDates)
+        {
+            foreach (var s in exDates)
+                if (DateTime.TryParse(s, out var ex) && ex.Date == now.Date) return false;
+        }
+
         var time = alarm.Schedule.GetTimeOfDay();
 
         if (alarm.Schedule.Type == AlarmScheduleType.Interval)

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ProdToy.Plugins.ShortCutManager</AssemblyName>
+    <RootNamespace>ProdToy.Plugins.ShortCutManager</RootNamespace>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\ProdToy.Sdk\ProdToy.Sdk.csproj">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </ProjectReference>
+  </ItemGroup>
+
+  <!-- Copy plugin DLL to user's plugins directory after build -->
+  <Target Name="DeployPlugin" AfterTargets="Build">
+    <PropertyGroup>
+      <PluginDeployDir>$(USERPROFILE)\.prod-toy\plugins\bin\ProdToy.Plugin.ShortCutManager\</PluginDeployDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(PluginDeployDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" SkipUnchangedFiles="true" ContinueOnError="true" />
+    <Copy SourceFiles="$(TargetDir)$(TargetName).deps.json" DestinationFolder="$(PluginDeployDir)" SkipUnchangedFiles="true" ContinueOnError="true" />
+  </Target>
+
+</Project>

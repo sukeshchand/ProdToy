@@ -1,1 +1,4 @@
-EnsureHookScript moved behind IPluginHost; plugin no longer touches host paths directly.
+Shortcuts moved to a standalone plugin
+  - The "Claude Shortcuts" launcher/folder tree/recycle-bin feature has been extracted into a separate "Shortcuts" plugin (ProdToy.Plugin.ShortCutManager). This plugin keeps only the Claude-specific hooks, status line, notification popup and Telegram integration.
+  - On first launch of the new Shortcuts plugin your existing shortcut data (shortcuts.json, shortcut-folders.json, shortcut-recycled.json, owned-wt-profiles.json) is copied across automatically, so nothing is lost.
+  - The "Claude Shortcuts…" menu entry is gone from this plugin; use the new "Shortcuts…" entry from the ShortCutManager plugin.

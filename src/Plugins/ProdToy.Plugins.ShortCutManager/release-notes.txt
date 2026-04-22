@@ -1,0 +1,6 @@
+Initial standalone release — extracted from the Claude Integration plugin into its own "Shortcuts" plugin so the feature is usable regardless of Claude.
+  - Generic launch profiles (Claude CLI default; npm, Vite, dotnet, PowerShell, Custom) swap the command and the hint shown in the edit form.
+  - Folder tree with hardcoded "Shortcuts" root, recycle bin slot with Restore / permanent-delete, per-folder filtering.
+  - Windows Terminal routing: new window or attach as a new tab in a named tab group (wt -w <name>), optional --title rename, optional post-launch SendKeys.
+  - Auto-fills Name with the working-directory leaf when you pick a folder.
+  - On first run, carries over existing shortcuts, folders, recycle-bin entries and owned WT profiles from the ClaudeIntegration plugin's data directory.

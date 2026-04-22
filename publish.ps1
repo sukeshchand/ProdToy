@@ -115,6 +115,12 @@ $pluginProjects = @(
         DisplayName = "Claude Integration"
         Dir         = "src\Plugins\ProdToy.Plugins.ClaudeIntegration"
         SourceFile  = "src\Plugins\ProdToy.Plugins.ClaudeIntegration\ClaudeIntegrationPlugin.cs"
+    },
+    @{
+        Id          = "ProdToy.Plugin.ShortCutManager"
+        DisplayName = "Shortcuts"
+        Dir         = "src\Plugins\ProdToy.Plugins.ShortCutManager"
+        SourceFile  = "src\Plugins\ProdToy.Plugins.ShortCutManager\ShortCutManagerPlugin.cs"
     }
 )
 

@@ -29,14 +29,21 @@ static class AlarmNotifier
     {
         if (_host == null) return;
 
-        try
+        // Fire-and-forget on the thread pool so the scheduler's timer thread is
+        // never blocked waiting on the UI thread. If the UI thread is busy (e.g.
+        // WebView2 prewarm still running right after an app update), the Invoke
+        // call queues but the scheduler proceeds to its next tick immediately.
+        ThreadPool.QueueUserWorkItem(_ =>
         {
-            _host.InvokeOnUI(() => ShowAlarm(alarm));
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"AlarmNotifier dispatch failed: {ex.Message}");
-        }
+            try
+            {
+                _host.InvokeOnUI(() => ShowAlarm(alarm));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"AlarmNotifier dispatch failed: {ex.Message}");
+            }
+        });
     }
 
     private static void ShowAlarm(AlarmEntry alarm)
@@ -137,9 +144,25 @@ static class AlarmNotifier
                 _snoozeTimers.Remove(alarm.Id);
             }
 
+            try
+            {
+                var current = AlarmStore.GetAlarm(alarm.Id);
+                if (current != null)
+                    AlarmStore.UpdateAlarm(current with { SnoozedUntil = DateTime.Now.AddMinutes(minutes) });
+            }
+            catch (Exception ex) { Debug.WriteLine($"Snooze persist failed: {ex.Message}"); }
+
             var timer = new System.Threading.Timer(_ =>
             {
                 lock (_snoozeLock) { _snoozeTimers.Remove(alarm.Id); }
+
+                try
+                {
+                    var current = AlarmStore.GetAlarm(alarm.Id);
+                    if (current != null)
+                        AlarmStore.UpdateAlarm(current with { SnoozedUntil = null });
+                }
+                catch (Exception ex) { Debug.WriteLine($"Snooze clear failed: {ex.Message}"); }
 
                 if (_host != null)
                 {
