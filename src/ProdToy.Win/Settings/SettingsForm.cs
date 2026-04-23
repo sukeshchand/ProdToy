@@ -23,7 +23,7 @@ class SettingsForm : Form
     private TabPage _aboutPage = null!;
     private readonly int _tp = 16;
     private int _tabInner;
-    private readonly int _contentWidth = 752;
+    private readonly int _contentWidth = 852;
 
     public event Action<PopupTheme>? ThemeChanged;
     public event Action<string>? GlobalFontChanged;
@@ -37,7 +37,7 @@ class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(800, 820);
+        Size = new Size(900, 880);
         ShowInTaskbar = true;
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = currentTheme.BgDark;
@@ -46,7 +46,7 @@ class SettingsForm : Form
         Icon = Themes.CreateAppIcon(currentTheme.Primary);
 
         int leftMargin = 24;
-        int contentWidth = 752;
+        int contentWidth = _contentWidth;
 
         // --- Title ---
         int y = 16;
@@ -79,11 +79,12 @@ class SettingsForm : Form
         _tabControl = new ThemedTabControl(currentTheme)
         {
             Location = new Point(leftMargin, y),
-            Size = new Size(contentWidth, 700),
+            Size = new Size(contentWidth, 760),
             Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
             SizeMode = TabSizeMode.Fixed,
             ItemSize = new Size(tabWidth, 32),
             Padding = new Point(0, 0),
+            Multiline = true,
         };
         Controls.Add(_tabControl);
 
@@ -357,6 +358,16 @@ class SettingsForm : Form
         // =============================================
         _aboutPage = CreateTabPage("About", currentTheme);
         _aboutPage.AutoScroll = true;
+        // Kill the horizontal scrollbar permanently. WinForms' AutoScroll
+        // recomputes scrollbar visibility on every layout pass, so a one-time
+        // HorizontalScroll.Visible = false gets clobbered. Re-asserting on
+        // Layout is the only robust way to keep it hidden.
+        _aboutPage.Layout += (_, _) =>
+        {
+            _aboutPage.HorizontalScroll.Maximum = 0;
+            _aboutPage.HorizontalScroll.Visible = false;
+            _aboutPage.AutoScroll = true;
+        };
         int ab = tp;
 
         // --- App icon + name + version ---
@@ -667,6 +678,105 @@ class SettingsForm : Form
         _aboutPage.Controls.Add(updateLinkLabel);
         ab += 40;
 
+        // --- INSTALLATION section ---
+        _aboutPage.Controls.Add(CreateSeparator(tp, ab, tabInner));
+        ab += 14;
+
+        var installSectionLabel = CreateSectionLabel("INSTALLATION", tp, ab);
+        _aboutPage.Controls.Add(installSectionLabel);
+        ab += 28;
+
+        var installPathCaption = new Label
+        {
+            Text = "Installed at",
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = currentTheme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(tp, ab),
+            BackColor = Color.Transparent,
+        };
+        _aboutPage.Controls.Add(installPathCaption);
+        ab += 18;
+
+        var installPathValue = new Label
+        {
+            Text = AppPaths.Root,
+            Font = new Font("Consolas", 9f),
+            ForeColor = currentTheme.TextPrimary,
+            AutoSize = false,
+            AutoEllipsis = true,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Size = new Size(tabInner, 20),
+            Location = new Point(tp, ab),
+            BackColor = Color.Transparent,
+        };
+        _aboutPage.Controls.Add(installPathValue);
+        ab += 24;
+
+        var openFolderButton = new RoundedButton
+        {
+            Text = "Open Folder",
+            Font = new Font("Segoe UI", 8.5f),
+            Size = new Size(120, 28),
+            Location = new Point(tp, ab),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = currentTheme.PrimaryDim,
+            ForeColor = currentTheme.TextSecondary,
+            Cursor = Cursors.Hand,
+        };
+        openFolderButton.FlatAppearance.BorderSize = 0;
+        openFolderButton.FlatAppearance.MouseOverBackColor = currentTheme.Primary;
+        openFolderButton.Click += (_, _) =>
+        {
+            try
+            {
+                if (!Directory.Exists(AppPaths.Root))
+                {
+                    MessageBox.Show(this,
+                        $"Install folder does not exist:\n{AppPaths.Root}",
+                        "Open Folder", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = AppPaths.Root,
+                    UseShellExecute = true,
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this,
+                    $"Could not open folder:\n{ex.Message}",
+                    "Open Folder", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+        _aboutPage.Controls.Add(openFolderButton);
+        ab += 36;
+
+        var logsSizeLabel = new Label
+        {
+            Text = $"Logs folder:  {FormatDirectorySize(AppPaths.LogsDir)}",
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = currentTheme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(tp, ab),
+            BackColor = Color.Transparent,
+        };
+        _aboutPage.Controls.Add(logsSizeLabel);
+        ab += 20;
+
+        var dataSizeLabel = new Label
+        {
+            Text = $"Data folder:  {FormatDirectorySize(AppPaths.DataDir)}",
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = currentTheme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(tp, ab),
+            BackColor = Color.Transparent,
+        };
+        _aboutPage.Controls.Add(dataSizeLabel);
+        ab += 24;
+
         // --- UNINSTALL section (merged from Advanced tab) ---
         _aboutPage.Controls.Add(CreateSeparator(tp, ab, tabInner));
         ab += 14;
@@ -769,10 +879,12 @@ class SettingsForm : Form
         // About tab always last
         _tabControl.TabPages.Add(_aboutPage);
 
-        // Recalculate tab widths
+        // Recalculate tab widths. Reserve a buffer for the tab control's built-in
+        // right-edge padding — without it 5+ tabs trigger the scroll arrows even
+        // though the sum of tab widths fits the content width on paper.
         {
             int tc = _tabControl.TabPages.Count;
-            int tw = (_contentWidth - 4) / Math.Max(1, tc);
+            int tw = (_contentWidth - 8) / Math.Max(1, tc) - 2;
             _tabControl.ItemSize = new Size(tw, 32);
         }
 
@@ -868,9 +980,9 @@ class SettingsForm : Form
             else
                 _tabControl.TabPages.Add(pluginTabPage);
 
-            // Recalculate tab widths
+            // Recalculate tab widths (same buffer as initial calc)
             int tabCount = _tabControl.TabPages.Count;
-            int tabWidth = (_contentWidth - 4) / Math.Max(1, tabCount);
+            int tabWidth = (_contentWidth - 8) / Math.Max(1, tabCount) - 2;
             _tabControl.ItemSize = new Size(tabWidth, 32);
         }
     }
@@ -1184,6 +1296,26 @@ class SettingsForm : Form
             Location = new Point(x, y),
             Size = new Size(width, 1),
         };
+    }
+
+    private static string FormatDirectorySize(string path)
+    {
+        if (!Directory.Exists(path)) return "not present";
+        long bytes = 0;
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+            {
+                try { bytes += new FileInfo(f).Length; }
+                catch { /* file may have vanished between enumeration and stat — skip */ }
+            }
+        }
+        catch { return "unavailable"; }
+
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024L * 1024) return $"{bytes / 1024.0:0.#} KB";
+        if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):0.#} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):0.##} GB";
     }
 
     private static void SetStartWithWindows(bool enabled)

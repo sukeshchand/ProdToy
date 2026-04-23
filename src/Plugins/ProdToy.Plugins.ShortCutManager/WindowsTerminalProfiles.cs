@@ -214,6 +214,92 @@ static class WindowsTerminalProfiles
         throw new InvalidOperationException($"Profile \"{name}\" not found in settings.json.");
     }
 
+    // ---- Color schemes CRUD ----
+
+    public static WtSchemeDraft? ReadScheme(string name)
+    {
+        var path = FindSettingsPath();
+        if (path == null) return null;
+        var node = ParseRoot(path);
+        if (node?["schemes"] is not JsonArray arr) return null;
+        foreach (var item in arr)
+        {
+            if (item is not JsonObject obj) continue;
+            var n = obj["name"]?.GetValue<string>();
+            if (!string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) continue;
+            return WtSchemeDraft.FromJson(obj);
+        }
+        return null;
+    }
+
+    public static void AppendScheme(WtSchemeDraft draft)
+    {
+        var (path, node, arr) = LoadSchemesForWrite();
+        foreach (var item in arr)
+        {
+            var n = item?["name"]?.GetValue<string>();
+            if (string.Equals(n, draft.Name, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"A color scheme named \"{draft.Name}\" already exists.");
+        }
+        arr.Add(draft.ToJson());
+        Persist(path, node);
+    }
+
+    public static void UpdateScheme(string oldName, WtSchemeDraft draft)
+    {
+        var (path, node, arr) = LoadSchemesForWrite();
+        int idx = -1;
+        for (int i = 0; i < arr.Count; i++)
+        {
+            if (arr[i] is JsonObject o
+                && string.Equals(o["name"]?.GetValue<string>(), oldName, StringComparison.OrdinalIgnoreCase))
+            { idx = i; break; }
+        }
+        if (idx < 0) throw new InvalidOperationException($"Color scheme \"{oldName}\" not found in settings.json.");
+
+        if (!string.Equals(oldName, draft.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var item in arr)
+            {
+                var n = item?["name"]?.GetValue<string>();
+                if (string.Equals(n, draft.Name, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"A color scheme named \"{draft.Name}\" already exists.");
+            }
+        }
+        arr[idx] = draft.ToJson();
+        Persist(path, node);
+    }
+
+    public static void DeleteScheme(string name)
+    {
+        var (path, node, arr) = LoadSchemesForWrite();
+        for (int i = 0; i < arr.Count; i++)
+        {
+            if (arr[i] is JsonObject o
+                && string.Equals(o["name"]?.GetValue<string>(), name, StringComparison.OrdinalIgnoreCase))
+            {
+                arr.RemoveAt(i);
+                Persist(path, node);
+                return;
+            }
+        }
+        throw new InvalidOperationException($"Color scheme \"{name}\" not found in settings.json.");
+    }
+
+    private static (string path, JsonNode root, JsonArray arr) LoadSchemesForWrite()
+    {
+        var path = FindSettingsPath()
+            ?? throw new InvalidOperationException("Windows Terminal settings.json not found.");
+        var node = ParseRoot(path)
+            ?? throw new InvalidOperationException("Couldn't parse Windows Terminal settings.json.");
+        if (node["schemes"] is not JsonArray arr)
+        {
+            arr = new JsonArray();
+            node["schemes"] = arr;
+        }
+        return (path, node, arr);
+    }
+
     private static (string path, JsonNode root, JsonArray list) LoadForWrite()
     {
         var path = FindSettingsPath()
@@ -347,5 +433,89 @@ sealed record WtProfileDraft
             o["font"] = font;
         }
         return o;
+    }
+}
+
+/// <summary>
+/// A Windows Terminal color scheme: 20 colors + a name. All colors serialize as
+/// "#RRGGBB" strings. Matches the shape WT expects under the top-level "schemes" array.
+/// </summary>
+sealed record WtSchemeDraft
+{
+    public string Name { get; init; } = "";
+    public string Foreground { get; init; } = "#cccccc";
+    public string Background { get; init; } = "#0c0c0c";
+    public string CursorColor { get; init; } = "#ffffff";
+    public string SelectionBackground { get; init; } = "#ffffff";
+    public string Black { get; init; } = "#0c0c0c";
+    public string Red { get; init; } = "#c50f1f";
+    public string Green { get; init; } = "#13a10e";
+    public string Yellow { get; init; } = "#c19c00";
+    public string Blue { get; init; } = "#0037da";
+    public string Purple { get; init; } = "#881798";
+    public string Cyan { get; init; } = "#3a96dd";
+    public string White { get; init; } = "#cccccc";
+    public string BrightBlack { get; init; } = "#767676";
+    public string BrightRed { get; init; } = "#e74856";
+    public string BrightGreen { get; init; } = "#16c60c";
+    public string BrightYellow { get; init; } = "#f9f1a5";
+    public string BrightBlue { get; init; } = "#3b78ff";
+    public string BrightPurple { get; init; } = "#b4009e";
+    public string BrightCyan { get; init; } = "#61d6d6";
+    public string BrightWhite { get; init; } = "#f2f2f2";
+
+    public JsonObject ToJson() => new()
+    {
+        ["name"] = Name,
+        ["foreground"] = Foreground,
+        ["background"] = Background,
+        ["cursorColor"] = CursorColor,
+        ["selectionBackground"] = SelectionBackground,
+        ["black"] = Black,
+        ["red"] = Red,
+        ["green"] = Green,
+        ["yellow"] = Yellow,
+        ["blue"] = Blue,
+        ["purple"] = Purple,
+        ["cyan"] = Cyan,
+        ["white"] = White,
+        ["brightBlack"] = BrightBlack,
+        ["brightRed"] = BrightRed,
+        ["brightGreen"] = BrightGreen,
+        ["brightYellow"] = BrightYellow,
+        ["brightBlue"] = BrightBlue,
+        ["brightPurple"] = BrightPurple,
+        ["brightCyan"] = BrightCyan,
+        ["brightWhite"] = BrightWhite,
+    };
+
+    public static WtSchemeDraft FromJson(JsonObject o)
+    {
+        static string S(JsonObject o, string k, string dflt)
+            => o[k]?.GetValue<string>() ?? dflt;
+        return new WtSchemeDraft
+        {
+            Name                = S(o, "name", ""),
+            Foreground          = S(o, "foreground",          "#cccccc"),
+            Background          = S(o, "background",          "#0c0c0c"),
+            CursorColor         = S(o, "cursorColor",         "#ffffff"),
+            SelectionBackground = S(o, "selectionBackground", "#ffffff"),
+            Black               = S(o, "black",               "#0c0c0c"),
+            Red                 = S(o, "red",                 "#c50f1f"),
+            Green               = S(o, "green",               "#13a10e"),
+            Yellow              = S(o, "yellow",              "#c19c00"),
+            Blue                = S(o, "blue",                "#0037da"),
+            Purple              = S(o, "purple",              "#881798"),
+            Cyan                = S(o, "cyan",                "#3a96dd"),
+            White               = S(o, "white",               "#cccccc"),
+            BrightBlack         = S(o, "brightBlack",         "#767676"),
+            BrightRed           = S(o, "brightRed",           "#e74856"),
+            BrightGreen         = S(o, "brightGreen",         "#16c60c"),
+            BrightYellow        = S(o, "brightYellow",        "#f9f1a5"),
+            BrightBlue          = S(o, "brightBlue",          "#3b78ff"),
+            BrightPurple        = S(o, "brightPurple",        "#b4009e"),
+            BrightCyan          = S(o, "brightCyan",          "#61d6d6"),
+            BrightWhite         = S(o, "brightWhite",         "#f2f2f2"),
+        };
     }
 }

@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Drawing.Text;
 using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
@@ -25,6 +26,8 @@ class WtProfileCreateForm : Form
     private readonly ComboBox _cursorCombo;
     private readonly TextBox _startingDirBox;
     private readonly Label _validationLabel;
+    private readonly RoundedButton _editSchemeBtn = null!;
+    private readonly RoundedButton _delSchemeBtn = null!;
 
     /// <summary>Name of the profile that was created or edited (null if cancelled).</summary>
     public string? ResultProfileName { get; private set; }
@@ -111,16 +114,31 @@ class WtProfileCreateForm : Form
 
         AddLabel("Color scheme", pad, y);
         _schemeCombo = MakeCombo(inputX, y, 240, editable: true);
-        foreach (var s in WindowsTerminalProfiles.DiscoverSchemes())
-            _schemeCombo.Items.Add(s);
-        _schemeCombo.Text = existing?.ColorScheme ?? "Campbell";
+        ReloadSchemeDropdown(selectName: existing?.ColorScheme ?? "Campbell");
+
+        var newSchemeBtn = MakeSchemeActionBtn(theme, "+", inputX + 248, y);
+        newSchemeBtn.Click += (_, _) => OpenCreateScheme();
+        Controls.Add(newSchemeBtn);
+
+        _editSchemeBtn = MakeSchemeActionBtn(theme, "✎", inputX + 248 + 36, y);
+        _editSchemeBtn.Click += (_, _) => OpenEditScheme();
+        Controls.Add(_editSchemeBtn);
+
+        _delSchemeBtn = MakeSchemeActionBtn(theme, "🗑", inputX + 248 + 72, y);
+        _delSchemeBtn.Font = new Font("Segoe UI Emoji", 11f, FontStyle.Regular);
+        _delSchemeBtn.ForeColor = theme.ErrorColor;
+        _delSchemeBtn.Click += (_, _) => DeleteSelectedScheme();
+        Controls.Add(_delSchemeBtn);
+
+        _schemeCombo.TextChanged         += (_, _) => RefreshSchemeButtons();
+        _schemeCombo.SelectedIndexChanged += (_, _) => RefreshSchemeButtons();
+        RefreshSchemeButtons();
+
         y += 34;
 
         AddLabel("Font face", pad, y);
         _fontFaceCombo = MakeCombo(inputX, y, 240, editable: true);
-        foreach (var f in new[] { "Cascadia Mono", "Cascadia Code", "Consolas", "JetBrains Mono",
-                                  "Fira Code", "Source Code Pro", "Courier New", "Lucida Console" })
-            _fontFaceCombo.Items.Add(f);
+        PopulateFontFaces(showAll: false);
         _fontFaceCombo.Text = existing?.FontFace ?? "Cascadia Mono";
 
         AddLabel("Size", inputX + 256, y);
@@ -134,7 +152,53 @@ class WtProfileCreateForm : Form
             Location = new Point(inputX + 296, y),
         };
         Controls.Add(_fontSize);
-        y += 34;
+        y += 30;
+
+        var showAllFontsCheck = new CheckBox
+        {
+            Text = "Show all fonts (include non-monospace)",
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = theme.TextSecondary,
+            BackColor = Color.Transparent,
+            AutoSize = true,
+            Location = new Point(inputX, y),
+        };
+        showAllFontsCheck.CheckedChanged += (_, _) =>
+        {
+            var current = _fontFaceCombo.Text;
+            PopulateFontFaces(showAll: showAllFontsCheck.Checked);
+            _fontFaceCombo.Text = current;
+        };
+        Controls.Add(showAllFontsCheck);
+        y += 28;
+
+        var previewLabel = new Label
+        {
+            Text = "The quick brown fox jumps over the lazy dog — 0123 {} => != #!",
+            AutoEllipsis = true,
+            TextAlign = ContentAlignment.MiddleLeft,
+            BackColor = theme.BgHeader,
+            ForeColor = theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            Size = new Size(inputW, 56),
+            Location = new Point(inputX, y),
+        };
+        Controls.Add(previewLabel);
+
+        void UpdatePreview()
+        {
+            var face = string.IsNullOrWhiteSpace(_fontFaceCombo.Text) ? "Segoe UI" : _fontFaceCombo.Text.Trim();
+            var size = (float)_fontSize.Value;
+            var old = previewLabel.Font;
+            try { previewLabel.Font = new Font(face, size, FontStyle.Regular, GraphicsUnit.Point); }
+            catch { previewLabel.Font = new Font("Segoe UI", size); }
+            old?.Dispose();
+        }
+        _fontFaceCombo.TextChanged += (_, _) => UpdatePreview();
+        _fontFaceCombo.SelectedIndexChanged += (_, _) => UpdatePreview();
+        _fontSize.ValueChanged += (_, _) => UpdatePreview();
+        UpdatePreview();
+        y += 64;
 
         AddLabel("Cursor", pad, y);
         _cursorCombo = MakeCombo(inputX, y, 160);
@@ -397,6 +461,163 @@ class WtProfileCreateForm : Form
         };
         Controls.Add(tb);
         return tb;
+    }
+
+    private static RoundedButton MakeSchemeActionBtn(PluginTheme theme, string glyph, int x, int y)
+    {
+        var b = new RoundedButton
+        {
+            Text = glyph,
+            Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
+            Size = new Size(32, 26),
+            Location = new Point(x, y),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.PrimaryDim,
+            ForeColor = theme.TextPrimary,
+            Cursor = Cursors.Hand,
+        };
+        b.FlatAppearance.BorderSize = 0;
+        b.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
+        return b;
+    }
+
+    private void ReloadSchemeDropdown(string? selectName = null)
+    {
+        var current = selectName ?? _schemeCombo.Text;
+        _schemeCombo.BeginUpdate();
+        _schemeCombo.Items.Clear();
+        foreach (var s in WindowsTerminalProfiles.DiscoverSchemes())
+            _schemeCombo.Items.Add(s);
+        _schemeCombo.EndUpdate();
+        _schemeCombo.Text = current ?? "";
+    }
+
+    private void RefreshSchemeButtons()
+    {
+        var name = _schemeCombo.Text?.Trim() ?? "";
+        var owned = !string.IsNullOrEmpty(name) && OwnedWtSchemesStore.IsOwned(name);
+        _editSchemeBtn.Visible = owned;
+        _delSchemeBtn.Visible = owned;
+    }
+
+    private void OpenCreateScheme()
+    {
+        using var dlg = new WtSchemeEditForm(_theme);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        if (string.IsNullOrWhiteSpace(dlg.ResultSchemeName)) return;
+        ReloadSchemeDropdown(selectName: dlg.ResultSchemeName);
+        RefreshSchemeButtons();
+    }
+
+    private void OpenEditScheme()
+    {
+        var current = _schemeCombo.Text?.Trim() ?? "";
+        if (string.IsNullOrEmpty(current) || !OwnedWtSchemesStore.IsOwned(current)) return;
+
+        var existing = WindowsTerminalProfiles.ReadScheme(current);
+        if (existing == null)
+        {
+            MessageBox.Show(this,
+                $"Couldn't find color scheme \"{current}\" in settings.json.",
+                "Edit scheme", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            OwnedWtSchemesStore.Remove(current);
+            ReloadSchemeDropdown();
+            RefreshSchemeButtons();
+            return;
+        }
+
+        using var dlg = new WtSchemeEditForm(_theme, existing);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        if (dlg.Deleted)
+        {
+            ReloadSchemeDropdown(selectName: "Campbell");
+        }
+        else if (!string.IsNullOrWhiteSpace(dlg.ResultSchemeName))
+        {
+            ReloadSchemeDropdown(selectName: dlg.ResultSchemeName);
+        }
+        RefreshSchemeButtons();
+    }
+
+    private void DeleteSelectedScheme()
+    {
+        var current = _schemeCombo.Text?.Trim() ?? "";
+        if (string.IsNullOrEmpty(current) || !OwnedWtSchemesStore.IsOwned(current)) return;
+
+        var res = MessageBox.Show(this,
+            $"Delete the color scheme \"{current}\"?\n\nThis removes the entry from settings.json.",
+            "Confirm Delete",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+        if (res != DialogResult.Yes) return;
+
+        try
+        {
+            WindowsTerminalProfiles.DeleteScheme(current);
+            OwnedWtSchemesStore.Remove(current);
+            ReloadSchemeDropdown(selectName: "Campbell");
+            RefreshSchemeButtons();
+        }
+        catch (Exception ex)
+        {
+            _validationLabel.Text = $"Delete failed: {ex.Message}";
+        }
+    }
+
+    private static readonly string[] CuratedMonoFonts =
+    {
+        "Cascadia Mono", "Cascadia Code", "Consolas", "JetBrains Mono",
+        "Fira Code", "Source Code Pro", "Courier New", "Lucida Console",
+    };
+
+    private static List<string>? _cachedAllFonts;
+    private static List<string>? _cachedMonoFonts;
+
+    private void PopulateFontFaces(bool showAll)
+    {
+        _fontFaceCombo.BeginUpdate();
+        _fontFaceCombo.Items.Clear();
+        foreach (var f in showAll ? GetAllFonts() : GetMonospaceFonts())
+            _fontFaceCombo.Items.Add(f);
+        _fontFaceCombo.EndUpdate();
+    }
+
+    private static List<string> GetAllFonts()
+    {
+        if (_cachedAllFonts != null) return _cachedAllFonts;
+        using var col = new InstalledFontCollection();
+        _cachedAllFonts = col.Families.Select(f => f.Name).OrderBy(n => n).ToList();
+        return _cachedAllFonts;
+    }
+
+    private static List<string> GetMonospaceFonts()
+    {
+        if (_cachedMonoFonts != null) return _cachedMonoFonts;
+        using var col = new InstalledFontCollection();
+        using var bmp = new Bitmap(1, 1);
+        using var g = Graphics.FromImage(bmp);
+        var detected = new List<string>();
+        foreach (var fam in col.Families)
+        {
+            if (!fam.IsStyleAvailable(FontStyle.Regular)) continue;
+            try
+            {
+                using var font = new Font(fam, 12f, FontStyle.Regular);
+                var wi = g.MeasureString("iiiii", font).Width;
+                var ww = g.MeasureString("WWWWW", font).Width;
+                if (Math.Abs(wi - ww) < 0.5f) detected.Add(fam.Name);
+            }
+            catch { }
+        }
+        // Merge curated list first (so preferred fonts sort to the top even if not installed yet),
+        // then alphabetised detected monospace fonts.
+        var result = new List<string>();
+        foreach (var f in CuratedMonoFonts)
+            if (!result.Contains(f, StringComparer.OrdinalIgnoreCase)) result.Add(f);
+        foreach (var f in detected.OrderBy(n => n))
+            if (!result.Contains(f, StringComparer.OrdinalIgnoreCase)) result.Add(f);
+        _cachedMonoFonts = result;
+        return _cachedMonoFonts;
     }
 
     private ComboBox MakeCombo(int x, int y, int w, bool editable = false)

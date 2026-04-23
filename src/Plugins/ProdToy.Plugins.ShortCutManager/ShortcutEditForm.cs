@@ -130,14 +130,27 @@ class ShortcutEditForm : Form
             if (dlg.ShowDialog(this) != DialogResult.OK || string.IsNullOrEmpty(dlg.SelectedPath))
                 return;
             _dirBox.Text = dlg.SelectedPath;
-            // Auto-fill Name with the selected folder's leaf name when empty
-            // so the common case of "name after the project folder" is one
-            // click. Existing text is preserved (user may have named it first).
+
+            string leaf = Path.GetFileName(dlg.SelectedPath.TrimEnd('\\', '/'));
+            if (string.IsNullOrWhiteSpace(leaf)) return;
+
+            // Auto-fill empty fields from the selected folder's leaf name so
+            // the common "name/title after the project folder" case is one
+            // click. Existing user edits are preserved.
             if (string.IsNullOrWhiteSpace(_nameBox.Text))
-            {
-                string leaf = Path.GetFileName(dlg.SelectedPath.TrimEnd('\\', '/'));
-                if (!string.IsNullOrWhiteSpace(leaf)) _nameBox.Text = leaf;
-            }
+                _nameBox.Text = leaf;
+            if (string.IsNullOrWhiteSpace(_titleBox.Text))
+                _titleBox.Text = leaf;
+
+            // Claude-only: pre-populate the post-launch rename keystrokes so
+            // the tab shows the folder name after `claude` has overwritten it
+            // with its own title on startup. Other profiles get no default.
+            int profileIdx = _launchProfileCombo.SelectedIndex;
+            bool isClaude = profileIdx >= 0
+                && profileIdx < LaunchProfiles.All.Length
+                && LaunchProfiles.All[profileIdx].Id.Equals("claude", StringComparison.OrdinalIgnoreCase);
+            if (isClaude && string.IsNullOrWhiteSpace(_sendKeysBox.Text))
+                _sendKeysBox.Text = $"-rename {leaf}{{ENTER}}";
         };
         Controls.Add(browseBtn);
         y += 34;
@@ -312,6 +325,7 @@ class ShortcutEditForm : Form
         _editProfileBtn = editProfileBtn;
 
         var delProfileBtn = MakeProfileActionBtn(theme, "🗑", inputX + 328 + 72, y);
+        delProfileBtn.Font = new Font("Segoe UI Emoji", 11f, FontStyle.Regular);
         delProfileBtn.ForeColor = theme.ErrorColor;
         delProfileBtn.Click += (_, _) => DeleteSelectedProfile();
         Controls.Add(delProfileBtn);

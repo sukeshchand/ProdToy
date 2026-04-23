@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
-[Plugin("ProdToy.Plugin.ShortCutManager", "Shortcuts", "1.0.402",
+[Plugin("ProdToy.Plugin.ShortCutManager", "Shortcuts", "1.0.407",
     Description = "Folder-organized launcher for project shortcuts — Claude CLI, npm, dotnet, custom commands",
     Author = "ProdToy",
     MenuPriority = 250)]
@@ -37,6 +37,7 @@ public class ShortCutManagerPlugin : IPlugin
         ShortcutFolders.Initialize(context.DataDirectory);
         ShortcutsRecycleBin.Initialize(context.DataDirectory);
         OwnedWtProfilesStore.Initialize(context.DataDirectory);
+        OwnedWtSchemesStore.Initialize(context.DataDirectory);
     }
 
     public void Start()
