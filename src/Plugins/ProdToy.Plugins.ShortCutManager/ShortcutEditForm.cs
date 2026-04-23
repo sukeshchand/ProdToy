@@ -150,7 +150,7 @@ class ShortcutEditForm : Form
                 && profileIdx < LaunchProfiles.All.Length
                 && LaunchProfiles.All[profileIdx].Id.Equals("claude", StringComparison.OrdinalIgnoreCase);
             if (isClaude && string.IsNullOrWhiteSpace(_sendKeysBox.Text))
-                _sendKeysBox.Text = $"-rename {leaf}{{ENTER}}";
+                _sendKeysBox.Text = $"/rename {leaf}{{ENTER}}";
         };
         Controls.Add(browseBtn);
         y += 34;
@@ -181,6 +181,23 @@ class ShortcutEditForm : Form
         Controls.Add(_argsHintLabel);
         y += 34;
 
+        // Chip panel — clickable token buttons for common flags/subcommands.
+        // Rebuilt on profile change. Clicking a chip appends its text to _argsBox.
+        var chipPanel = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            AutoSize = false,
+            Size = new Size(inputW, 64),
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+            Padding = new Padding(0),
+            Margin = new Padding(0),
+        };
+        Controls.Add(chipPanel);
+        RebuildArgsChips(chipPanel, initialProfile, theme);
+        y += 68;
+
         // When the profile changes, update the label + hint immediately. The
         // args textbox is only overwritten if it's empty or still holds the
         // previous profile's default (so we don't clobber the user's edits).
@@ -196,6 +213,7 @@ class ShortcutEditForm : Form
             if (string.IsNullOrWhiteSpace(current) || current == prevDefault)
                 _argsBox.Text = p.DefaultArgs;
             prevDefault = p.DefaultArgs;
+            RebuildArgsChips(chipPanel, p, theme);
         };
 
         y = AddSection("TERMINAL", y);
@@ -213,7 +231,9 @@ class ShortcutEditForm : Form
         _windowTargetCombo = MakeCombo(inputX, y, 240);
         _windowTargetCombo.Items.Add("New window");
         _windowTargetCombo.Items.Add("Existing window (new tab)");
-        _windowTargetCombo.SelectedIndex = existing?.WtWindowTarget == WtWindowTarget.ExistingWindow ? 1 : 0;
+        // New shortcuts default to "Existing window" (grouping into a shared WT
+        // window is the more common case). Edits preserve the saved target.
+        _windowTargetCombo.SelectedIndex = existing?.WtWindowTarget == WtWindowTarget.NewWindow ? 0 : 1;
 
         // Tab group name — routes the tab into a specific named WT window via
         // `-w <name>`. Only relevant when "Existing window" is selected.
@@ -228,9 +248,26 @@ class ShortcutEditForm : Form
             Size = new Size(tabGroupW, 26),
             Location = new Point(tabGroupX, y),
             PlaceholderText = "Tab group (optional)",
-            Text = existing?.WtWindowName ?? "",
+            // Prefill with the first word of the directory's leaf folder name
+            // (split on space/dash/underscore/dot) so related shortcuts cluster
+            // into the same WT window by default. Users can still clear or edit.
+            Text = existing?.WtWindowName ?? FirstWordFromPath(existing?.WorkingDirectory ?? defaultFolder),
         };
         Controls.Add(_tabGroupBox);
+
+        // Keep tab group synced with directory leaf — but only while the user
+        // hasn't diverged from our auto-fill. Once they edit the tab group to
+        // a different value, we stop overwriting.
+        string lastAutoTabGroup = _tabGroupBox.Text;
+        _dirBox.TextChanged += (_, _) =>
+        {
+            if (_tabGroupBox.Text == lastAutoTabGroup)
+            {
+                var derived = FirstWordFromPath(_dirBox.Text);
+                _tabGroupBox.Text = derived;
+                lastAutoTabGroup = derived;
+            }
+        };
 
         void RefreshWindowTargetEnabled()
         {
@@ -651,6 +688,61 @@ class ShortcutEditForm : Form
         foreach (var p in WindowsTerminalProfiles.Discover())
             _profileCombo.Items.Add(p);
         _profileCombo.Text = prev ?? "";
+    }
+
+    private static string FirstWordFromPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return "";
+        var leaf = Path.GetFileName(path.TrimEnd('/', '\\'));
+        if (string.IsNullOrWhiteSpace(leaf)) return "";
+        var parts = leaf.Split(new[] { ' ', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length > 0 ? parts[0] : leaf;
+    }
+
+    private void RebuildArgsChips(FlowLayoutPanel panel, LaunchProfile profile, PluginTheme theme)
+    {
+        // Dispose + clear any chips from a previous profile so we don't leak handles.
+        foreach (Control c in panel.Controls) c.Dispose();
+        panel.Controls.Clear();
+
+        foreach (var token in profile.SuggestedTokens)
+        {
+            var chip = new RoundedButton
+            {
+                Text = token,
+                Font = new Font("Consolas", 9f),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Margin = new Padding(0, 0, 6, 6),
+                Padding = new Padding(8, 2, 8, 2),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = theme.PrimaryDim,
+                ForeColor = theme.TextPrimary,
+                Cursor = Cursors.Hand,
+            };
+            chip.FlatAppearance.BorderSize = 0;
+            chip.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
+            string captured = token;
+            chip.Click += (_, _) =>
+            {
+                var current = _argsBox.Text ?? "";
+                // Append with a space separator when existing text is non-empty and
+                // doesn't already end with whitespace. Avoid duplicate exact tokens.
+                if (string.IsNullOrWhiteSpace(current))
+                {
+                    _argsBox.Text = captured;
+                }
+                else
+                {
+                    var existingTokens = current.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (Array.IndexOf(existingTokens, captured) >= 0) return;
+                    _argsBox.Text = current.TrimEnd() + " " + captured;
+                }
+                _argsBox.Focus();
+                _argsBox.SelectionStart = _argsBox.Text.Length;
+            };
+            panel.Controls.Add(chip);
+        }
     }
 
     private static RoundedButton MakeProfileActionBtn(PluginTheme theme, string glyph, int x, int y)

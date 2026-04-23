@@ -3,11 +3,11 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.403",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.407",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
-public class ClaudeIntegrationPlugin : IPlugin
+public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
 {
     private IPluginContext _context = null!;
     private IDisposable? _notifyHandlerReg;

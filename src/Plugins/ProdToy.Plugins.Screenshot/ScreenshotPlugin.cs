@@ -10,11 +10,11 @@ internal enum HotkeyApplyStatus
     Failed,
 }
 
-[Plugin("ProdToy.Plugin.Screenshot", "Screenshot", "1.0.354",
+[Plugin("ProdToy.Plugin.Screenshot", "Screenshot", "1.0.356",
     Description = "Screen capture and annotation editor",
     Author = "ProdToy",
     MenuPriority = 100)]
-public class ScreenshotPlugin : IPlugin
+public partial class ScreenshotPlugin : IPlugin, IDoctor
 {
     private IPluginContext _context = null!;
     private IHotkeyRegistration? _hotkeyReg;

@@ -20,6 +20,12 @@ sealed record LaunchProfile
     public required string ArgsHint { get; init; }
 
     /// <summary>
+    /// Short arg snippets surfaced as clickable chips below the args textbox.
+    /// Clicking a chip appends the snippet to the textbox. Empty array ⇒ no chips.
+    /// </summary>
+    public string[] SuggestedTokens { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// When true, a trailing <c>--continue</c>/<c>-c</c> in the args triggers
     /// the "(X --continue || X)" retry wrapper so Claude doesn't leave the
     /// user in a dead terminal on a fresh project. Claude-specific.
@@ -36,8 +42,17 @@ static class LaunchProfiles
             Id = "claude",
             DisplayName = "Claude CLI",
             Command = "claude",
-            DefaultArgs = "--dangerously-skip-permissions --continue",
-            ArgsHint = "Appended to `claude` — e.g. --continue, --model, -p, --dangerously-skip-permissions",
+            DefaultArgs = "",
+            ArgsHint = "Appended to `claude`. Click a chip below to add common flags.",
+            SuggestedTokens = new[]
+            {
+                "--dangerously-skip-permissions",
+                "--continue",
+                "-p",
+                "--model sonnet",
+                "--model opus",
+                "--model haiku",
+            },
             SupportsContinueFallback = true,
         },
         new LaunchProfile
@@ -45,24 +60,27 @@ static class LaunchProfiles
             Id = "npm",
             DisplayName = "npm",
             Command = "npm",
-            DefaultArgs = "run dev",
-            ArgsHint = "Appended to `npm` — e.g. install, run dev, run build, test, start",
+            DefaultArgs = "",
+            ArgsHint = "Appended to `npm`. Click a chip below to add a common subcommand.",
+            SuggestedTokens = new[] { "install", "run dev", "run build", "run start", "test", "start" },
         },
         new LaunchProfile
         {
             Id = "vite",
             DisplayName = "Vite (via npx)",
             Command = "npx",
-            DefaultArgs = "vite",
-            ArgsHint = "Appended to `npx` — e.g. vite, vite build, vite preview",
+            DefaultArgs = "",
+            ArgsHint = "Appended to `npx`. Click a chip below to add a common invocation.",
+            SuggestedTokens = new[] { "vite", "vite build", "vite preview" },
         },
         new LaunchProfile
         {
             Id = "dotnet",
             DisplayName = "dotnet",
             Command = "dotnet",
-            DefaultArgs = "run",
-            ArgsHint = "Appended to `dotnet` — e.g. run, build, test, watch run",
+            DefaultArgs = "",
+            ArgsHint = "Appended to `dotnet`. Click a chip below to add a common subcommand.",
+            SuggestedTokens = new[] { "run", "build", "test", "watch run", "restore", "publish" },
         },
         new LaunchProfile
         {
@@ -70,7 +88,8 @@ static class LaunchProfiles
             DisplayName = "PowerShell",
             Command = "pwsh",
             DefaultArgs = "",
-            ArgsHint = "Appended to `pwsh` — e.g. -NoExit -Command ..., -File script.ps1",
+            ArgsHint = "Appended to `pwsh`. Click a chip below to add a common flag.",
+            SuggestedTokens = new[] { "-NoExit", "-Command", "-File", "-ExecutionPolicy Bypass" },
         },
         new LaunchProfile
         {

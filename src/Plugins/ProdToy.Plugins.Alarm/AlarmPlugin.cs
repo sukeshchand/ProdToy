@@ -2,11 +2,11 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Alarm;
 
-[Plugin("ProdToy.Plugin.Alarm", "Alarms", "1.0.369",
+[Plugin("ProdToy.Plugin.Alarm", "Alarms", "1.0.371",
     Description = "Schedule recurring alarms with popup and sound notifications",
     Author = "ProdToy",
     MenuPriority = 200)]
-public class AlarmPlugin : IPlugin
+public partial class AlarmPlugin : IPlugin, IDoctor
 {
     private IPluginContext _context = null!;
     private AlarmForm? _alarmForm;

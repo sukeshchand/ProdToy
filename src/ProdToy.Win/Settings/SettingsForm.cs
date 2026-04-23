@@ -370,6 +370,14 @@ class SettingsForm : Form
         };
         int ab = tp;
 
+        // Reserve space for the vertical scrollbar — without this, any
+        // control sized to the full tabInner width overflows the tab page's
+        // client area as soon as VScroll appears, which in turn re-triggers
+        // the horizontal scrollbar. Using a smaller width for every full-width
+        // control on this page guarantees no child ever extends past the
+        // scrollbar's left edge.
+        int aboutInner = tabInner - 22;
+
         // --- App icon + name + version ---
         var appIconPanel = new Panel
         {
@@ -418,7 +426,7 @@ class SettingsForm : Form
             Font = new Font("Segoe UI", 9.5f),
             ForeColor = currentTheme.TextSecondary,
             AutoSize = true,
-            MaximumSize = new Size(tabInner, 0),
+            MaximumSize = new Size(aboutInner, 0),
             Location = new Point(tp, ab),
             BackColor = Color.Transparent,
         };
@@ -426,7 +434,7 @@ class SettingsForm : Form
         ab += aboutDescLabel.PreferredHeight + 14;
 
         // --- Separator ---
-        _aboutPage.Controls.Add(CreateSeparator(tp, ab, tabInner));
+        _aboutPage.Controls.Add(CreateSeparator(tp, ab, aboutInner));
         ab += 14;
 
         // --- Repository Section ---
@@ -521,7 +529,7 @@ class SettingsForm : Form
         ab += 10;
 
         // --- Separator ---
-        _aboutPage.Controls.Add(CreateSeparator(tp, ab, tabInner));
+        _aboutPage.Controls.Add(CreateSeparator(tp, ab, aboutInner));
         ab += 14;
 
         // --- Updates Section ---
@@ -548,7 +556,7 @@ class SettingsForm : Form
             ForeColor = currentTheme.TextPrimary,
             BackColor = currentTheme.BgHeader,
             BorderStyle = BorderStyle.FixedSingle,
-            Size = new Size(tabInner - 40, 26),
+            Size = new Size(aboutInner - 40, 26),
             Location = new Point(tp, ab),
         };
         updatePathBox.LostFocus += (_, _) =>
@@ -567,7 +575,7 @@ class SettingsForm : Form
             Text = "Save",
             Font = new Font("Segoe UI", 8.5f),
             Size = new Size(34, 26),
-            Location = new Point(tp + tabInner - 34, ab),
+            Location = new Point(tp + aboutInner - 34, ab),
             FlatStyle = FlatStyle.Flat,
             BackColor = currentTheme.PrimaryDim,
             ForeColor = currentTheme.TextSecondary,
@@ -679,7 +687,7 @@ class SettingsForm : Form
         ab += 40;
 
         // --- INSTALLATION section ---
-        _aboutPage.Controls.Add(CreateSeparator(tp, ab, tabInner));
+        _aboutPage.Controls.Add(CreateSeparator(tp, ab, aboutInner));
         ab += 14;
 
         var installSectionLabel = CreateSectionLabel("INSTALLATION", tp, ab);
@@ -706,7 +714,7 @@ class SettingsForm : Form
             AutoSize = false,
             AutoEllipsis = true,
             TextAlign = ContentAlignment.MiddleLeft,
-            Size = new Size(tabInner, 20),
+            Size = new Size(aboutInner, 20),
             Location = new Point(tp, ab),
             BackColor = Color.Transparent,
         };
@@ -777,8 +785,64 @@ class SettingsForm : Form
         _aboutPage.Controls.Add(dataSizeLabel);
         ab += 24;
 
+        // --- DOCTOR section ---
+        _aboutPage.Controls.Add(CreateSeparator(tp, ab, aboutInner));
+        ab += 14;
+
+        var doctorSectionLabel = CreateSectionLabel("DOCTOR", tp, ab);
+        _aboutPage.Controls.Add(doctorSectionLabel);
+        ab += 28;
+
+        var doctorHint = new Label
+        {
+            Text = "Check installation files, config, and every plugin for problems. You'll see a list of issues and can choose which to fix.",
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = currentTheme.TextSecondary,
+            AutoSize = false,
+            MaximumSize = new Size(aboutInner, 0),
+            Size = new Size(aboutInner, 32),
+            Location = new Point(tp, ab),
+            BackColor = Color.Transparent,
+        };
+        _aboutPage.Controls.Add(doctorHint);
+        ab += 38;
+
+        var runDoctorBtn = new RoundedButton
+        {
+            Text = "Run Diagnostics",
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            Size = new Size(160, 32),
+            Location = new Point(tp, ab),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = currentTheme.Primary,
+            ForeColor = Color.White,
+            Cursor = Cursors.Hand,
+        };
+        runDoctorBtn.FlatAppearance.BorderSize = 0;
+        runDoctorBtn.FlatAppearance.MouseOverBackColor = currentTheme.PrimaryLight;
+        runDoctorBtn.Click += (_, _) =>
+        {
+            runDoctorBtn.Enabled = false;
+            try
+            {
+                using var dlg = new DoctorForm(_currentTheme);
+                dlg.ShowDialog(this);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Doctor crashed: {ex.Message}", "Doctor",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                runDoctorBtn.Enabled = true;
+            }
+        };
+        _aboutPage.Controls.Add(runDoctorBtn);
+        ab += 46;
+
         // --- UNINSTALL section (merged from Advanced tab) ---
-        _aboutPage.Controls.Add(CreateSeparator(tp, ab, tabInner));
+        _aboutPage.Controls.Add(CreateSeparator(tp, ab, aboutInner));
         ab += 14;
 
         var uninstallSectionLabel = CreateSectionLabel("UNINSTALL", tp, ab);

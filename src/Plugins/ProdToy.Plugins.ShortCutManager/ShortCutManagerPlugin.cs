@@ -3,11 +3,11 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
-[Plugin("ProdToy.Plugin.ShortCutManager", "Shortcuts", "1.0.407",
+[Plugin("ProdToy.Plugin.ShortCutManager", "Shortcuts", "1.0.410",
     Description = "Folder-organized launcher for project shortcuts — Claude CLI, npm, dotnet, custom commands",
     Author = "ProdToy",
     MenuPriority = 250)]
-public class ShortCutManagerPlugin : IPlugin
+public partial class ShortCutManagerPlugin : IPlugin, IDoctor
 {
     private IPluginContext _context = null!;
     private ShortcutsForm? _shortcutsForm;
