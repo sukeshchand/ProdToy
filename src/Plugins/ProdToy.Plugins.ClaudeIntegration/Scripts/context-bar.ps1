@@ -255,6 +255,65 @@ $permDisplay = switch ($permMode) {
 
 $runningVersion = if ($jsonData.version) { [string]$jsonData.version } else { "" }
 
+# --- Resolve version info once (installed + latest) so every style can show the upgrade hint ---
+$installedVersion = ""
+$latestVersion = ""
+$upgradeCandidate = ""
+
+function Compare-Version($a, $b) {
+    if (-not $a -or -not $b) { return 0 }
+    try {
+        $va = [version](($a -split '[-+]')[0])
+        $vb = [version](($b -split '[-+]')[0])
+        return $va.CompareTo($vb)
+    } catch { return 0 }
+}
+
+if ($cfg.version) {
+    $versionCacheFile = Join-Path $env:TEMP "claude-version-cache.json"
+    $cacheValid = $false
+    if (Test-Path $versionCacheFile) {
+        try {
+            $cache = Get-Content $versionCacheFile -Raw | ConvertFrom-Json
+            $cacheAge = (Get-Date) - [datetime]$cache.timestamp
+            if ($cacheAge.TotalMinutes -lt 10) {
+                $installedVersion = $cache.installed
+                $latestVersion    = $cache.latest
+                $cacheValid = $true
+            }
+        } catch {}
+    }
+    if (-not $cacheValid) {
+        try {
+            $installedVersion = (claude --version 2>$null).Trim() -replace '\(Claude Code\)', '' -replace '\s+', ' ' | ForEach-Object { $_.Trim() }
+        } catch {}
+        try {
+            $latestVersion = (npm view @anthropic-ai/claude-code@latest version 2>$null).Trim()
+        } catch {}
+        try {
+            @{ timestamp = (Get-Date -Format o); installed = $installedVersion; latest = $latestVersion } |
+                ConvertTo-Json | Set-Content $versionCacheFile -Encoding UTF8
+        } catch {}
+    }
+
+    # Reference point for "is there an upgrade?" — prefer the running version,
+    # fall back to the installed one (e.g. version absent from event JSON).
+    $reference = if ($runningVersion) { $runningVersion } else { $installedVersion }
+    if ($reference) {
+        if ($installedVersion -and (Compare-Version $installedVersion $reference) -gt 0) {
+            $upgradeCandidate = $installedVersion
+        } elseif ($latestVersion -and (Compare-Version $latestVersion $reference) -gt 0) {
+            $upgradeCandidate = $latestVersion
+        }
+    } elseif ($installedVersion -and $latestVersion -and (Compare-Version $latestVersion $installedVersion) -gt 0) {
+        $upgradeCandidate = $latestVersion
+    }
+}
+
+# The version label used in lightweight styles. Falls back to the installed
+# version if the event JSON doesn't carry one (rare but possible).
+$displayVersion = if ($runningVersion) { $runningVersion } elseif ($installedVersion) { $installedVersion } else { "" }
+
 function Make-Bar([int]$pct, [int]$width = 10) {
     if ($null -eq $pct -or $pct -lt 0) { $pct = 0 }
     if ($pct -gt 100) { $pct = 100 }
@@ -279,6 +338,11 @@ if ($style -ne 'classic') {
             if ($cfg.duration -and $duration) { [void]$parts.Add($duration) }
             if ($cfg.prompts) { [void]$parts.Add("${prompts}p") }
             if ($cfg.mode)    { [void]$parts.Add($permDisplay.short) }
+            if ($cfg.version -and $displayVersion) {
+                $s = $displayVersion
+                if ($upgradeCandidate) { $s += "→${upgradeCandidate}" }
+                [void]$parts.Add($s)
+            }
             Write-Host ($parts -join ' ')
             break
         }
@@ -290,7 +354,11 @@ if ($style -ne 'classic') {
             if ($cfg.duration -and $duration) { [void]$parts.Add("⏱ ${C_VALUE}${duration}${C_RESET}") }
             if ($cfg.prompts) { [void]$parts.Add("💬 ${C_VALUE}${prompts}${C_RESET}") }
             if ($cfg.mode)    { [void]$parts.Add("🔐 $($permDisplay.color)$($permDisplay.label)${C_RESET}") }
-            if ($cfg.version -and $runningVersion) { [void]$parts.Add("🔖 ${C_VALUE}${runningVersion}${C_RESET}") }
+            if ($cfg.version -and $displayVersion) {
+                $s = "🔖 ${C_VALUE}${displayVersion}${C_RESET}"
+                if ($upgradeCandidate) { $s += " ${C_WHITE}⬆ ${upgradeCandidate}${C_RESET}" }
+                [void]$parts.Add($s)
+            }
             Write-Host ($parts -join '  ')
             break
         }
@@ -301,7 +369,11 @@ if ($style -ne 'classic') {
             if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("${ctxColor}${ctxPct}%${C_RESET}") }
             if ($cfg.duration -and $duration) { [void]$parts.Add("${C_VALUE}${duration}${C_RESET}") }
             if ($cfg.mode) { [void]$parts.Add("$($permDisplay.color)$($permDisplay.label)${C_RESET}") }
-            if ($cfg.version -and $runningVersion) { [void]$parts.Add("${C_VALUE}${runningVersion}${C_RESET}") }
+            if ($cfg.version -and $displayVersion) {
+                $s = "${C_VALUE}${displayVersion}${C_RESET}"
+                if ($upgradeCandidate) { $s += " ${C_WHITE}(↑${upgradeCandidate})${C_RESET}" }
+                [void]$parts.Add($s)
+            }
             Write-Host ($parts -join " ${C_SEP}▸${C_RESET} ")
             break
         }
@@ -313,7 +385,12 @@ if ($style -ne 'classic') {
             if ($cfg.duration -and $duration) { [void]$parts.Add("[Dur=${duration}]") }
             if ($cfg.prompts) { [void]$parts.Add("[Prompts=${prompts}]") }
             if ($cfg.mode)    { [void]$parts.Add("[Mode=$($permDisplay.label)]") }
-            if ($cfg.version -and $runningVersion) { [void]$parts.Add("[Ver=${runningVersion}]") }
+            if ($cfg.version -and $displayVersion) {
+                $s = "[Ver=${displayVersion}"
+                if ($upgradeCandidate) { $s += " new=${upgradeCandidate}" }
+                $s += "]"
+                [void]$parts.Add($s)
+            }
             Write-Host ($parts -join ' ')
             break
         }
@@ -325,7 +402,11 @@ if ($style -ne 'classic') {
             if ($cfg.duration -and $duration) { [void]$parts.Add("t:${duration}") }
             if ($cfg.prompts) { [void]$parts.Add("p:${prompts}") }
             if ($cfg.mode)    { [void]$parts.Add("m:$($permDisplay.short)") }
-            if ($cfg.version -and $runningVersion) { [void]$parts.Add("v:${runningVersion}") }
+            if ($cfg.version -and $displayVersion) {
+                $s = "v:${displayVersion}"
+                if ($upgradeCandidate) { $s += "→${upgradeCandidate}" }
+                [void]$parts.Add($s)
+            }
             Write-Host ($parts -join '|')
             break
         }
@@ -339,6 +420,11 @@ if ($style -ne 'classic') {
             }
             if ($cfg.duration -and $duration) { [void]$parts.Add("${C_VALUE}${duration}${C_RESET}") }
             if ($cfg.mode) { [void]$parts.Add("$($permDisplay.color)$($permDisplay.label)${C_RESET}") }
+            if ($cfg.version -and $displayVersion) {
+                $s = "${C_VALUE}v${displayVersion}${C_RESET}"
+                if ($upgradeCandidate) { $s += " ${C_WHITE}(↑${upgradeCandidate})${C_RESET}" }
+                [void]$parts.Add($s)
+            }
             Write-Host ($parts -join "${C_SEP} | ${C_RESET}")
             break
         }
@@ -354,7 +440,11 @@ if ($style -ne 'classic') {
             if ($cfg.duration -and $duration) { [void]$statp.Add("dur:${C_VALUE}${duration}${C_RESET}") }
             if ($cfg.prompts) { [void]$statp.Add("prompts:${C_VALUE}${prompts}${C_RESET}") }
             if ($cfg.mode)   { [void]$statp.Add("mode:$($permDisplay.color)$($permDisplay.label)${C_RESET}") }
-            if ($cfg.version -and $runningVersion) { [void]$statp.Add("v:${C_VALUE}${runningVersion}${C_RESET}") }
+            if ($cfg.version -and $displayVersion) {
+                $vs = "v:${C_VALUE}${displayVersion}${C_RESET}"
+                if ($upgradeCandidate) { $vs += " ${C_WHITE}(new v${upgradeCandidate} available)${C_RESET}" }
+                [void]$statp.Add($vs)
+            }
             if ($statp.Count -gt 0) { Write-Host ("${C_LABEL}Stats${C_RESET}  : " + ($statp -join ' · ')) }
 
             if ($cfg.editStats -and $totalFileCount -gt 0) {
@@ -406,65 +496,18 @@ if ($cfg.context -and $ctx) { $row2Parts.Add("${C_LABEL}Context: ${ctxColor}${ct
 if ($cfg.duration -and $duration) { $row2Parts.Add("${C_LABEL}Duration: ${C_VALUE}${duration}") }
 if ($cfg.mode) { $row2Parts.Add("${C_LABEL}Mode: $($permDisplay.color)$($permDisplay.label)") }
 
-# Version info
+# Version info — uses data already resolved above the style dispatcher.
 if ($cfg.version) {
-    $versionCacheFile = Join-Path $env:TEMP "claude-version-cache.json"
-    $runningVersion = if ($jsonData.version) { $jsonData.version } else { "" }
-    $installedVersion = ""
-    $latestVersion = ""
-
-    $cacheValid = $false
-    if (Test-Path $versionCacheFile) {
-        try {
-            $cache = Get-Content $versionCacheFile -Raw | ConvertFrom-Json
-            $cacheAge = (Get-Date) - [datetime]$cache.timestamp
-            if ($cacheAge.TotalMinutes -lt 10) {
-                $installedVersion = $cache.installed
-                $latestVersion    = $cache.latest
-                $cacheValid = $true
-            }
-        } catch {}
-    }
-
-    if (-not $cacheValid) {
-        try {
-            $installedVersion = (claude --version 2>$null).Trim() -replace '\(Claude Code\)', '' -replace '\s+', ' ' | ForEach-Object { $_.Trim() }
-        } catch {}
-        try {
-            $latestVersion = (npm view @anthropic-ai/claude-code@latest version 2>$null).Trim()
-        } catch {}
-        try {
-            @{ timestamp = (Get-Date -Format o); installed = $installedVersion; latest = $latestVersion } |
-                ConvertTo-Json | Set-Content $versionCacheFile -Encoding UTF8
-        } catch {}
-    }
-
-    # Compare two semver-ish strings; returns -1, 0, 1. Non-parseable -> 0 (treat as equal).
-    function Compare-Version($a, $b) {
-        if (-not $a -or -not $b) { return 0 }
-        try {
-            $va = [version](($a -split '[-+]')[0])
-            $vb = [version](($b -split '[-+]')[0])
-            return $va.CompareTo($vb)
-        } catch { return 0 }
-    }
-
     if ($runningVersion) {
         $verStr = "${C_LABEL}Running: ${C_VALUE}${runningVersion}"
-        $candidate = ""
-        if ($installedVersion -and (Compare-Version $installedVersion $runningVersion) -gt 0) {
-            $candidate = $installedVersion
-        } elseif ($latestVersion -and (Compare-Version $latestVersion $runningVersion) -gt 0) {
-            $candidate = $latestVersion
-        }
-        if ($candidate) {
-            $verStr += " ${C_WHITE}(new version v${candidate} available)"
+        if ($upgradeCandidate) {
+            $verStr += " ${C_WHITE}(new version v${upgradeCandidate} available)"
         }
         $row2Parts.Add($verStr)
     } elseif ($installedVersion) {
         $verStr = "${C_LABEL}Installed: ${C_VALUE}${installedVersion}"
-        if ($latestVersion -and (Compare-Version $latestVersion $installedVersion) -gt 0) {
-            $verStr += " ${C_WHITE}(new version v${latestVersion} available)"
+        if ($upgradeCandidate) {
+            $verStr += " ${C_WHITE}(new version v${upgradeCandidate} available)"
         }
         $row2Parts.Add($verStr)
     }

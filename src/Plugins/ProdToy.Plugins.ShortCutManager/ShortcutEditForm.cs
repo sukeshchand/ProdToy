@@ -325,6 +325,7 @@ class ShortcutEditForm : Form
         _editProfileBtn = editProfileBtn;
 
         var delProfileBtn = MakeProfileActionBtn(theme, "🗑", inputX + 328 + 72, y);
+        delProfileBtn.Font = new Font("Segoe UI Emoji", 11f, FontStyle.Regular);
         delProfileBtn.ForeColor = theme.ErrorColor;
         delProfileBtn.Click += (_, _) => DeleteSelectedProfile();
         Controls.Add(delProfileBtn);
