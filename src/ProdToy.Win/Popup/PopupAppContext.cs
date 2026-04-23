@@ -86,12 +86,17 @@ class PopupAppContext : ApplicationContext
         // Exit when popup requests it (e.g. after update)
         _popupForm.ExitRequested += () => ExitApp();
 
-        // Start update checker
-        UpdateChecker.UpdateAvailable += metadata =>
+        // Start update checker. Skipped in dev mode — running from the build
+        // output already has the latest code; downloading and applying a
+        // published update would blow away the dev install.
+        if (!DevMode.IsEnabled)
         {
-            _popupForm.ShowUpdateAvailable(metadata);
-        };
-        UpdateChecker.Start();
+            UpdateChecker.UpdateAvailable += metadata =>
+            {
+                _popupForm.ShowUpdateAvailable(metadata);
+            };
+            UpdateChecker.Start();
+        }
 
         // Start all loaded plugins
         PluginManager.StartAll();

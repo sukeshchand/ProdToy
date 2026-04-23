@@ -39,19 +39,28 @@ static class PluginManager
         _host = host;
         _installedIds = LoadInstalledIds();
 
-        string pluginsBinDir = AppPaths.PluginsBinDir;
-        if (!Directory.Exists(pluginsBinDir))
+        // In --dev mode, scan each plugin project's build output directly; in
+        // installed mode, scan the single installed plugins-bin folder.
+        List<string> scanDirs;
+        if (DevMode.IsEnabled)
         {
-            Directory.CreateDirectory(pluginsBinDir);
-            Log.Info($"PluginManager.Initialize: created empty plugins bin dir at {pluginsBinDir}");
-            return;
+            scanDirs = DevMode.GetPluginDiscoveryDirs();
+            Log.Info($"PluginManager.Initialize (dev): {scanDirs.Count} build-output dir(s)");
+        }
+        else
+        {
+            string pluginsBinDir = AppPaths.PluginsBinDir;
+            if (!Directory.Exists(pluginsBinDir))
+            {
+                Directory.CreateDirectory(pluginsBinDir);
+                Log.Info($"PluginManager.Initialize: created empty plugins bin dir at {pluginsBinDir}");
+                return;
+            }
+            Log.Info($"PluginManager.Initialize: scanning {pluginsBinDir}");
+            scanDirs = Directory.GetDirectories(pluginsBinDir).ToList();
         }
 
-        Log.Info($"PluginManager.Initialize: scanning {pluginsBinDir}");
-
-        // Each subdirectory under plugins/bin/ is a plugin. Plugins are always
-        // active once they exist on disk — enable/disable has been removed.
-        foreach (var dir in Directory.GetDirectories(pluginsBinDir))
+        foreach (var dir in scanDirs)
         {
             var info = DiscoverPlugin(dir);
             if (info == null) continue;

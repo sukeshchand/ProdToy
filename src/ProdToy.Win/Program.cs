@@ -20,10 +20,18 @@ static class Program
         Application.ThreadException += (_, e) =>
             Log.Error("Unhandled UI thread exception", e.Exception);
 
+        // --dev: bypass install/registry gates and load plugins from build outputs.
+        // Check this before any other arg handling so every code path honors it.
+        if (args.Any(a => string.Equals(a, "--dev", StringComparison.OrdinalIgnoreCase)))
+        {
+            DevMode.Enable();
+            args = args.Where(a => !string.Equals(a, "--dev", StringComparison.OrdinalIgnoreCase)).ToArray();
+        }
+
         // No arguments → run if installed, otherwise point user at the installer.
         if (args.Length == 0)
         {
-            if (AppRegistry.IsRegistered() && IsRunningFromInstallDir())
+            if (DevMode.IsEnabled || (AppRegistry.IsRegistered() && IsRunningFromInstallDir()))
             {
                 RunInstalledInstance();
             }
@@ -65,7 +73,7 @@ static class Program
         if (string.IsNullOrEmpty(envelopeCommand))
         {
             // No recognized args — treat like a no-arg launch.
-            if (AppRegistry.IsRegistered() && IsRunningFromInstallDir())
+            if (DevMode.IsEnabled || (AppRegistry.IsRegistered() && IsRunningFromInstallDir()))
                 RunInstalledInstance();
             else
                 ShowInstallerRequiredMessage();
@@ -115,12 +123,14 @@ static class Program
             return;
         }
 
-        Log.Info($"ProdToy v{AppVersion.Current} starting");
+        Log.Info($"ProdToy v{AppVersion.Current} starting{(DevMode.IsEnabled ? " (dev mode)" : "")}");
 
         // Keep the Apps & Features DisplayVersion in sync with the running exe.
         // After an auto-update swap, this refreshes the value so "Installed updates"
-        // in Windows Settings matches AppVersion.Current.
-        AppRegistry.SyncDisplayVersion();
+        // in Windows Settings matches AppVersion.Current. Skip in dev mode so
+        // running from the build output doesn't overwrite the installed version.
+        if (!DevMode.IsEnabled)
+            AppRegistry.SyncDisplayVersion();
 
         // Check if we just came back from an auto-update (start hidden, no welcome dialog).
         string updateMarker = Path.Combine(AppPaths.Root, "_updated.marker");
@@ -240,6 +250,9 @@ static class Program
 
     private static bool IsRunningFromInstallDir()
     {
+        // In --dev mode, always treat the current location as valid so F5 from
+        // Visual Studio doesn't dead-end at the "run ProdToySetup.exe" dialog.
+        if (DevMode.IsEnabled) return true;
         try
         {
             var exeDir = Path.GetDirectoryName(Application.ExecutablePath) ?? "";

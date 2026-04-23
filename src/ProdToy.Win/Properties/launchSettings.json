@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "ProdToy (dev)": {
+      "commandName": "Project",
+      "commandLineArgs": "--dev"
+    },
+    "ProdToy (dev, popup test)": {
+      "commandName": "Project",
+      "commandLineArgs": "--dev --command generic.notify --payload \"{\\\"title\\\":\\\"Debug test\\\",\\\"message\\\":\\\"Hello from dev mode\\\",\\\"type\\\":\\\"info\\\"}\""
+    }
+  }
+}
