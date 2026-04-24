@@ -226,4 +226,83 @@ Where <current_folder_name> is the name of the current working directory (just t
 
     private static bool IsProdToyHookCommand(string? command) =>
         command != null && (command.Contains("Show-ProdToy") || command.Contains("Show-DevToy"));
+
+    /// <summary>
+    /// Extracts the <c>-File "..."</c> argument out of a PowerShell hook command,
+    /// or returns null if the argument can't be parsed. Used by the Doctor to
+    /// detect hook entries whose script path no longer matches the current
+    /// plugin data directory (e.g. after the user moves the data folder via
+    /// Settings → Data Sync on one machine while another machine's absolute
+    /// path is still sitting in a synced settings.json).
+    /// </summary>
+    public static string? ExtractScriptPath(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return null;
+        var m = System.Text.RegularExpressions.Regex.Match(
+            command, @"-File\s+""([^""]+)""", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (m.Success) return m.Groups[1].Value;
+        m = System.Text.RegularExpressions.Regex.Match(
+            command, @"-File\s+'([^']+)'", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (m.Success) return m.Groups[1].Value;
+        m = System.Text.RegularExpressions.Regex.Match(
+            command, @"-File\s+(\S+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    /// <summary>
+    /// Rewrite every ProdToy hook entry across <paramref name="installs"/> so
+    /// its <c>command</c> field points at the current
+    /// <see cref="ClaudePaths.ShowProdToyScript"/>. Use this to repair stale
+    /// paths without re-registering hooks from scratch — it leaves matchers
+    /// and any other fields on the hook rule intact.
+    /// </summary>
+    /// <returns>The number of <c>command</c> values that were updated.</returns>
+    public static int FixStaleHookPaths(IEnumerable<ClaudeInstall> installs)
+    {
+        int totalRewritten = 0;
+        string expected = $"powershell.exe -ExecutionPolicy Bypass -File \"{ClaudePaths.ShowProdToyScript}\"";
+
+        foreach (var install in installs)
+        {
+            try
+            {
+                string settingsPath = install.SettingsFile;
+                if (!File.Exists(settingsPath)) continue;
+
+                var root = JsonNode.Parse(File.ReadAllText(settingsPath));
+                if (root?["hooks"] is not JsonObject hooksNode) continue;
+
+                int rewrittenInFile = 0;
+                foreach (var kv in hooksNode)
+                {
+                    if (kv.Value is not JsonArray eventArray) continue;
+                    foreach (var ruleSet in eventArray)
+                    {
+                        if (ruleSet?["hooks"] is not JsonArray ha) continue;
+                        for (int j = 0; j < ha.Count; j++)
+                        {
+                            string? cmd = ha[j]?["command"]?.GetValue<string>();
+                            if (cmd == null || !IsProdToyHookCommand(cmd)) continue;
+                            if (cmd == expected) continue;
+                            ha[j]!["command"] = expected;
+                            rewrittenInFile++;
+                        }
+                    }
+                }
+
+                if (rewrittenInFile > 0)
+                {
+                    var options = new JsonSerializerOptions { WriteIndented = true };
+                    File.WriteAllText(settingsPath, root!.ToJsonString(options), Encoding.UTF8);
+                    totalRewritten += rewrittenInFile;
+                }
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Error($"FixStaleHookPaths({install.SettingsFile}) failed", ex);
+            }
+        }
+
+        return totalRewritten;
+    }
 }

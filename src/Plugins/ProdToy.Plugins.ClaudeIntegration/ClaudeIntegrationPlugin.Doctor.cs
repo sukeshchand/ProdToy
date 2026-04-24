@@ -215,10 +215,12 @@ public partial class ClaudeIntegrationPlugin
 
                     if (File.Exists(install.SettingsFile))
                     {
+                        bool jsonValid = false;
                         try
                         {
                             var txt = File.ReadAllText(install.SettingsFile);
                             if (!string.IsNullOrWhiteSpace(txt)) JsonDocument.Parse(txt);
+                            jsonValid = true;
                             checks.Add(new DoctorCheck
                             {
                                 Source = DoctorSource,
@@ -237,6 +239,23 @@ public partial class ClaudeIntegrationPlugin
                                 Severity = DoctorSeverity.Error,
                                 Details = $"{install.SettingsFile}\n{ex.Message}\n(Not auto-fixed — open the file manually or reinstall Claude CLI.)",
                             });
+                        }
+
+                        // Hook-path integrity: the registered hook command's -File path
+                        // must match the current plugin data dir and point at an
+                        // existing file. Stale paths happen after the user moves
+                        // the data folder on one machine — the *other* machine's
+                        // Claude settings.json still points at the old absolute path
+                        // until it's repaired here.
+                        //
+                        // Only gated on NotificationsEnabled: if the user disabled
+                        // notifications entirely, a stale hook isn't causing any
+                        // user-visible breakage so we skip the noise.
+                        if (jsonValid)
+                        {
+                            var notifEnabled = _context.LoadSettings<ClaudePluginSettings>().NotificationsEnabled;
+                            if (notifEnabled)
+                                checks.Add(InspectHookPaths(install));
                         }
                     }
                 }
@@ -481,6 +500,136 @@ public partial class ClaudeIntegrationPlugin
             File.Move(filePath, dest, overwrite: true);
         }
         catch { /* best-effort — archiving failures are non-fatal */ }
+    }
+
+    /// <summary>
+    /// Inspect every ProdToy hook entry inside an install's settings.json and
+    /// report whether each points at the expected Show-ProdToy.ps1 path (and
+    /// whether that file actually exists on disk). Catches the scenario that
+    /// prompted this check: stop-hook fires with <c>-File "..."</c> referencing
+    /// a plugin data dir that no longer exists after a data-folder move.
+    /// Fix repairs all stale commands in-place across every registered install.
+    /// </summary>
+    private DoctorCheck InspectHookPaths(ClaudeInstall install)
+    {
+        string settingsPath = install.SettingsFile;
+        string expectedScript = ClaudePaths.ShowProdToyScript;
+
+        try
+        {
+            var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(settingsPath));
+            if (root?["hooks"] is not System.Text.Json.Nodes.JsonObject hooksNode)
+            {
+                return new DoctorCheck
+                {
+                    Source = DoctorSource,
+                    Title = "No ProdToy hooks registered in this Claude install",
+                    Passed = false,
+                    Severity = DoctorSeverity.Warning,
+                    Details = $"{settingsPath}\nClick Fix to register hook entries.",
+                    Fix = () => Install(_context),
+                    RequiresRestart = true,
+                };
+            }
+
+            var issues = new List<string>();
+            int prodToyHookCount = 0;
+
+            foreach (var kv in hooksNode)
+            {
+                if (kv.Value is not System.Text.Json.Nodes.JsonArray eventArray) continue;
+                foreach (var ruleSet in eventArray)
+                {
+                    if (ruleSet?["hooks"] is not System.Text.Json.Nodes.JsonArray ha) continue;
+                    foreach (var h in ha)
+                    {
+                        string? cmd = h?["command"]?.GetValue<string>();
+                        if (cmd == null) continue;
+                        if (!(cmd.Contains("Show-ProdToy") || cmd.Contains("Show-DevToy"))) continue;
+                        prodToyHookCount++;
+
+                        var scriptPath = ClaudeHookManager.ExtractScriptPath(cmd);
+                        if (scriptPath == null)
+                        {
+                            issues.Add($"[{kv.Key}] Unparseable hook command: {cmd}");
+                            continue;
+                        }
+
+                        bool pathMatches = string.Equals(
+                            Path.GetFullPath(scriptPath),
+                            Path.GetFullPath(expectedScript),
+                            StringComparison.OrdinalIgnoreCase);
+                        bool fileExists = File.Exists(scriptPath);
+
+                        if (!pathMatches && !fileExists)
+                            issues.Add($"[{kv.Key}] Stale path (file missing): {scriptPath}");
+                        else if (!pathMatches)
+                            issues.Add($"[{kv.Key}] Wrong path (expected current plugin dir): {scriptPath}");
+                        else if (!fileExists)
+                            issues.Add($"[{kv.Key}] Correct path but file is missing on disk: {scriptPath}");
+                    }
+                }
+            }
+
+            if (prodToyHookCount == 0)
+            {
+                return new DoctorCheck
+                {
+                    Source = DoctorSource,
+                    Title = "No ProdToy hooks registered in this Claude install",
+                    Passed = false,
+                    Severity = DoctorSeverity.Warning,
+                    Details = $"{settingsPath}\nClick Fix to register hook entries.",
+                    Fix = () => Install(_context),
+                    RequiresRestart = true,
+                };
+            }
+
+            if (issues.Count == 0)
+            {
+                return new DoctorCheck
+                {
+                    Source = DoctorSource,
+                    Title = $"Hook paths valid ({prodToyHookCount} entry(s))",
+                    Passed = true,
+                    Details = settingsPath,
+                };
+            }
+
+            return new DoctorCheck
+            {
+                Source = DoctorSource,
+                Title = $"Hook paths out of date ({issues.Count} of {prodToyHookCount})",
+                Passed = false,
+                Severity = DoctorSeverity.Error,
+                Details = $"{settingsPath}\nExpected: {expectedScript}\n\n" + string.Join("\n", issues) +
+                          "\n\nFix rewrites the -File path in every ProdToy hook entry across all installs.",
+                Fix = () =>
+                {
+                    // Ensure the target script actually exists before pointing
+                    // hooks at it — Install() extracts Show-ProdToy.ps1 as part
+                    // of its flow, so re-running it is the safe belt-and-suspenders
+                    // path. Then surgically rewrite any lingering stale paths
+                    // (which Install doesn't touch because it short-circuits on
+                    // "command already starts with Show-ProdToy").
+                    try { Install(_context); } catch { }
+                    var scanned = ClaudeInstallDiscovery.Scan();
+                    ClaudeHookManager.FixStaleHookPaths(scanned);
+                },
+                RequiresRestart = false,
+            };
+        }
+        catch (Exception ex)
+        {
+            return new DoctorCheck
+            {
+                Source = DoctorSource,
+                Title = "Could not inspect hook paths",
+                Passed = false,
+                Severity = DoctorSeverity.Warning,
+                Details = $"{settingsPath}\n{ex.Message}",
+            };
+        }
     }
 
     private static DoctorCheck JsonCheck(string path, string title, bool requiresRestart, Action? fixOverride = null)
