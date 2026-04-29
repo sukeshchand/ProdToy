@@ -62,7 +62,7 @@ class PopupAppContext : ApplicationContext
         _trayIcon.DoubleClick += (_, _) => _dashboardForm.BringToForeground();
 
         // Initialize plugin system
-        _pluginHost = new PluginHostImpl(_trayIcon, _popupForm);
+        _pluginHost = new PluginHostImpl(_trayIcon, _popupForm, _dashboardForm);
         PluginManager.Initialize(_pluginHost);
 
         // Rebuild tray menu and dashboard when plugins change

@@ -24,6 +24,7 @@ class ScreenshotCanvas : Control
 
     // Text editing
     private TextObject? _editingText;
+    private System.Windows.Forms.Timer? _caretBlinkTimer;
 
     // Region selection (for convert to layer)
     private bool _isSelectingRegion;
@@ -75,6 +76,11 @@ class ScreenshotCanvas : Control
 
     /// <summary>Fires when canvas needs to be resized (e.g. to fit a dropped image).</summary>
     public event Action<Size>? CanvasResizeRequested;
+
+    /// <summary>Fires when the user requests to paste a layer from the
+    /// internal layer clipboard at the given logical canvas point. The form
+    /// owns the actual paste so it can manage selection + canvas refresh.</summary>
+    public event Action<PointF>? PasteLayerRequested;
 
     public ScreenshotCanvas()
     {
@@ -522,6 +528,27 @@ class ScreenshotCanvas : Control
         // Right-click context menu — Location stays in display pixels for popup positioning.
         if (e.Button == MouseButtons.Right)
         {
+            // Hit-test the click point first: if an annotation is under the
+            // cursor, select it so the menu offers the per-layer actions
+            // (Edit Text / Copy / Delete / Bring Forward / …). Without this
+            // the menu would show the empty-canvas branch even when the
+            // user clearly clicked on a layer.
+            var hitPt = new PointF(e.X / _zoom, e.Y / _zoom);
+            float hitTol = 6f / _zoom;
+            for (int i = _session.Annotations.Count - 1; i >= 0; i--)
+            {
+                if (_session.Annotations[i].HitTest(hitPt, hitTol))
+                {
+                    if (_session.SelectedObject != null && _session.SelectedObject != _session.Annotations[i])
+                        _session.SelectedObject.IsSelected = false;
+                    _session.SelectedObject = _session.Annotations[i];
+                    _session.SelectedObject.IsSelected = true;
+                    // Selecting an annotation means we're not in region mode.
+                    _selectedRegion = null;
+                    Invalidate();
+                    break;
+                }
+            }
             ShowCanvasContextMenu(e.Location);
             return;
         }
@@ -584,16 +611,18 @@ class ScreenshotCanvas : Control
         var pt = new PointF(e.X / _zoom, e.Y / _zoom);
         float tol = 6f / _zoom;
 
-        // Double-click on a TextObject in Select mode → re-enter text editing
-        if (_session.CurrentTool == AnnotationTool.Select)
+        // Double-click on a TextObject (in Select or Text tool) → open the
+        // text editor dialog. In Text tool this is the canonical "edit"
+        // gesture since single-click is reserved for select+drag.
+        if (_session.CurrentTool == AnnotationTool.Select ||
+            _session.CurrentTool == AnnotationTool.Text)
         {
             for (int i = _session.Annotations.Count - 1; i >= 0; i--)
             {
                 if (_session.Annotations[i] is TextObject txt && txt.HitTest(pt, tol))
                 {
                     _isMoving = false;
-                    StartTextEdit(txt);
-                    Invalidate();
+                    OpenTextEditor(txt, pt);
                     return;
                 }
             }
@@ -856,8 +885,13 @@ class ScreenshotCanvas : Control
     {
         if (_editingText != null && !char.IsControl(e.KeyChar))
         {
-            var old = _editingText.Text;
-            _editingText.Text += e.KeyChar;
+            var t = _editingText;
+            int idx = Math.Clamp(t.CaretIndex, 0, t.Text.Length);
+            t.Text = t.Text.Insert(idx, e.KeyChar.ToString());
+            t.CaretIndex = idx + 1;
+            t.CaretVisible = true;
+            _caretBlinkTimer?.Stop();
+            _caretBlinkTimer?.Start();
             e.Handled = true;
             Invalidate();
             return;
@@ -871,8 +905,35 @@ class ScreenshotCanvas : Control
     {
         var menu = new ContextMenuStrip();
 
+        // Convert click position from display pixels to logical canvas
+        // coordinates so a Paste here lands where the user clicked.
+        var logicalPt = new PointF(location.X / _zoom, location.Y / _zoom);
+
         if (_session?.SelectedObject != null)
         {
+            // Text-only: explicit "Edit Text…" entry so users can re-open the
+            // dialog without remembering the double-click gesture.
+            if (_session.SelectedObject is TextObject selectedTxt)
+            {
+                var editItem = new ToolStripMenuItem("Edit Text…");
+                editItem.Click += (_, _) => OpenTextEditor(selectedTxt, selectedTxt.Position);
+                menu.Items.Add(editItem);
+                menu.Items.Add(new ToolStripSeparator());
+            }
+
+            var copyItem = new ToolStripMenuItem("Copy") { ShortcutKeyDisplayString = "Ctrl+C" };
+            copyItem.Click += (_, _) => LayerClipboard.Set(_session.SelectedObject!);
+            menu.Items.Add(copyItem);
+
+            if (LayerClipboard.HasContent)
+            {
+                var pasteItem = new ToolStripMenuItem("Paste") { ShortcutKeyDisplayString = "Ctrl+V" };
+                pasteItem.Click += (_, _) => PasteLayerRequested?.Invoke(logicalPt);
+                menu.Items.Add(pasteItem);
+            }
+
+            menu.Items.Add(new ToolStripSeparator());
+
             var bringFwd = new ToolStripMenuItem("Bring Forward");
             bringFwd.Click += (_, _) => { _session.BringForward(); Invalidate(); };
             menu.Items.Add(bringFwd);
@@ -911,8 +972,17 @@ class ScreenshotCanvas : Control
         }
         else
         {
-            var hint = new ToolStripMenuItem("Drag to select a region first") { Enabled = false };
-            menu.Items.Add(hint);
+            if (LayerClipboard.HasContent)
+            {
+                var pasteItem = new ToolStripMenuItem("Paste") { ShortcutKeyDisplayString = "Ctrl+V" };
+                pasteItem.Click += (_, _) => PasteLayerRequested?.Invoke(logicalPt);
+                menu.Items.Add(pasteItem);
+            }
+            else
+            {
+                var hint = new ToolStripMenuItem("Drag to select a region first") { Enabled = false };
+                menu.Items.Add(hint);
+            }
         }
 
         menu.Show(this, location);
@@ -938,7 +1008,15 @@ class ScreenshotCanvas : Control
         y = Math.Max(0, y);
         w = Math.Min(w, _session.CanvasSize.Width - x);
         h = Math.Min(h, _session.CanvasSize.Height - y);
-        if (w <= 0 || h <= 0) return;
+        if (w <= 0 || h <= 0)
+        {
+            // Region is entirely off the canvas (e.g. canvas was cropped
+            // smaller while a selection was active). Nothing to erase, but
+            // clear the orphan selection so the user gets visible feedback.
+            _selectedRegion = null;
+            Invalidate();
+            return;
+        }
 
         // Snapshot for undo
         var beforeSnapshot = (Bitmap)_session.OriginalImage.Clone();
@@ -1353,7 +1431,14 @@ class ScreenshotCanvas : Control
         y = Math.Max(0, y);
         w = Math.Min(w, _session.CanvasSize.Width - x);
         h = Math.Min(h, _session.CanvasSize.Height - y);
-        if (w <= 0 || h <= 0) return;
+        if (w <= 0 || h <= 0)
+        {
+            // Region is entirely off the canvas — clear the orphan selection
+            // so the click visibly does something instead of looking dead.
+            _selectedRegion = null;
+            Invalidate();
+            return;
+        }
 
         // Render the region content: bg + base image in that area
         var regionBmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
@@ -1412,6 +1497,14 @@ class ScreenshotCanvas : Control
         };
 
         _session.AddAnnotation(imageObj);
+
+        // Auto-select the new layer so the very next right-click offers
+        // Delete / Bring Forward / etc. on it without an extra left-click.
+        if (_session.SelectedObject != null && _session.SelectedObject != imageObj)
+            _session.SelectedObject.IsSelected = false;
+        _session.SelectedObject = imageObj;
+        imageObj.IsSelected = true;
+
         _selectedRegion = null;
         Invalidate();
         CanvasChanged?.Invoke();
@@ -1676,25 +1769,157 @@ class ScreenshotCanvas : Control
         if (_session == null) return;
 
         float tol = 6f / _zoom;
-        // Check if clicking an existing text object
+
+        // Hit existing text → select it (and let the user drag to move).
+        // The dialog only opens on double-click or via the context menu, so
+        // a single click never clobbers a position the user is adjusting.
         for (int i = _session.Annotations.Count - 1; i >= 0; i--)
         {
             if (_session.Annotations[i] is TextObject existing && existing.HitTest(pt, tol))
             {
-                StartTextEdit(existing);
+                HandleSelectMouseDown(pt);
                 return;
             }
         }
 
-        // Create new text object
-        var txt = new TextObject
+        // Empty hit → open the popup in "create" mode; we only commit a new
+        // TextObject if the user clicks OK with non-empty text.
+        OpenTextEditor(null, pt);
+    }
+
+    /// <summary>Show the modal text editor dialog. Live-previews changes onto
+    /// the actual canvas TextObject so the user sees exactly what they'll
+    /// commit; on Cancel the original snapshot is restored. New text uses a
+    /// temporarily-added TextObject (not undoable) during editing — OK
+    /// re-adds it via the undoable path; Cancel removes it.</summary>
+    private void OpenTextEditor(TextObject? existing, PointF pt)
+    {
+        if (_session == null) return;
+
+        // Build seed values for the dialog from either the existing object
+        // or the session's current-tool defaults.
+        var initial = existing != null
+            ? Snapshot(existing)
+            : new TextEditorResult
+            {
+                Text = "",
+                FontFamily = "Segoe UI",
+                FontSize = _session.CurrentFontSize,
+                Bold = false,
+                Italic = false,
+                Underline = false,
+                Color = _session.CurrentColor,
+            };
+
+        // The "live" object that will be mutated by every PreviewChanged
+        // event. For existing edits this is the user's object; for new
+        // text we create a placeholder and inject it directly into the
+        // annotations list (bypassing UndoRedo) so the canvas renders it
+        // during the edit.
+        TextObject live;
+        TextEditorResult original; // restore target on Cancel
+        bool isNew = existing == null;
+
+        if (existing != null)
         {
-            Position = pt,
-            StrokeColor = _session.CurrentColor,
-            FontSize = _session.CurrentFontSize,
+            live = existing;
+            original = Snapshot(existing);
+        }
+        else
+        {
+            live = new TextObject
+            {
+                Position = pt,
+                Text = initial.Text,
+                FontFamily = initial.FontFamily,
+                FontSize = initial.FontSize,
+                Bold = initial.Bold,
+                Italic = initial.Italic,
+                Underline = initial.Underline,
+                StrokeColor = initial.Color,
+                ZIndex = _session.Annotations.Count,
+            };
+            _session.Annotations.Add(live);
+            original = initial; // for new text, "original" = nothing visible
+        }
+
+        var dlg = new TextEditorDialog(ScreenshotPlugin.GetTheme(), initial);
+        dlg.PreviewChanged += r =>
+        {
+            ApplyToTextObject(live, r);
+            Invalidate();
         };
-        _session.AddAnnotation(txt);
-        StartTextEdit(txt);
+
+        DialogResult result;
+        try
+        {
+            var owner = FindForm();
+            result = owner != null ? dlg.ShowDialog(owner) : dlg.ShowDialog();
+        }
+        finally
+        {
+            dlg.Dispose();
+        }
+
+        if (result == DialogResult.OK)
+        {
+            var r = dlg.Result;
+            if (string.IsNullOrEmpty(r.Text))
+            {
+                // Empty text on OK → drop the object either way.
+                _session.Annotations.Remove(live);
+                if (_session.SelectedObject == live) _session.SelectedObject = null;
+            }
+            else if (isNew)
+            {
+                // Convert temp insertion into an undoable add: pull the
+                // object out of the list, then re-add via AddAnnotation
+                // so the action shows up in the undo stack.
+                _session.Annotations.Remove(live);
+                _session.AddAnnotation(live);
+            }
+            // Persist current-tool defaults so the next text inherits font/color.
+            _session.CurrentColor = r.Color;
+            _session.CurrentFontSize = r.FontSize;
+        }
+        else
+        {
+            // Cancel — for new text just drop the temp object; for existing
+            // text restore every field from the pre-edit snapshot.
+            if (isNew)
+            {
+                _session.Annotations.Remove(live);
+            }
+            else
+            {
+                ApplyToTextObject(live, original);
+            }
+        }
+
+        Invalidate();
+        CanvasChanged?.Invoke();
+    }
+
+    private static TextEditorResult Snapshot(TextObject t) => new()
+    {
+        Text = t.Text,
+        FontFamily = t.FontFamily,
+        FontSize = t.FontSize,
+        Bold = t.Bold,
+        Italic = t.Italic,
+        Underline = t.Underline,
+        Color = t.StrokeColor,
+    };
+
+    private static void ApplyToTextObject(TextObject t, TextEditorResult r)
+    {
+        t.Text = r.Text;
+        t.FontFamily = r.FontFamily;
+        t.FontSize = r.FontSize;
+        t.Bold = r.Bold;
+        t.Italic = r.Italic;
+        t.Underline = r.Underline;
+        t.StrokeColor = r.Color;
     }
 
     private void StartTextEdit(TextObject txt)
@@ -1702,15 +1927,41 @@ class ScreenshotCanvas : Control
         if (_editingText != null) CommitTextEdit();
         _editingText = txt;
         _editingText.IsEditing = true;
+        _editingText.CaretIndex = txt.Text.Length;
+        _editingText.CaretVisible = true;
         _session!.SelectedObject = txt;
         txt.IsSelected = true;
         Cursor = Cursors.IBeam;
+        StartCaretBlink();
         Invalidate();
+    }
+
+    private void StartCaretBlink()
+    {
+        if (_caretBlinkTimer == null)
+        {
+            _caretBlinkTimer = new System.Windows.Forms.Timer { Interval = 530 };
+            _caretBlinkTimer.Tick += (_, _) =>
+            {
+                if (_editingText == null) return;
+                _editingText.CaretVisible = !_editingText.CaretVisible;
+                Invalidate();
+            };
+        }
+        _caretBlinkTimer.Start();
+    }
+
+    private void StopCaretBlink()
+    {
+        _caretBlinkTimer?.Stop();
+        if (_editingText != null) _editingText.CaretVisible = true;
     }
 
     public void CommitTextEdit()
     {
         if (_editingText == null) return;
+
+        StopCaretBlink();
 
         // Remove empty text objects
         if (string.IsNullOrWhiteSpace(_editingText.Text))
@@ -1734,15 +1985,51 @@ class ScreenshotCanvas : Control
     {
         if (_editingText == null) return;
 
+        var t = _editingText;
+        int idx = Math.Clamp(t.CaretIndex, 0, t.Text.Length);
+
         switch (e.KeyCode)
         {
             case Keys.Back:
-                if (_editingText.Text.Length > 0)
-                    _editingText.Text = _editingText.Text[..^1];
+                if (idx > 0)
+                {
+                    t.Text = t.Text.Remove(idx - 1, 1);
+                    t.CaretIndex = idx - 1;
+                }
+                e.Handled = true;
+                break;
+            case Keys.Delete:
+                if (idx < t.Text.Length)
+                    t.Text = t.Text.Remove(idx, 1);
                 e.Handled = true;
                 break;
             case Keys.Enter:
-                _editingText.Text += "\n";
+                t.Text = t.Text.Insert(idx, "\n");
+                t.CaretIndex = idx + 1;
+                e.Handled = true;
+                break;
+            case Keys.Left:
+                t.CaretIndex = Math.Max(0, idx - 1);
+                e.Handled = true;
+                break;
+            case Keys.Right:
+                t.CaretIndex = Math.Min(t.Text.Length, idx + 1);
+                e.Handled = true;
+                break;
+            case Keys.Home:
+                t.CaretIndex = LineStart(t.Text, idx);
+                e.Handled = true;
+                break;
+            case Keys.End:
+                t.CaretIndex = LineEnd(t.Text, idx);
+                e.Handled = true;
+                break;
+            case Keys.Up:
+                t.CaretIndex = MoveCaretVertical(t.Text, idx, up: true);
+                e.Handled = true;
+                break;
+            case Keys.Down:
+                t.CaretIndex = MoveCaretVertical(t.Text, idx, up: false);
                 e.Handled = true;
                 break;
             case Keys.Escape:
@@ -1750,7 +2037,52 @@ class ScreenshotCanvas : Control
                 e.Handled = true;
                 break;
         }
+        // Reset blink phase so the caret is visible immediately after a key
+        // press — matches the feel of every native text editor.
+        if (e.Handled && _editingText != null)
+        {
+            _editingText.CaretVisible = true;
+            _caretBlinkTimer?.Stop();
+            _caretBlinkTimer?.Start();
+        }
         Invalidate();
+    }
+
+    private static int LineStart(string text, int idx)
+    {
+        int i = Math.Min(idx, text.Length) - 1;
+        while (i >= 0 && text[i] != '\n') i--;
+        return i + 1;
+    }
+
+    private static int LineEnd(string text, int idx)
+    {
+        int i = Math.Min(idx, text.Length);
+        while (i < text.Length && text[i] != '\n') i++;
+        return i;
+    }
+
+    private static int MoveCaretVertical(string text, int idx, bool up)
+    {
+        int lineStart = LineStart(text, idx);
+        int col = idx - lineStart;
+        if (up)
+        {
+            if (lineStart == 0) return idx; // already on first line
+            int prevEnd = lineStart - 1; // position of '\n' that ended prev line
+            int prevStart = LineStart(text, prevEnd);
+            int prevLen = prevEnd - prevStart;
+            return prevStart + Math.Min(col, prevLen);
+        }
+        else
+        {
+            int curEnd = LineEnd(text, idx);
+            if (curEnd >= text.Length) return idx; // already on last line
+            int nextStart = curEnd + 1;
+            int nextEnd = LineEnd(text, nextStart);
+            int nextLen = nextEnd - nextStart;
+            return nextStart + Math.Min(col, nextLen);
+        }
     }
 
     private void UpdateCursor(PointF pt)

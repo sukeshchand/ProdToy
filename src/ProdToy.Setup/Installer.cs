@@ -94,6 +94,9 @@ static class Installer
             Directory.CreateDirectory(AppPaths.Root);
             Report($"Install directory: {AppPaths.Root}");
 
+            // Step 2b: Generate (or preserve) environment id.
+            EnsureEnvId(Report);
+
             // Step 3: Extract ProdToy.zip → Root\ProdToy.exe
             if (!File.Exists(hostZipPath))
                 return new InstallResult(false, $"ProdToy.zip not found at {hostZipPath}.");
@@ -267,6 +270,53 @@ static class Installer
         }
 
         return shortcutPath;
+    }
+
+    /// <summary>
+    /// Generate or preserve the environment id. Writes launchSettings.json at Root
+    /// and env_{envId}.config in data/ on first install; preserves both on reinstall.
+    /// </summary>
+    private static void EnsureEnvId(Action<string> report)
+    {
+        try
+        {
+            // Preserve existing envId across reinstalls.
+            if (File.Exists(AppPaths.LaunchSettingsFile))
+            {
+                var existing = JsonNode.Parse(File.ReadAllText(AppPaths.LaunchSettingsFile));
+                var existingId = existing?["envId"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(existingId))
+                {
+                    report($"Preserved environment id: {existingId}");
+                    return;
+                }
+            }
+
+            string envId = Guid.NewGuid().ToString("N")[..8];
+
+            // Write Root\launchSettings.json
+            var launchSettings = new JsonObject { ["envId"] = envId };
+            var opts = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+            File.WriteAllText(AppPaths.LaunchSettingsFile, launchSettings.ToJsonString(opts));
+
+            // Write Root\data\env_{envId}.config
+            Directory.CreateDirectory(AppPaths.DataDir);
+            string configPath = Path.Combine(AppPaths.DataDir, $"env_{envId}.config");
+            var config = new JsonObject
+            {
+                ["envId"]       = envId,
+                ["machineName"] = Environment.MachineName,
+                ["installPath"] = AppPaths.Root,
+                ["installedAt"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            };
+            File.WriteAllText(configPath, config.ToJsonString(opts));
+
+            report($"Created environment id: {envId}");
+        }
+        catch (Exception ex)
+        {
+            report($"Warning: could not create environment id: {ex.Message}");
+        }
     }
 
     /// <summary>

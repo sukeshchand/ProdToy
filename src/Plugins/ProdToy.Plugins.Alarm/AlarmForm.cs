@@ -168,7 +168,32 @@ class AlarmForm : Form
         _refreshTimer = new System.Windows.Forms.Timer { Interval = 30_000 };
         _refreshTimer.Tick += (_, _) => SoftRefresh();
         _refreshTimer.Start();
-        FormClosed += (_, _) => _refreshTimer.Stop();
+
+        // Reload rows when the alarm set changes (add/edit/delete) and
+        // when an alarm fires — without this the row's cached AlarmEntry
+        // keeps the old LastTriggeredAt = null and GetDisplayStatus()
+        // keeps reporting "Missed" even after the popup has shown.
+        Action storeChangedHandler = () =>
+        {
+            try
+            {
+                if (IsDisposed) return;
+                if (InvokeRequired) BeginInvoke(new Action(RefreshList));
+                else RefreshList();
+            }
+            catch { /* form torn down between Changed and Invoke */ }
+        };
+        Action<AlarmEntry> triggeredHandler = _ => storeChangedHandler();
+
+        AlarmStore.Changed += storeChangedHandler;
+        AlarmScheduler.AlarmTriggered += triggeredHandler;
+
+        FormClosed += (_, _) =>
+        {
+            _refreshTimer.Stop();
+            AlarmStore.Changed -= storeChangedHandler;
+            AlarmScheduler.AlarmTriggered -= triggeredHandler;
+        };
 
         RefreshList();
     }

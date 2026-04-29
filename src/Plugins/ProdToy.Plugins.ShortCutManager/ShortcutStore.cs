@@ -15,6 +15,14 @@ static class ShortcutStore
     private static readonly JsonSerializerOptions _opts = new() { WriteIndented = true };
     private static List<Shortcut>? _cache;
 
+    /// <summary>
+    /// Raised after Add/Update/Delete (and bulk Save) — i.e. anything that
+    /// could change the *set* of shortcuts. Deliberately NOT raised by
+    /// <see cref="RecordLaunch"/>, which only mutates launch counters and
+    /// would otherwise refresh shell-extension state on every launch.
+    /// </summary>
+    public static event Action? Changed;
+
     public static void Initialize(string dataDirectory)
     {
         _file = Path.Combine(dataDirectory, "shortcuts.json");
@@ -46,7 +54,9 @@ static class ShortcutStore
         }
     }
 
-    public static void Save(List<Shortcut> shortcuts)
+    public static void Save(List<Shortcut> shortcuts) => SaveCore(shortcuts, raiseChanged: true);
+
+    private static void SaveCore(List<Shortcut> shortcuts, bool raiseChanged)
     {
         string json;
         lock (_lock)
@@ -63,6 +73,11 @@ static class ShortcutStore
         catch (Exception ex)
         {
             PluginLog.Error("ShortcutStore: save failed", ex);
+        }
+        if (raiseChanged)
+        {
+            try { Changed?.Invoke(); }
+            catch (Exception ex) { PluginLog.Warn($"ShortcutStore.Changed handler threw: {ex.Message}"); }
         }
     }
 
@@ -102,6 +117,8 @@ static class ShortcutStore
             LastLaunchedAt = DateTime.Now,
             LaunchCount = all[idx].LaunchCount + 1,
         };
-        Save(all);
+        // Suppress Changed: launch-count bumps don't alter the shortcut set
+        // and shouldn't trigger shell-extension refreshes.
+        SaveCore(all, raiseChanged: false);
     }
 }

@@ -5,8 +5,8 @@ namespace ProdToy.Plugins.ClaudeIntegration;
 
 /// <summary>
 /// A single chat row: user prompt + assistant response + metadata.
-/// Written to {pluginDataDir}/history/{yyyyMMdd}.json. Matches the shape
-/// the host's legacy ResponseHistory used so dual-write is a straight copy.
+/// Written to {pluginDataDir}/history/{yyyyMMdd}--{envId}.json. Each machine
+/// writes to its own file so synced data folders don't race on concurrent writes.
 /// </summary>
 record HistoryEntry(
     string Title,
@@ -16,7 +16,9 @@ record HistoryEntry(
     DateTime Timestamp,
     string SessionId = "",
     string Cwd = "",
-    DateTime QuestionTimestamp = default);
+    DateTime QuestionTimestamp = default,
+    string EnvId = "",
+    string MachineName = "");
 
 /// <summary>
 /// Lightweight index entry cached in memory (no message/question text).
@@ -28,38 +30,63 @@ record HistoryIndex(
     string DayFile,
     int Index,
     string SessionId = "",
-    string Cwd = "");
+    string Cwd = "",
+    string EnvId = "",
+    string MachineName = "");
 
 /// <summary>
 /// Claude chat history owned by the ClaudeIntegration plugin.
 ///
-/// Storage: {pluginDataDir}/history/{yyyyMMdd}.json. One file per local day,
-/// JSON array of HistoryEntry.
+/// Storage: {pluginDataDir}/history/{yyyyMMdd}--{envId}.json. One file per
+/// local day PER MACHINE — so two machines sharing a synced data folder never
+/// write to the same file. Reads merge every {yyyyMMdd}*.json file for the
+/// date (plus the legacy no-envId {yyyyMMdd}.json for pre-migration entries).
 ///
 /// Thread-safety: all writers take a single lock. Reads of the cached index
 /// also lock so a write can invalidate the cache without racing a reader.
-///
-/// This class replaces the host-side `ResponseHistory` static class. It's
-/// instance-scoped because the data directory is only known at runtime when
-/// the plugin initializes.
 /// </summary>
 sealed class ChatHistory
 {
     private readonly string _historyDir;
     private readonly Func<bool> _isEnabledGetter;
+    private readonly string _envId;
+    private readonly string _machineName;
     private readonly object _lock = new();
     private List<HistoryIndex>? _cachedIndex;
 
-    public ChatHistory(string pluginDataDirectory, Func<bool> isEnabledGetter)
+    public ChatHistory(string pluginDataDirectory, Func<bool> isEnabledGetter, string envId, string machineName)
     {
         _historyDir = Path.Combine(pluginDataDirectory, "history");
         _isEnabledGetter = isEnabledGetter;
+        _envId = envId ?? "";
+        _machineName = machineName ?? "";
     }
 
     public bool IsEnabled => _isEnabledGetter();
 
+    /// <summary>This machine's day file: {yyyyMMdd}--{envId}.json.</summary>
     private string GetDayFile(DateTime date)
-        => Path.Combine(_historyDir, $"{date:yyyyMMdd}.json");
+        => Path.Combine(_historyDir, $"{date:yyyyMMdd}--{_envId}.json");
+
+    /// <summary>All env-qualified files for the given date.</summary>
+    private IEnumerable<string> EnumerateDayFiles(DateTime date)
+    {
+        if (!Directory.Exists(_historyDir)) yield break;
+        string prefix = $"{date:yyyyMMdd}--";
+        foreach (var f in Directory.EnumerateFiles(_historyDir, $"{prefix}*.json"))
+        {
+            if (Path.GetFileNameWithoutExtension(f).StartsWith(prefix, StringComparison.Ordinal))
+                yield return f;
+        }
+    }
+
+    /// <summary>Parse the envId suffix out of a filename. Returns "" if the name is malformed.</summary>
+    private static string ParseEnvIdFromFileName(string path)
+    {
+        var name = Path.GetFileNameWithoutExtension(path);
+        int sep = name.IndexOf("--", StringComparison.Ordinal);
+        return sep >= 0 ? name[(sep + 2)..] : "";
+    }
 
     public void SaveQuestion(string question, string sessionId = "", string cwd = "")
     {
@@ -71,7 +98,7 @@ sealed class ChatHistory
             var now = DateTime.Now;
             entries.Add(new HistoryEntry(
                 "ProdToy", "", question.Trim(), NotificationType.Pending,
-                now, sessionId, cwd, now));
+                now, sessionId, cwd, now, _envId, _machineName));
             WriteDay(DateTime.Now, entries);
         }
     }
@@ -115,11 +142,13 @@ sealed class ChatHistory
                     SessionId = sessionId,
                     Cwd = cwd,
                     QuestionTimestamp = qts,
+                    // EnvId / MachineName are preserved from the pending entry via `with`.
                 };
             }
             else
             {
-                entries.Add(new HistoryEntry(title, message, "", type, DateTime.Now, sessionId, cwd, default));
+                entries.Add(new HistoryEntry(
+                    title, message, "", type, DateTime.Now, sessionId, cwd, default, _envId, _machineName));
             }
 
             WriteDay(DateTime.Now, entries);
@@ -167,22 +196,7 @@ sealed class ChatHistory
 
                 foreach (var file in Directory.GetFiles(_historyDir, "*.json").OrderBy(f => f))
                 {
-                    try
-                    {
-                        string json = File.ReadAllText(file);
-                        var entries = JsonSerializer.Deserialize<List<HistoryEntry>>(json);
-                        if (entries == null) continue;
-
-                        for (int i = 0; i < entries.Count; i++)
-                        {
-                            var e = entries[i];
-                            index.Add(new HistoryIndex(e.Title, e.Type, e.Timestamp, file, i, e.SessionId, e.Cwd));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        PluginLog.Warn($"Failed to read history file {file}: {ex.Message}");
-                    }
+                    AppendIndexForFile(file, index);
                 }
             }
             catch (Exception ex)
@@ -190,11 +204,46 @@ sealed class ChatHistory
                 PluginLog.Error("Failed to load history index", ex);
             }
 
+            // Sort globally by timestamp so merged entries from multiple machines
+            // interleave correctly in navigation order.
+            index.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
             _cachedIndex = index;
             return index;
         }
     }
 
+    private static void AppendIndexForFile(string file, List<HistoryIndex> target)
+    {
+        try
+        {
+            string json = File.ReadAllText(file);
+            var entries = JsonSerializer.Deserialize<List<HistoryEntry>>(json);
+            if (entries == null) return;
+
+            string fileEnvId = ParseEnvIdFromFileName(file);
+            for (int i = 0; i < entries.Count; i++)
+            {
+                var e = entries[i];
+                // Prefer the entry's own EnvId/MachineName (stamped at write time),
+                // fall back to the filename-derived id for legacy entries.
+                string envId = !string.IsNullOrEmpty(e.EnvId) ? e.EnvId : fileEnvId;
+                target.Add(new HistoryIndex(
+                    e.Title, e.Type, e.Timestamp, file, i, e.SessionId, e.Cwd,
+                    envId, e.MachineName));
+            }
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"Failed to read history file {file}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Load entries for the given date — THIS MACHINE'S FILE ONLY. Used by
+    /// SaveQuestion / SaveResponse so the pending-match logic operates on a
+    /// single envelope per machine. Cross-machine merging happens in the
+    /// index-building read path, not the write path.
+    /// </summary>
     private List<HistoryEntry> LoadDayEntries(DateTime date)
     {
         try
@@ -233,25 +282,9 @@ sealed class ChatHistory
 
     public List<HistoryIndex> LoadDayIndex(DateTime date)
     {
-        var dayFile = GetDayFile(date);
         var index = new List<HistoryIndex>();
-        try
-        {
-            if (!File.Exists(dayFile)) return index;
-            string json = File.ReadAllText(dayFile);
-            var entries = JsonSerializer.Deserialize<List<HistoryEntry>>(json);
-            if (entries == null) return index;
-
-            for (int i = 0; i < entries.Count; i++)
-            {
-                var e = entries[i];
-                index.Add(new HistoryIndex(e.Title, e.Type, e.Timestamp, dayFile, i, e.SessionId, e.Cwd));
-            }
-        }
-        catch (Exception ex)
-        {
-            PluginLog.Warn($"Failed to load day index for {date:yyyyMMdd}: {ex.Message}");
-        }
+        foreach (var file in EnumerateDayFiles(date))
+            AppendIndexForFile(file, index);
         return index.OrderBy(i => i.Timestamp).ToList();
     }
 
@@ -283,14 +316,18 @@ sealed class ChatHistory
 
     public List<DateTime> GetAvailableDates()
     {
-        var dates = new List<DateTime>();
+        var dates = new HashSet<DateTime>();
         try
         {
-            if (!Directory.Exists(_historyDir)) return dates;
-            foreach (var file in Directory.GetFiles(_historyDir, "*.json").OrderBy(f => f))
+            if (!Directory.Exists(_historyDir)) return new List<DateTime>();
+            foreach (var file in Directory.GetFiles(_historyDir, "*.json"))
             {
-                string name = Path.GetFileNameWithoutExtension(file);
-                if (DateTime.TryParseExact(name, "yyyyMMdd", null, System.Globalization.DateTimeStyles.None, out var date))
+                var name = Path.GetFileNameWithoutExtension(file);
+                int sep = name.IndexOf("--", StringComparison.Ordinal);
+                if (sep < 0) continue; // skip anything without the env suffix
+                string datePart = name[..sep];
+
+                if (DateTime.TryParseExact(datePart, "yyyyMMdd", null, System.Globalization.DateTimeStyles.None, out var date))
                     dates.Add(date);
             }
         }
@@ -298,7 +335,7 @@ sealed class ChatHistory
         {
             PluginLog.Error("Failed to get available dates", ex);
         }
-        return dates;
+        return dates.OrderBy(d => d).ToList();
     }
 
     public void Invalidate() { lock (_lock) { _cachedIndex = null; } }

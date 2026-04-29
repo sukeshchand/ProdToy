@@ -9,13 +9,29 @@ sealed class PluginHostImpl : IPluginHost
 {
     private readonly NotifyIcon _trayIcon;
     private readonly PopupForm _popupForm;
+    // The dashboard form is created once at startup and never disposed for
+    // the app's lifetime, so it's a reliable always-alive UI marshaling
+    // target. Its window handle is forced-created by the constructor so
+    // BeginInvoke works even when the form has never been shown.
+    private readonly DashboardForm _dashboardForm;
     private readonly PipeRouter _pipeRouter;
     private readonly List<IPluginPopup> _registeredPopups = new();
 
-    public PluginHostImpl(NotifyIcon trayIcon, PopupForm popupForm)
+    // Strong references to popup forms enqueued via QueuePopup. Without
+    // this set, the GC can collect the form between Show() returning and
+    // the first WM_PAINT, leaving an un-painted shell that vanishes.
+    private readonly HashSet<Form> _liveQueuedPopups = new();
+    private readonly object _liveQueuedPopupsLock = new();
+
+    public PluginHostImpl(NotifyIcon trayIcon, PopupForm popupForm, DashboardForm dashboardForm)
     {
         _trayIcon = trayIcon;
         _popupForm = popupForm;
+        _dashboardForm = dashboardForm;
+        // Force the dashboard's HWND to materialize even though the form
+        // is hidden — required so BeginInvoke posts succeed before the
+        // user has ever opened the dashboard.
+        _ = _dashboardForm.Handle;
         _pipeRouter = new PipeRouter(InvokeOnUI);
     }
 
@@ -57,10 +73,66 @@ sealed class PluginHostImpl : IPluginHost
 
     public void InvokeOnUI(Action action)
     {
-        if (_popupForm.InvokeRequired)
-            _popupForm.Invoke(action);
+        // Dashboard form's handle is force-created in the ctor, so it's a
+        // reliable always-alive marshaling target. The popup form's handle
+        // doesn't exist until first display, which used to break this path.
+        if (_dashboardForm.InvokeRequired)
+            _dashboardForm.Invoke(action);
         else
             action();
+    }
+
+    public void BeginInvokeOnUI(Action action)
+    {
+        // Always go through BeginInvoke so the action runs on a fresh
+        // message-pump iteration, never inline on the current call stack.
+        _dashboardForm.BeginInvoke(action);
+    }
+
+    public void QueuePopup(Func<Form> factory)
+    {
+        // The factory + Show happens on the dashboard's UI thread, on a
+        // fresh BeginInvoke message — that decouples it from the caller's
+        // call stack (whether that's a threadpool timer or a context-menu
+        // click handler running inside a nested modal pump). The host
+        // owns the strong reference until FormClosed so GC can't reclaim
+        // the form mid-paint.
+        try
+        {
+            _dashboardForm.BeginInvoke(new Action(() =>
+            {
+                Form? form = null;
+                try
+                {
+                    form = factory();
+                    if (form == null)
+                    {
+                        Log.Warn("QueuePopup: factory returned null");
+                        return;
+                    }
+                    lock (_liveQueuedPopupsLock) { _liveQueuedPopups.Add(form); }
+                    var captured = form;
+                    captured.FormClosed += (_, _) =>
+                    {
+                        lock (_liveQueuedPopupsLock) { _liveQueuedPopups.Remove(captured); }
+                    };
+                    captured.Show();
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("QueuePopup factory/show failed", ex);
+                    if (form != null)
+                    {
+                        lock (_liveQueuedPopupsLock) { _liveQueuedPopups.Remove(form); }
+                        try { form.Dispose(); } catch { }
+                    }
+                }
+            }));
+        }
+        catch (Exception ex)
+        {
+            Log.Error("QueuePopup BeginInvoke failed", ex);
+        }
     }
 
     internal void RaiseThemeChanged(PopupTheme theme)

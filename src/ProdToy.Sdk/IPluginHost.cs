@@ -26,6 +26,26 @@ public interface IPluginHost
     /// <summary>Invoke an action on the UI thread. Required for UI work from background threads.</summary>
     void InvokeOnUI(Action action);
 
+    /// <summary>Asynchronously post an action to the UI thread (BeginInvoke-style)
+    /// so it runs on the next message-pump iteration. Use this instead of
+    /// <see cref="InvokeOnUI"/> when the caller is *already* on the UI thread
+    /// but inside a nested message loop (e.g. a context-menu click handler)
+    /// and needs the action to land in the outer top-level pump — typical
+    /// for popup forms that misbehave when created inside a nested pump.</summary>
+    void BeginInvokeOnUI(Action action);
+
+    /// <summary>Enqueue a popup form for the host to create + Show on the
+    /// always-alive dashboard's UI thread. The factory runs on that thread,
+    /// so it may safely touch WinForms. The host:
+    ///   • holds a strong reference to the returned form until it closes
+    ///     (so the form is not GC'd mid-paint),
+    ///   • calls <see cref="Form.Show"/> for you,
+    ///   • posts via the dashboard's BeginInvoke so the call is decoupled
+    ///     from any nested message pump on the caller's stack.
+    /// Use this for any popup invoked from a non-UI thread (alarm timer,
+    /// scheduled triggers) or from inside a nested pump (context menus).</summary>
+    void QueuePopup(Func<Form> factory);
+
     /// <summary>Access to the system tray icon.</summary>
     NotifyIcon TrayIcon { get; }
 

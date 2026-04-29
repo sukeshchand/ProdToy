@@ -20,8 +20,14 @@ static class AppPaths
     /// <summary>Plugin DLLs: Root\plugins\bin\</summary>
     public static string PluginsBinDir { get; } = Path.Combine(Root, "plugins", "bin");
 
+    /// <summary>Default data directory: Root\data\</summary>
+    public static string DataDir { get; } = Path.Combine(Root, "data");
+
     /// <summary>Plugin data (preserved on uninstall): Root\data\plugins\</summary>
     public static string PluginsDataDir { get; } = Path.Combine(Root, "data", "plugins");
+
+    /// <summary>Launch settings (machine-local env id): Root\launchSettings.json</summary>
+    public static string LaunchSettingsFile { get; } = Path.Combine(Root, "launchSettings.json");
 
     /// <summary>Claude hooks directory: %USERPROFILE%\.claude\hooks\</summary>
     public static string ClaudeHooksDir { get; } = Path.Combine(

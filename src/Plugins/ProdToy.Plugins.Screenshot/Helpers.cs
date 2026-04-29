@@ -65,11 +65,44 @@ static class ScreenshotPaths
     public static string ScreenshotsDir { get; private set; } = "";
     public static string ScreenshotsEditsDir { get; private set; } = "";
 
+    /// <summary>
+    /// Per-installation environment id, read from ~/.prod-toy/launchSettings.json.
+    /// Stamped into new screenshot filenames so a synced screenshots folder never
+    /// has two machines colliding on the same timestamp. "" when not configured.
+    /// </summary>
+    public static string EnvId { get; private set; } = "";
+
     public static void Initialize(string dataDirectory)
     {
         ScreenshotsDir = Path.Combine(dataDirectory, "screenshots");
         ScreenshotsEditsDir = Path.Combine(dataDirectory, "screenshots", "_edits");
         Directory.CreateDirectory(ScreenshotsDir);
         Directory.CreateDirectory(ScreenshotsEditsDir);
+        EnvId = ReadEnvId();
+    }
+
+    /// <summary>Build a new screenshot base name (without extension): "screenshot_{envId}_{yyyy-MM-dd_HHmmss}".
+    /// Falls back to the legacy "screenshot_{timestamp}" when envId is unavailable.</summary>
+    public static string NewScreenshotBaseName()
+    {
+        string ts = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+        return string.IsNullOrEmpty(EnvId)
+            ? $"screenshot_{ts}"
+            : $"screenshot_{EnvId}_{ts}";
+    }
+
+    private static string ReadEnvId()
+    {
+        try
+        {
+            string launchSettingsPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".prod-toy", "launchSettings.json");
+            if (!File.Exists(launchSettingsPath)) return "";
+            var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(launchSettingsPath));
+            var id = root?["envId"]?.GetValue<string>();
+            return !string.IsNullOrWhiteSpace(id) ? id : "";
+        }
+        catch { return ""; }
     }
 }

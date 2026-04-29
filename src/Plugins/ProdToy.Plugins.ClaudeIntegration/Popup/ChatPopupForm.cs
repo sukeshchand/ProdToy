@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using ProdToy.Sdk;
@@ -82,7 +83,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
     private int _historyIndex = -1;   // -1 = live/current message
     private bool _viewingHistory;
     private string _currentSessionId = "";
-    private FilterMode _filterMode = FilterMode.Session;
+    private FilterMode _filterMode = FilterMode.Cwd;
     private string _filterValue = "";
     private List<HistoryIndex>? _filteredIndex;
     private DateTime _selectedDate = DateTime.Today;
@@ -361,7 +362,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
 
     // IPluginPopup plumbing: currently only used for registration; the plugin
     // drives display via the richer ShowPopup(title, message, type, ...) overload.
-    void IPluginPopup.Show() => ShowPopup(_lastMessage.Length > 0 ? "Claude" : "ProdToy", _lastMessage, _lastType);
+    void IPluginPopup.Show() => ShowPopup(_lastMessage.Length > 0 ? "Claude" : "ProdToy", _lastMessage, _lastType, bypassFilter: true);
     public new void Hide() => base.Hide();
     void IPluginPopup.BringToFront() { if (Visible) base.BringToFront(); }
 
@@ -384,6 +385,23 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _context.SaveSettings(s with { SnoozeUntil = until });
     }
 
+    /// <summary>True when the user-configured suppress regex matches the
+    /// message. Empty pattern → never matches. Invalid pattern → never matches
+    /// (we don't want a typo in settings to silently suppress everything).</summary>
+    private static bool MatchesSuppressRegex(string message, string pattern)
+    {
+        if (string.IsNullOrEmpty(pattern) || message == null) return false;
+        try
+        {
+            return Regex.IsMatch(message, pattern);
+        }
+        catch (ArgumentException)
+        {
+            // Bad regex — treat as no filter rather than blocking everything.
+            return false;
+        }
+    }
+
     public void SetShowQuotes(bool show)
     {
         _showQuotes = show;
@@ -404,7 +422,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
     /// notifications are disabled, snoozed, or the user chose tray-balloon mode.
     /// The Claude plugin's handler calls this directly; there is no generic
     /// notification facility any more.</summary>
-    public void ShowPopup(string title, string message, string type, string sessionId = "", string cwd = "")
+    public void ShowPopup(string title, string message, string type, string sessionId = "", string cwd = "", string machineName = "", bool bypassFilter = false)
     {
         _lastMessage = message;
         _lastType = type;
@@ -416,6 +434,13 @@ sealed class ChatPopupForm : Form, IPluginPopup
         var settings = _context.LoadSettings<ClaudePluginSettings>();
         if (!settings.NotificationsEnabled) return;
         if (IsSnoozed) return;
+
+        // Suppress messages matching the user-configured regex (default
+        // catches the bare "Claude is waiting for your input" pings) — but
+        // only for live incoming notifications. When the user explicitly
+        // clicks "Show Last Notification" we always honor the request, even
+        // if the saved message would otherwise be filtered.
+        if (!bypassFilter && MatchesSuppressRegex(message, settings.SuppressMessageRegex)) return;
 
         string mode = settings.NotificationMode;
         bool wantPopup = mode is "Popup" or "Popup + Windows";
@@ -454,9 +479,20 @@ sealed class ChatPopupForm : Form, IPluginPopup
             if (string.IsNullOrEmpty(cwd)) cwd = latest?.Cwd ?? "";
         }
 
-        if (!string.IsNullOrEmpty(sessionId))
+        // Default grouping is by working folder — a user typically works across
+        // several short-lived sessions inside the same repo, so "folder" groups
+        // their recent notifications more usefully than "session". Session is
+        // the fallback only when no cwd is available on the incoming event.
+        if (!string.IsNullOrEmpty(sessionId)) _currentSessionId = sessionId;
+
+        if (!string.IsNullOrEmpty(cwd))
         {
-            _currentSessionId = sessionId;
+            _filterMode = FilterMode.Cwd;
+            _filterValue = cwd;
+            _filteredIndex = _history.FilterByCwd(_selectedDate, cwd);
+        }
+        else if (!string.IsNullOrEmpty(sessionId))
+        {
             _filterMode = FilterMode.Session;
             _filterValue = sessionId;
             _filteredIndex = _history.FilterBySession(_selectedDate, sessionId);
@@ -467,7 +503,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
             _filterValue = "";
         }
 
-        DisplayMessage(title, message, type, question, sessionId, cwd, questionTime, DateTime.Now);
+        DisplayMessage(title, message, type, question, sessionId, cwd, questionTime, DateTime.Now, machineName);
 
         // Fresh funny quote + typewriter animation.
         if (_showQuotes)
@@ -653,7 +689,8 @@ sealed class ChatPopupForm : Form, IPluginPopup
 
     private void DisplayMessage(string title, string message, string type,
         string question = "", string sessionId = "", string cwd = "",
-        DateTime questionTime = default, DateTime responseTime = default)
+        DateTime questionTime = default, DateTime responseTime = default,
+        string machineName = "")
     {
         _lastMessage = message;
         _lastType = type;
@@ -679,6 +716,8 @@ sealed class ChatPopupForm : Form, IPluginPopup
         string firstLine = string.IsNullOrEmpty(sessionId)
             ? "Claude notification"
             : $"Session {(sessionId.Length > 8 ? sessionId[..8] : sessionId)}";
+        if (!string.IsNullOrEmpty(machineName))
+            firstLine += $" · {machineName}";
         string secondLine = $"{dateText} \u00B7 {relative}";
         _subtitleLabel.Text = firstLine + "\n" + secondLine;
 
@@ -929,7 +968,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
         if (entry != null)
         {
             var qts = entry.QuestionTimestamp == default ? entry.Timestamp : entry.QuestionTimestamp;
-            DisplayMessage(entry.Title, entry.Message, entry.Type, entry.Question, entry.SessionId, entry.Cwd, qts, entry.Timestamp);
+            DisplayMessage(entry.Title, entry.Message, entry.Type, entry.Question, entry.SessionId, entry.Cwd, qts, entry.Timestamp, entry.MachineName);
         }
     }
 
@@ -958,7 +997,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
                     if (entry != null)
                     {
                         var qts = entry.QuestionTimestamp == default ? entry.Timestamp : entry.QuestionTimestamp;
-                        DisplayMessage(entry.Title, entry.Message, entry.Type, entry.Question, entry.SessionId, entry.Cwd, qts, entry.Timestamp);
+                        DisplayMessage(entry.Title, entry.Message, entry.Type, entry.Question, entry.SessionId, entry.Cwd, qts, entry.Timestamp, entry.MachineName);
                     }
                 }
                 else

@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.407",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.411",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -89,7 +89,9 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
 
         _chatHistory = new ChatHistory(
             context.DataDirectory,
-            () => context.LoadSettings<ClaudePluginSettings>().HistoryEnabled);
+            () => context.LoadSettings<ClaudePluginSettings>().HistoryEnabled,
+            envId: ClaudePaths.EnvId,
+            machineName: Environment.MachineName);
 
         _telegram = new TelegramNotifier(context);
 
@@ -128,9 +130,13 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
             if (_chatPopup != null)
             {
                 var popup = _chatPopup;
-                popup.BeginInvoke(() =>
+                // Route through the host's BeginInvokeOnUI so the marshal
+                // target is the always-handle-created dashboard form. The
+                // ChatPopupForm's own handle may not exist yet on the very
+                // first notification (same bug class that broke alarms).
+                _context.Host.BeginInvokeOnUI(() =>
                 {
-                    popup.ShowPopup(title, message, type, sessionId, cwd);
+                    popup.ShowPopup(title, message, type, sessionId, cwd, Environment.MachineName);
                 });
             }
 
@@ -342,7 +348,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
             var latest = _chatHistory.GetLatest();
             if (latest != null)
             {
-                _chatPopup!.ShowPopup(latest.Title, latest.Message, latest.Type, latest.SessionId, latest.Cwd);
+                _chatPopup!.ShowPopup(latest.Title, latest.Message, latest.Type, latest.SessionId, latest.Cwd, latest.MachineName, bypassFilter: true);
             }
             else
             {
@@ -589,6 +595,42 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
                 var s = _context.LoadSettings<ClaudePluginSettings>();
                 _context.SaveSettings(s with { HookUserPromptEnabled = checked_ });
             });
+
+        // Suppress-message regex. Matched (case-sensitive .NET regex) against
+        // the incoming notification message; if it matches, no popup/balloon
+        // is shown. Saved on every keystroke — invalid patterns are tolerated
+        // at evaluation time (a bad pattern just means nothing is suppressed).
+        var suppressLabel = new Label
+        {
+            Text = "Do not show message if the message is:",
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = theme.TextPrimary,
+            AutoSize = true,
+            Location = new Point(pad + 8, y + 4),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(suppressLabel);
+        notifSubControls.Add(suppressLabel);
+        y += 22;
+
+        var suppressBox = new TextBox
+        {
+            Font = new Font("Consolas", 9f),
+            BackColor = theme.BgHeader,
+            ForeColor = theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            Size = new Size(contentWidth - (pad + 8) - pad, 24),
+            Location = new Point(pad + 8, y),
+            Text = settings.SuppressMessageRegex,
+        };
+        suppressBox.TextChanged += (_, _) =>
+        {
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { SuppressMessageRegex = suppressBox.Text });
+        };
+        panel.Controls.Add(suppressBox);
+        notifSubControls.Add(suppressBox);
+        y += 30;
 
         y += 10;
 

@@ -19,15 +19,24 @@ namespace ProdToy.Plugins.ClaudeIntegration;
 /// </summary>
 static class ClaudeStatusLine
 {
-    // Matches context-bar.ps1 and context-bar-v{n}.ps1.
-    private static readonly Regex ScriptNameRegex = new(
-        @"^context-bar(?:-v(\d+))?\.ps1$",
+    // Matches this machine's scripts only: context-bar--{machineId}-v{n}.ps1.
+    // Built lazily so it picks up ClaudePaths.MachineId at first use.
+    // Also recognizes legacy unqualified names (context-bar.ps1, context-bar-v{n}.ps1)
+    // so cleanup on this machine can remove pre-upgrade files it owns.
+    private static Regex? _scriptNameRegex;
+    private static Regex ScriptNameRegex => _scriptNameRegex ??= new Regex(
+        $@"^context-bar(?:--{Regex.Escape(ClaudePaths.EnvId)})?(?:-v(\d+))?\.ps1$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /// <summary>Called by ClaudePaths.SetEnvId to invalidate the cached regex when the env id changes.</summary>
+    internal static void ResetScriptNameRegex() => _scriptNameRegex = null;
+
     /// <summary>
-    /// Extract context-bar.ps1 to the plugin's scripts dir and write the
+    /// Extract the status-line script to the plugin's scripts dir and write the
     /// <c>statusLine</c> entry into every install's <c>settings.json</c>.
     /// Also writes the initial status-line-config.json from the current settings.
+    /// The script is written under a machine-qualified filename so multiple
+    /// machines sharing a synced data folder don't collide.
     /// </summary>
     public static void Install(
         IEnumerable<ClaudeInstall> installs,
@@ -37,12 +46,17 @@ static class ClaudeStatusLine
         try
         {
             Directory.CreateDirectory(ClaudePaths.ScriptsDir);
-            ExtractScript(pluginSettingsPath, ClaudePaths.ClaudeStatusLineScript);
+
+            int nextVersion = FindHighestVersion() + 1;
+            string scriptPath = ClaudePaths.StatusLineScriptPath(nextVersion);
+            ExtractScript(pluginSettingsPath, scriptPath);
             WriteConfig(settings);
 
-            string command = BuildCommand(ClaudePaths.ClaudeStatusLineScript);
+            string command = BuildCommand(scriptPath);
             foreach (var install in installs)
                 WriteStatusLineEntry(install.SettingsFile, command);
+
+            DeleteOldScripts(except: scriptPath);
         }
         catch (Exception ex)
         {
@@ -69,8 +83,7 @@ static class ClaudeStatusLine
             Directory.CreateDirectory(ClaudePaths.ScriptsDir);
 
             int nextVersion = FindHighestVersion() + 1;
-            string newFileName = $"context-bar-v{nextVersion}.ps1";
-            string newPath = Path.Combine(ClaudePaths.ScriptsDir, newFileName);
+            string newPath = ClaudePaths.StatusLineScriptPath(nextVersion);
 
             ExtractScript(pluginSettingsPath, newPath);
 
@@ -130,6 +143,11 @@ static class ClaudeStatusLine
             && command.Contains(".ps1", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Highest version number among this machine's own context-bar scripts.
+    /// Other machines' scripts (different machine id) are ignored so that
+    /// version bumps here stay independent in a synced scripts folder.
+    /// </summary>
     private static int FindHighestVersion()
     {
         int highest = 0;
@@ -147,6 +165,12 @@ static class ClaudeStatusLine
         return highest;
     }
 
+    /// <summary>
+    /// Delete this machine's prior context-bar scripts. Only touches filenames
+    /// owned by the current machine id (plus legacy unqualified names this
+    /// machine wrote before the upgrade) — other machines' scripts in a
+    /// synced folder are preserved.
+    /// </summary>
     private static void DeleteOldScripts(string except)
     {
         try

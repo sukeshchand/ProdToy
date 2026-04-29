@@ -354,6 +354,13 @@ class SettingsForm : Form
         _pluginsPage.Controls.Add(browseCatalogButton);
 
         // =============================================
+        // TAB: Data Sync (fixed)
+        // =============================================
+        var dataSyncPage = CreateTabPage("Data Sync", currentTheme);
+        _tabControl.TabPages.Add(dataSyncPage);
+        BuildDataSyncPage(dataSyncPage, currentTheme, tp, tabInner);
+
+        // =============================================
         // TAB: About (fixed, always last)
         // =============================================
         _aboutPage = CreateTabPage("About", currentTheme);
@@ -1171,6 +1178,215 @@ class SettingsForm : Form
                 py += pluginPanel.Height + 6;
             }
         }
+    }
+
+    /// <summary>
+    /// Build the Data Sync tab: redirect the user data folder to a synced
+    /// location (OneDrive, Dropbox, Syncthing, etc.) so settings, history,
+    /// and plugin data follow the user across machines. The override is
+    /// persisted to Root\data-location.json and takes effect on next launch.
+    /// </summary>
+    private void BuildDataSyncPage(TabPage page, PopupTheme theme, int pad, int innerWidth)
+    {
+        int y = pad;
+
+        page.Controls.Add(CreateSectionLabel("DATA FOLDER", pad, y));
+        y += 28;
+
+        var desc = new Label
+        {
+            Text = "Redirect the user data folder (settings, history, plugin data) to a\n" +
+                   "synced location — for example a folder inside OneDrive, Dropbox, or\n" +
+                   "Syncthing — to share state across multiple machines. Plugin binaries\n" +
+                   "stay in the install folder.",
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            MaximumSize = new Size(innerWidth, 0),
+            Location = new Point(pad, y),
+            BackColor = Color.Transparent,
+        };
+        page.Controls.Add(desc);
+        y += desc.PreferredSize.Height + 16;
+
+        var currentLabelCaption = new Label
+        {
+            Text = "Current folder:",
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            ForeColor = theme.TextPrimary,
+            AutoSize = true,
+            Location = new Point(pad, y),
+            BackColor = Color.Transparent,
+        };
+        page.Controls.Add(currentLabelCaption);
+        y += 22;
+
+        var currentPathLabel = new Label
+        {
+            Text = AppPaths.DataDir,
+            Font = new Font("Consolas", 9f),
+            ForeColor = AppPaths.IsDataDirRedirected ? theme.Primary : theme.TextPrimary,
+            AutoSize = true,
+            MaximumSize = new Size(innerWidth, 0),
+            Location = new Point(pad, y),
+            BackColor = Color.Transparent,
+        };
+        page.Controls.Add(currentPathLabel);
+        y += currentPathLabel.PreferredSize.Height + 4;
+
+        var defaultNoteLabel = new Label
+        {
+            Text = AppPaths.IsDataDirRedirected
+                ? $"(Default would be: {AppPaths.DefaultDataDir})"
+                : "(This is the default location.)",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            MaximumSize = new Size(innerWidth, 0),
+            Location = new Point(pad, y),
+            BackColor = Color.Transparent,
+        };
+        page.Controls.Add(defaultNoteLabel);
+        y += defaultNoteLabel.PreferredSize.Height + 18;
+
+        var browseBtn = new RoundedButton
+        {
+            Text = "Choose folder...",
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            Size = new Size(150, 30),
+            Location = new Point(pad, y),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.Primary,
+            ForeColor = Color.White,
+            Cursor = Cursors.Hand,
+        };
+        browseBtn.FlatAppearance.BorderSize = 0;
+        browseBtn.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
+        page.Controls.Add(browseBtn);
+
+        var resetBtn = new RoundedButton
+        {
+            Text = "Reset to default",
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            Size = new Size(150, 30),
+            Location = new Point(pad + 160, y),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.BgHeader,
+            ForeColor = theme.TextPrimary,
+            Cursor = Cursors.Hand,
+            Enabled = AppPaths.IsDataDirRedirected,
+        };
+        resetBtn.FlatAppearance.BorderSize = 0;
+        page.Controls.Add(resetBtn);
+        y += 40;
+
+        var statusLabel = new Label
+        {
+            Text = "",
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = theme.SuccessColor,
+            AutoSize = true,
+            MaximumSize = new Size(innerWidth, 0),
+            Location = new Point(pad, y),
+            BackColor = Color.Transparent,
+        };
+        page.Controls.Add(statusLabel);
+
+        browseBtn.Click += (_, _) =>
+        {
+            using var dlg = new FolderBrowserDialog
+            {
+                Description = "Choose a folder for ProdToy data (settings, history, plugin data).",
+                UseDescriptionForTitle = true,
+                ShowNewFolderButton = true,
+                SelectedPath = AppPaths.DataDir,
+            };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+            string chosen = dlg.SelectedPath;
+            // Guard against the user picking the install root itself, which
+            // would conflate user data with volatile install-local state.
+            if (string.Equals(
+                    Path.TrimEndingDirectorySeparator(chosen),
+                    Path.TrimEndingDirectorySeparator(AppPaths.Root),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                statusLabel.ForeColor = theme.ErrorColor;
+                statusLabel.Text = "Pick a subfolder — the install root itself is not allowed.";
+                return;
+            }
+
+            // No-op if the user picked the folder we're already using.
+            if (string.Equals(
+                    Path.TrimEndingDirectorySeparator(chosen),
+                    Path.TrimEndingDirectorySeparator(AppPaths.DataDir),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                statusLabel.ForeColor = theme.TextSecondary;
+                statusLabel.Text = "That is already the current data folder.";
+                return;
+            }
+
+            MigrateAndRestart(theme, statusLabel, AppPaths.DataDir, chosen);
+        };
+
+        resetBtn.Click += (_, _) =>
+        {
+            if (!AppPaths.IsDataDirRedirected) return;
+            MigrateAndRestart(theme, statusLabel, AppPaths.DataDir, AppPaths.DefaultDataDir, resetToDefault: true);
+        };
+    }
+
+    /// <summary>
+    /// Confirm with the user, copy the data folder into the new destination
+    /// with a progress dialog, persist the override, and restart the app so
+    /// every path consumer (settings, plugin data dirs, etc.) picks up the
+    /// new root. The restart is the enforcement mechanism — <see cref="AppPaths"/>
+    /// resolves paths once at startup into static fields.
+    /// </summary>
+    private void MigrateAndRestart(
+        PopupTheme theme,
+        Label statusLabel,
+        string source,
+        string dest,
+        bool resetToDefault = false)
+    {
+        string title = resetToDefault ? "Reset to default data folder?" : "Move data folder?";
+        string message =
+            $"Do you want to copy the files into the new directory?\n\n" +
+            $"From:\n  {source}\nTo:\n  {dest}\n\n" +
+            "Yes — copy existing files (overwriting any at the destination), then restart.\n" +
+            "No — switch to the new folder without copying, then restart.\n" +
+            "Cancel — keep the current data folder.";
+        var confirm = MessageBox.Show(this, message, title,
+            MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button3);
+        if (confirm == DialogResult.Cancel) return;
+
+        if (confirm == DialogResult.Yes)
+        {
+            using var dlg = new DataMigrationDialog(theme, source, dest);
+            dlg.ShowDialog(this);
+            if (!dlg.Success)
+            {
+                statusLabel.ForeColor = theme.ErrorColor;
+                statusLabel.Text = $"Copy failed: {dlg.Error ?? "unknown error"}. Data folder unchanged.";
+                return;
+            }
+        }
+
+        AppPaths.SetDataDir(resetToDefault ? null : dest);
+
+        statusLabel.ForeColor = theme.SuccessColor;
+        statusLabel.Text = confirm == DialogResult.Yes
+            ? "Copy complete. Restarting ProdToy..."
+            : "Data folder switched. Restarting ProdToy...";
+        Application.DoEvents();
+
+        // Application.Restart() is cleanest here — it spawns a new process and
+        // exits this one, which lets static AppPaths fields re-resolve against
+        // the freshly-written data-location.json.
+        Application.Restart();
+        Environment.Exit(0);
     }
 
     private static TabPage CreateTabPage(string text, PopupTheme theme)

@@ -16,6 +16,15 @@ static class AlarmStore
     private static List<AlarmEntry>? _cachedAlarms;
     private static List<AlarmHistoryEntry>? _cachedHistory;
 
+    /// <summary>Raised after the alarms list is added/updated/deleted.
+    /// Subscribers (the scheduler) use it to immediately re-evaluate the
+    /// alarm set so a freshly-saved alarm set for "right now" doesn't
+    /// have to wait up to one tick to fire. Deliberately NOT raised by
+    /// <see cref="RecordTrigger"/> because that's an internal counter
+    /// update — re-running the scheduler from a fire path would be a
+    /// re-entrancy footgun.</summary>
+    public static event Action? Changed;
+
     // History write batching: buffer entries in memory, flush periodically
     private static readonly List<AlarmHistoryEntry> _historyBuffer = new();
     private static System.Threading.Timer? _historyFlushTimer;
@@ -100,6 +109,7 @@ static class AlarmStore
             AlarmTitle = alarm.Title,
             EventType = AlarmHistoryEventType.Created,
         });
+        RaiseChanged();
     }
 
     public static void UpdateAlarm(AlarmEntry alarm)
@@ -111,6 +121,7 @@ static class AlarmStore
         else
             alarms.Add(alarm);
         SaveAlarms(alarms);
+        RaiseChanged();
     }
 
     public static void DeleteAlarm(string id)
@@ -127,6 +138,7 @@ static class AlarmStore
                 AlarmTitle = alarm.Title,
                 EventType = AlarmHistoryEventType.Deleted,
             });
+            RaiseChanged();
         }
     }
 
@@ -138,7 +150,14 @@ static class AlarmStore
         {
             alarms[idx] = alarms[idx] with { Status = status, UpdatedAt = DateTime.Now };
             SaveAlarms(alarms);
+            RaiseChanged();
         }
+    }
+
+    private static void RaiseChanged()
+    {
+        try { Changed?.Invoke(); }
+        catch (Exception ex) { PluginLog.Warn($"AlarmStore.Changed handler threw: {ex.Message}"); }
     }
 
     public static void RecordTrigger(string id)

@@ -6,7 +6,7 @@ record ClaudePluginSettings
 {
     // Hook toggles
     [JsonPropertyName("hookStopEnabled")] public bool HookStopEnabled { get; init; } = true;
-    [JsonPropertyName("hookNotificationEnabled")] public bool HookNotificationEnabled { get; init; } = false;
+    [JsonPropertyName("hookNotificationEnabled")] public bool HookNotificationEnabled { get; init; } = true;
     [JsonPropertyName("hookUserPromptEnabled")] public bool HookUserPromptEnabled { get; init; } = true;
 
     // Status line — enabled by default
@@ -57,6 +57,12 @@ record ClaudePluginSettings
     // "Popup" | "Windows" | "Popup + Windows"
     [JsonPropertyName("notificationMode")] public string NotificationMode { get; init; } = "Popup";
     [JsonPropertyName("showQuotes")] public bool ShowQuotes { get; init; } = true;
+
+    // Regex applied to incoming Claude notification messages — when it matches,
+    // the popup/balloon is suppressed entirely. Default suppresses the bare
+    // "Claude is waiting for your input" hook ping that arrives without any
+    // useful context. Empty string disables the filter.
+    [JsonPropertyName("suppressMessageRegex")] public string SuppressMessageRegex { get; init; } = @"^Claude is waiting for your input\.?$";
 
     // Snooze end-time. Default == MinValue means "not snoozed". Persisted so
     // a 30-minute snooze survives an app restart. (The host used to keep

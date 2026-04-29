@@ -106,8 +106,6 @@ static class ScreenshotExporter
 
     public static string GenerateFilePath()
     {
-        string dir = ScreenshotPaths.ScreenshotsDir;
-        string timestamp = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
-        return Path.Combine(dir, $"screenshot_{timestamp}.png");
+        return Path.Combine(ScreenshotPaths.ScreenshotsDir, ScreenshotPaths.NewScreenshotBaseName() + ".png");
     }
 }

@@ -13,6 +13,7 @@ class RecentImagesPanel : Panel
     private readonly PluginTheme _theme;
     private readonly Panel _scrollContent;
     private readonly RoundedButton _toggleBtn;
+    private readonly RoundedButton _openFileBtn;
     private readonly Label _titleLabel;
 
     private const int PanelWidth = 170;
@@ -34,6 +35,7 @@ class RecentImagesPanel : Panel
 
     public event Action<string?>? SelectionChanged;
     public event Action<string>? OpenRequested;
+    public event Action? OpenFileRequested;
 
     public string? SelectedFilePath => _selectedFilePath;
     public bool IsCollapsed => _collapsed;
@@ -78,6 +80,19 @@ class RecentImagesPanel : Panel
         };
         Controls.Add(_titleLabel);
 
+        _openFileBtn = new RoundedButton
+        {
+            Text = "\U0001F4C2", Font = new Font("Segoe UI Emoji", 9f),
+            Size = new Size(24, 24), Location = new Point(PanelWidth - 28, 4),
+            FlatStyle = FlatStyle.Flat, BackColor = theme.PrimaryDim,
+            ForeColor = theme.TextPrimary, Cursor = Cursors.Hand,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+        };
+        _openFileBtn.FlatAppearance.BorderSize = 0;
+        _openFileBtn.FlatAppearance.MouseOverBackColor = theme.Primary;
+        _openFileBtn.Click += (_, _) => OpenFileRequested?.Invoke();
+        Controls.Add(_openFileBtn);
+
         _scrollContent = new Panel
         {
             Location = new Point(0, 32),
@@ -101,6 +116,7 @@ class RecentImagesPanel : Panel
             _toggleBtn.Text = "\u25C0";
             _scrollContent.Visible = false;
             _titleLabel.Visible = false;
+            _openFileBtn.Visible = false;
         }
         else
         {
@@ -108,6 +124,7 @@ class RecentImagesPanel : Panel
             _toggleBtn.Text = "\u25B6";
             _scrollContent.Visible = true;
             _titleLabel.Visible = true;
+            _openFileBtn.Visible = true;
         }
     }
 
@@ -144,10 +161,10 @@ class RecentImagesPanel : Panel
         // Drop compare marks whose underlying files no longer exist.
         _compareMarked.RemoveAll(p => !File.Exists(p));
 
-        _visibleFilePaths = files.ToList();
-
         int y = 2;
         int innerW = PanelWidth - 16;
+
+        var visible = new List<string>(files);
 
         foreach (var filePath in files)
         {
@@ -160,6 +177,44 @@ class RecentImagesPanel : Panel
             _scrollContent.Controls.Add(item);
             y += item.Height + ItemPad;
         }
+
+        // Append "recent opened" files that fall outside the newest-N block
+        // but were opened within the 10-day window. Shown under a header so
+        // the user can tell library-order from open-order at a glance.
+        var topSet = new HashSet<string>(files, StringComparer.OrdinalIgnoreCase);
+        var extras = RecentOpenedStore.GetRecent()
+            .Where(p => !topSet.Contains(p))
+            .ToList();
+        if (extras.Count > 0)
+        {
+            var sepLabel = new Label
+            {
+                Text = "RECENT OPENED",
+                Font = new Font("Segoe UI Semibold", 7.5f, FontStyle.Bold),
+                ForeColor = _theme.TextSecondary,
+                AutoSize = false,
+                Size = new Size(innerW, 16),
+                Location = new Point(4, y + 4),
+                BackColor = Color.Transparent,
+                TextAlign = ContentAlignment.MiddleLeft,
+            };
+            _scrollContent.Controls.Add(sepLabel);
+            y += 22;
+
+            foreach (var filePath in extras)
+            {
+                bool isEditing = _editingEditId != null &&
+                    Path.GetFileNameWithoutExtension(filePath)
+                        .Equals(_editingEditId, StringComparison.OrdinalIgnoreCase);
+
+                var item = CreateItem(filePath, y, innerW, isEditing);
+                _scrollContent.Controls.Add(item);
+                y += item.Height + ItemPad;
+                visible.Add(filePath);
+            }
+        }
+
+        _visibleFilePaths = visible;
     }
 
     private Panel CreateItem(string filePath, int y, int innerW, bool isEditing)

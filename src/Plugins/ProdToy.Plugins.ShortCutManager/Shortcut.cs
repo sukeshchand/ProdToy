@@ -109,6 +109,34 @@ sealed record Shortcut
     [JsonPropertyName("requireAdmin")]
     public bool RequireAdmin { get; init; }
 
+    /// <summary>
+    /// When true, the plugin registers a Windows Explorer right-click verb
+    /// scoped to <see cref="WorkingDirectory"/>: right-clicking inside that
+    /// folder shows a "Run …" menu item that launches this shortcut. Off
+    /// by default — opt-in per shortcut so the shell stays clean.
+    /// </summary>
+    [JsonPropertyName("showInExplorerContextMenu")]
+    public bool ShowInExplorerContextMenu { get; init; }
+
+    /// <summary>
+    /// When true, the plugin maintains a <c>.lnk</c> on the user's Desktop
+    /// that launches this shortcut (same as clicking Launch in the
+    /// Shortcuts window). The .lnk is created on save, refreshed on rename,
+    /// and deleted when this flag is turned off or the shortcut is deleted.
+    /// </summary>
+    [JsonPropertyName("addToDesktop")]
+    public bool AddToDesktop { get; init; }
+
+    /// <summary>
+    /// Filename (without extension) used for the desktop .lnk when
+    /// <see cref="AddToDesktop"/> is on. Set by the edit form — defaults
+    /// to "&lt;directory-name&gt; &lt;profile-display-name&gt;" the first
+    /// time the user picks a directory / profile, but the user can override.
+    /// Mandatory when <see cref="AddToDesktop"/> is on.
+    /// </summary>
+    [JsonPropertyName("desktopShortcutName")]
+    public string DesktopShortcutName { get; init; } = "";
+
     [JsonPropertyName("notes")]
     public string Notes { get; init; } = "";
 

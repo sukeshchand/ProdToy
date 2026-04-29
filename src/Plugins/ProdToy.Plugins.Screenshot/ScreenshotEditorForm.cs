@@ -13,6 +13,13 @@ class ScreenshotEditorForm : Form
     private readonly PluginTheme _theme;
     private System.Windows.Forms.Timer _autoSaveTimer;
 
+    // True only when the form is showing a brand-new capture that the user
+    // has not edited yet. In that case Ctrl+C should hide the window after
+    // copying (the legacy quick-capture flow). Any edit, or opening an
+    // existing file via Open/Edit-last/recent panel, flips this off so
+    // Ctrl+C copies without hiding.
+    private bool _isFreshUneditedCapture;
+
     public event Action<string>? ImageSaved;
     public event Action? ImageCopied;
 
@@ -57,6 +64,7 @@ class ScreenshotEditorForm : Form
         else
         {
             InitEditFolder(_session, capturedImage);
+            _isFreshUneditedCapture = true;
         }
         _theme = ScreenshotPlugin.GetTheme();
 
@@ -68,8 +76,15 @@ class ScreenshotEditorForm : Form
         TopMost = true;
         KeyPreview = true;
 
-        // Come to front on open, then allow going behind other windows
-        Shown += (_, _) => { TopMost = false; };
+        // Come to front on open, then allow going behind other windows.
+        // Also run a deferred best-fit so a capture that's bigger than the
+        // visible canvas area is shrunk to fit instead of overflowing or
+        // landing at the 10% min-zoom from a too-early FitToContainer call.
+        Shown += (_, _) =>
+        {
+            TopMost = false;
+            BeginInvoke(new Action(FitCanvasIfOverflow));
+        };
         MinimumSize = new Size(500, 350);
         Icon = IconHelper.CreateAppIcon(_theme.Primary);
         BackColor = _theme.BgDark;
@@ -106,6 +121,7 @@ class ScreenshotEditorForm : Form
             Anchor = AnchorStyles.Top | AnchorStyles.Right | AnchorStyles.Bottom,
         };
         _recentPanel.OpenRequested += OpenFromList;
+        _recentPanel.OpenFileRequested += HandleOpenFileDialog;
         _recentPanel.SetEditingId(_session.EditId);
         Controls.Add(_recentPanel);
 
@@ -136,6 +152,7 @@ class ScreenshotEditorForm : Form
         // When canvas resizes due to dropped image, sync container
         _canvas.CanvasResizeRequested += _ => _canvasContainer.SyncCanvasSize();
         _canvas.ToolAutoSwitched += () => _toolbar.Invalidate();
+        _canvas.PasteLayerRequested += PasteLayerAt;
 
         // Toolbar zoom label reads live zoom; toolbar refreshes on every zoom change.
         // Recentering is done by whatever triggered the zoom (wheel scrolls to anchor cursor,
@@ -178,16 +195,35 @@ class ScreenshotEditorForm : Form
         {
             var pt = _toolbar.PointToScreen(new Point(_toolbar.Width / 2 - 170, _toolbar.Height));
             var picker = new ColorPickerPopup(_session.CurrentColor, pt);
+
+            // ColorPickerPopup now fires ColorSelected on every drag/type/swatch
+            // change (and once with the original on Cancel). We mutate
+            // CurrentColor + the selected object's color live for instant
+            // visual feedback, but defer the undo entry to popup-close so the
+            // undo stack gets a single "Change color" entry per open, not
+            // hundreds. Cancel closes with the original re-applied, leaving
+            // nothing to undo.
+            var sel = _session.SelectedObject;
+            Color objStartColor = sel?.StrokeColor ?? Color.Empty;
+
             picker.ColorSelected += c =>
             {
                 _session.CurrentColor = c;
-                if (_session.SelectedObject != null)
+                if (sel != null) sel.StrokeColor = c;
+                _canvas.Invalidate();
+                _toolbar.Invalidate();
+            };
+            picker.FormClosed += (_, _) =>
+            {
+                if (sel != null && sel.StrokeColor != objStartColor)
                 {
-                    var obj = _session.SelectedObject;
-                    var old = obj.StrokeColor;
-                    _session.UndoRedo.Execute(new ModifyPropertyAction<Color>("Change color", v => obj.StrokeColor = v, old, c));
+                    var endColor = sel.StrokeColor;
+                    var captured = sel;
+                    sel.StrokeColor = objStartColor; // reset so Execute applies cleanly
+                    _session.UndoRedo.Execute(new ModifyPropertyAction<Color>(
+                        "Change color", v => captured.StrokeColor = v, objStartColor, endColor));
+                    _canvas.Invalidate();
                 }
-                _canvas.Invalidate(); _toolbar.Invalidate();
             };
             picker.Show(this);
         };
@@ -265,7 +301,22 @@ class ScreenshotEditorForm : Form
         if (e.Control && e.Shift && e.KeyCode == Keys.C) { DoCopyPath(); e.Handled = true; return; }
         if (e.Control && e.Shift && e.KeyCode == Keys.P) { DoCopyPathText(); e.Handled = true; return; }
         if (e.Control && e.Shift && e.KeyCode == Keys.K) { DoCompare(); e.Handled = true; return; }
-        if (e.Control && e.KeyCode == Keys.C) { DoCopy(); e.Handled = true; return; }
+        if (e.Control && e.KeyCode == Keys.C)
+        {
+            // If a layer is selected, copy it into the internal layer clipboard
+            // (no whole-image copy, no hide). Otherwise fall back to copying
+            // the flattened image to the system clipboard.
+            if (_session.SelectedObject != null)
+            {
+                LayerClipboard.Set(_session.SelectedObject);
+            }
+            else
+            {
+                DoCopy();
+            }
+            e.Handled = true; return;
+        }
+        if (e.Control && e.KeyCode == Keys.V) { PasteLayer(offsetX: 20, offsetY: 20); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.Z) { _session.UndoRedo.Undo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); e.Handled = true; return; }
         if (e.Control && e.KeyCode == Keys.Y) { _session.UndoRedo.Redo(); _canvasContainer.SyncCanvasSize(); _canvas.Invalidate(); e.Handled = true; return; }
         // Zoom shortcuts (work with both =/+ on top row and numpad +)
@@ -332,8 +383,32 @@ class ScreenshotEditorForm : Form
         base.OnKeyDown(e);
     }
 
+    /// <summary>If the canvas is bigger than the container's visible area,
+    /// best-fit the canvas to the container. Skips work when the container
+    /// has not laid out yet (ClientSize ≤ 0) — call this via BeginInvoke
+    /// after Shown / canvas swap so layout has settled and the resulting
+    /// fit ratio is meaningful (otherwise we'd land at the 10% min-zoom).</summary>
+    private void FitCanvasIfOverflow()
+    {
+        if (_canvas == null || _canvasContainer == null) return;
+        var avail = _canvasContainer.ClientSize;
+        if (avail.Width <= 1 || avail.Height <= 1) return;
+
+        var logical = _canvas.LogicalSize;
+        if (logical.Width <= 0 || logical.Height <= 0) return;
+
+        // Only adjust when the canvas at current zoom doesn't fit the viewport.
+        if (_canvas.Width <= avail.Width && _canvas.Height <= avail.Height) return;
+
+        _canvas.FitToContainer(avail);
+        _canvasContainer.CenterCanvas();
+    }
+
     private void ScheduleAutoSave()
     {
+        // Any session change (edit, undo/redo, canvas mutation) means the
+        // capture is no longer "fresh & untouched" — Ctrl+C should stop hiding.
+        _isFreshUneditedCapture = false;
         if (_autoSaveTimer == null) return;
         _autoSaveTimer.Stop();
         _autoSaveTimer.Start();
@@ -360,7 +435,7 @@ class ScreenshotEditorForm : Form
             {
                 Filter = "PNG Image|*.png|JPEG Image|*.jpg|Bitmap|*.bmp",
                 DefaultExt = "png",
-                FileName = $"screenshot_{DateTime.Now:yyyy-MM-dd_HHmmss}",
+                FileName = ScreenshotPaths.NewScreenshotBaseName(),
                 InitialDirectory = ScreenshotPaths.ScreenshotsDir,
             };
             if (dlg.ShowDialog(this) == DialogResult.OK)
@@ -379,9 +454,46 @@ class ScreenshotEditorForm : Form
         {
             _canvas.CommitTextEdit();
             ScreenshotExporter.CopyToClipboard(_session);
-            WindowState = FormWindowState.Minimized;
+            // Only auto-hide for the legacy quick-capture flow: a brand-new
+            // capture that the user hasn't edited. Once they edit, or if they
+            // opened an existing screenshot, Ctrl+C should leave the window up.
+            if (_isFreshUneditedCapture)
+                WindowState = FormWindowState.Minimized;
         }
         catch (Exception ex) { PluginLog.Warn($"Screenshot Copy failed: {ex.Message}"); }
+    }
+
+    /// <summary>Paste a clone of the layer-clipboard entry into the current
+    /// session, offset so it doesn't fully overlap the source. Selects the
+    /// pasted layer so it can immediately be moved.</summary>
+    public void PasteLayer(float offsetX, float offsetY)
+    {
+        var clone = LayerClipboard.Take();
+        if (clone == null) return;
+        clone.Move(offsetX, offsetY);
+        FinishPaste(clone);
+    }
+
+    /// <summary>Paste a clone of the layer-clipboard entry so its bounding
+    /// box's top-left lands at the given logical canvas point (used when
+    /// pasting via the right-click context menu so the layer appears where
+    /// the user clicked).</summary>
+    public void PasteLayerAt(PointF logicalPt)
+    {
+        var clone = LayerClipboard.Take();
+        if (clone == null) return;
+        var b = clone.GetBounds();
+        clone.Move(logicalPt.X - b.X, logicalPt.Y - b.Y);
+        FinishPaste(clone);
+    }
+
+    private void FinishPaste(AnnotationObject clone)
+    {
+        _session.DeselectAll();
+        _session.AddAnnotation(clone);
+        clone.IsSelected = true;
+        _session.SelectedObject = clone;
+        _canvas.Invalidate();
     }
 
     private void DoCopyPath()
@@ -583,7 +695,7 @@ class ScreenshotEditorForm : Form
     {
         try
         {
-            string editId = $"screenshot_{DateTime.Now:yyyy-MM-dd_HHmmss}";
+            string editId = ScreenshotPaths.NewScreenshotBaseName();
             session.EditId = editId;
             string dir = session.EditDir;
             Directory.CreateDirectory(dir);
@@ -616,7 +728,9 @@ class ScreenshotEditorForm : Form
             return;
         }
         LoadSession(fileEditId, filePath);
+        _isFreshUneditedCapture = false;
         BringToForeground();
+        BeginInvoke(new Action(FitCanvasIfOverflow));
     }
 
     /// <summary>Load a new capture into the editor, reusing the form.</summary>
@@ -625,7 +739,9 @@ class ScreenshotEditorForm : Form
         var tempSession = new EditorSession(capturedImage);
         InitEditFolder(tempSession, capturedImage);
         LoadSession(tempSession.EditId, GetLinkedSavePathFor(tempSession.EditId));
+        _isFreshUneditedCapture = true;
         BringToForeground();
+        BeginInvoke(new Action(FitCanvasIfOverflow));
     }
 
     public void BringToForeground()
@@ -646,7 +762,84 @@ class ScreenshotEditorForm : Form
     {
         string fileEditId = Path.GetFileNameWithoutExtension(filePath);
         if (fileEditId.Equals(_session.EditId, StringComparison.OrdinalIgnoreCase)) return;
+        RecentOpenedStore.MarkOpened(filePath);
         LoadSession(fileEditId, filePath);
+    }
+
+    /// <summary>
+    /// File-picker entry point invoked by the "Open…" button in the library
+    /// panel. Files under <see cref="ScreenshotPaths.ScreenshotsDir"/> are
+    /// opened directly; files from elsewhere are imported (re-encoded as PNG
+    /// into the library with a fresh library-style name and a matching _edits
+    /// folder) before opening, so the rest of the editor — auto-save, panel
+    /// list, compare — can treat them as native library entries.
+    /// </summary>
+    private void HandleOpenFileDialog()
+    {
+        using var dlg = new OpenFileDialog
+        {
+            Title = "Open image",
+            Filter = "Images (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp|All files (*.*)|*.*",
+            InitialDirectory = ScreenshotPaths.ScreenshotsDir,
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        string picked;
+        try
+        {
+            picked = IsUnderScreenshotsDir(dlg.FileName)
+                ? dlg.FileName
+                : ImportExternalImage(dlg.FileName);
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Error("Open image failed", ex);
+            MessageBox.Show(this, $"Failed to open: {ex.Message}", "Open image",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        RecentOpenedStore.MarkOpened(picked);
+        _recentPanel.Reload();
+
+        string fileEditId = Path.GetFileNameWithoutExtension(picked);
+        if (fileEditId.Equals(_session.EditId, StringComparison.OrdinalIgnoreCase)) return;
+        LoadSession(fileEditId, picked);
+    }
+
+    private static bool IsUnderScreenshotsDir(string filePath)
+    {
+        try
+        {
+            string dir = Path.GetFullPath(ScreenshotPaths.ScreenshotsDir);
+            string full = Path.GetFullPath(filePath);
+            return full.StartsWith(dir, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Copy/re-encode an external image into the screenshots folder
+    /// with a fresh library name, seed its _edits/base.png, and return the
+    /// new library path.</summary>
+    private static string ImportExternalImage(string sourcePath)
+    {
+        string newId = ScreenshotPaths.NewScreenshotBaseName();
+        Directory.CreateDirectory(ScreenshotPaths.ScreenshotsDir);
+        string destPath = Path.Combine(ScreenshotPaths.ScreenshotsDir, newId + ".png");
+
+        using (var stream = File.OpenRead(sourcePath))
+        using (var bmp = new Bitmap(stream))
+        {
+            bmp.Save(destPath, System.Drawing.Imaging.ImageFormat.Png);
+
+            string editDir = Path.Combine(ScreenshotPaths.ScreenshotsEditsDir, newId);
+            Directory.CreateDirectory(editDir);
+            bmp.Save(Path.Combine(editDir, "base.png"), System.Drawing.Imaging.ImageFormat.Png);
+        }
+
+        return destPath;
     }
 
     private void LoadSession(string fileEditId, string filePath)
@@ -697,6 +890,7 @@ class ScreenshotEditorForm : Form
             _session.UndoRedo.StateChanged += ScheduleAutoSave;
             _canvas.CanvasChanged += ScheduleAutoSave;
             _canvas.ToolAutoSwitched += () => _toolbar.Invalidate();
+            _canvas.PasteLayerRequested += PasteLayerAt;
 
             _toolbar.Session = _session;
             _toolbar.Invalidate();

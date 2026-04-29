@@ -14,6 +14,7 @@ namespace ProdToy.Plugins.Screenshot;
 class ColorPickerPopup : Form
 {
     private Color _selectedColor;
+    private readonly Color _originalColor;
     private float _hue, _sat, _bri;
 
     // Layout
@@ -98,8 +99,9 @@ class ColorPickerPopup : Form
         _spectrumRect = new Rectangle(Pad, Pad, SpectrumSize, SpectrumSize);
         _hueBarRect = new Rectangle(Pad + SpectrumSize + 8, Pad, HueBarWidth, SpectrumSize);
 
-        // Set initial color
+        // Set initial color and remember it so Cancel can revert.
         _selectedColor = initialColor;
+        _originalColor = initialColor;
         ColorToHSB(initialColor, out _hue, out _sat, out _bri);
 
         BuildHueBarBitmap();
@@ -161,39 +163,32 @@ class ColorPickerPopup : Form
         Controls.Add(_blueBox);
         fieldY += 38;
 
-        // OK / Cancel buttons
-        var okBtn = new Button
-        {
-            Text = "OK",
-            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-            Location = new Point(rightX, fieldY),
-            Size = new Size(rightW / 2 - 2, 28),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(45, 120, 210),
-            ForeColor = Color.White,
-            Cursor = Cursors.Hand,
-        };
-        okBtn.FlatAppearance.BorderSize = 0;
-        okBtn.Click += (_, _) =>
-        {
-            ColorSelected?.Invoke(_selectedColor);
-            Close();
-        };
-        Controls.Add(okBtn);
-
+        // Cancel-only button, pinned to the bottom-right of the popup so it
+        // sits below the swatch grid instead of floating in the middle of
+        // the right-side input column. Color changes are committed live via
+        // ColorSelected as the user drags / types / clicks swatches; closing
+        // (Escape, click-outside, Enter) keeps whatever the live value is.
+        // Cancel is the explicit revert: re-fires ColorSelected with the
+        // original color so the caller restores its starting value.
+        const int btnWidth = 80;
+        const int btnHeight = 28;
         var cancelBtn = new Button
         {
             Text = "Cancel",
             Font = new Font("Segoe UI", 9f),
-            Location = new Point(rightX + rightW / 2 + 2, fieldY),
-            Size = new Size(rightW / 2 - 2, 28),
+            Location = new Point(PopupWidth - Pad - btnWidth, PopupHeight - Pad - btnHeight),
+            Size = new Size(btnWidth, btnHeight),
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.FromArgb(55, 55, 60),
             ForeColor = Color.FromArgb(180, 180, 190),
             Cursor = Cursors.Hand,
         };
         cancelBtn.FlatAppearance.BorderSize = 0;
-        cancelBtn.Click += (_, _) => Close();
+        cancelBtn.Click += (_, _) =>
+        {
+            ColorSelected?.Invoke(_originalColor);
+            Close();
+        };
         Controls.Add(cancelBtn);
     }
 
@@ -350,12 +345,9 @@ class ColorPickerPopup : Form
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        if (e.KeyCode == Keys.Escape) Close();
-        if (e.KeyCode == Keys.Enter)
-        {
-            ColorSelected?.Invoke(_selectedColor);
-            Close();
-        }
+        // Enter and Escape both just close — the live-applied color is kept.
+        // Cancel is the only path that reverts to the original.
+        if (e.KeyCode == Keys.Escape || e.KeyCode == Keys.Enter) Close();
     }
 
     // --- Update methods ---
@@ -368,6 +360,7 @@ class ColorPickerPopup : Form
         UpdateFieldsFromColor();
         _previewPanel.BackColor = _selectedColor;
         Invalidate();
+        ColorSelected?.Invoke(_selectedColor);
     }
 
     private void UpdateFromHueBar(int mouseY)
@@ -378,6 +371,7 @@ class ColorPickerPopup : Form
         UpdateFieldsFromColor();
         _previewPanel.BackColor = _selectedColor;
         Invalidate();
+        ColorSelected?.Invoke(_selectedColor);
     }
 
     private void SetColor(Color c)
@@ -388,6 +382,7 @@ class ColorPickerPopup : Form
         UpdateFieldsFromColor();
         _previewPanel.BackColor = c;
         Invalidate();
+        ColorSelected?.Invoke(_selectedColor);
     }
 
     private void UpdateFieldsFromColor()
@@ -438,6 +433,7 @@ class ColorPickerPopup : Form
         _blueBox.Text = c.B.ToString();
         _updatingFields = false;
         Invalidate();
+        ColorSelected?.Invoke(_selectedColor);
     }
 
     // --- Bitmap generation ---
