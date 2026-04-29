@@ -19,11 +19,19 @@ static class AlarmScheduler
         Stop();
         _getMissedGraceMinutes = getMissedGraceMinutes;
         _tickCount = 0;
-        // First tick deferred to 20s to let host startup settle (tray icon, plugin
-        // loads, WebView2 prewarm in the Claude plugin, etc.). Firing at 5s used
-        // to paint the popup while the UI thread was still busy, producing the
-        // "Alarm (Not Responding)" window seen right after an update.
-        _timer = new System.Threading.Timer(_ => Tick(), null, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(30));
+        // 1-second tick. Cheap (a few microseconds per tick scanning a
+        // list of alarms in memory) and gives sub-second fire latency
+        // for every alarm. The minute-precision time match plus
+        // _firedKeys dedupe ensures each alarm fires once per scheduled
+        // minute despite the high tick rate.
+        _timer = new System.Threading.Timer(_ => Tick(), null,
+            TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+
+        // Subscribe to alarm-set changes so add/edit/delete triggers an
+        // immediate tick. Without this, an alarm saved for 30 seconds in
+        // the future could miss its first scheduled fire if we happened
+        // to be between ticks at the moment.
+        AlarmStore.Changed += OnAlarmsChanged;
 
         // Re-check immediately when the machine resumes from sleep — without
         // this, an alarm scheduled while suspended only gets recovered if the
@@ -39,7 +47,16 @@ static class AlarmScheduler
         try { SystemEvents.PowerModeChanged += _powerHandler; }
         catch (Exception ex) { PluginLog.Warn($"PowerModeChanged subscription failed: {ex.Message}"); }
 
-        PluginLog.Info("AlarmScheduler started (interval=30s, missed-grace=" + getMissedGraceMinutes() + "min)");
+        PluginLog.Info("AlarmScheduler started (1s ticks, missed-grace=" + getMissedGraceMinutes() + "min)");
+    }
+
+    /// <summary>AlarmStore.Changed handler — runs an immediate tick so a
+    /// freshly-saved alarm whose schedule is right now (or moments away)
+    /// fires without waiting for the next periodic tick.</summary>
+    private static void OnAlarmsChanged()
+    {
+        try { Tick(); }
+        catch (Exception ex) { PluginLog.Error("Immediate tick after alarm change failed", ex); }
     }
 
     public static void Stop()
@@ -52,6 +69,7 @@ static class AlarmScheduler
             catch { }
             _powerHandler = null;
         }
+        try { AlarmStore.Changed -= OnAlarmsChanged; } catch { }
         lock (_lock) { _firedKeys.Clear(); }
         PluginLog.Info("AlarmScheduler stopped");
     }
@@ -84,7 +102,8 @@ static class AlarmScheduler
 
             if (alarms.Count == 0)
             {
-                if (_tickCount % 20 == 0) // log roughly every 10 minutes when idle
+                // 1-second ticks → log every 600 ticks ≈ 10 minutes when idle.
+                if (_tickCount % 600 == 0)
                     PluginLog.Info($"AlarmScheduler tick: no alarms (tickCount={_tickCount})");
                 _tickCount++;
                 return;
@@ -95,7 +114,7 @@ static class AlarmScheduler
 
             if (activeCount == 0)
             {
-                if (_tickCount % 20 == 0)
+                if (_tickCount % 600 == 0)
                     PluginLog.Info($"AlarmScheduler tick: {alarms.Count} alarms loaded but none Active");
                 _tickCount++;
                 return;
@@ -159,14 +178,12 @@ static class AlarmScheduler
             int recoveredCount = CheckMissedAlarms(now, alarms);
 
             _tickCount++;
-            if (_tickCount % 10 == 0)
+            // 1-second ticks: prune the fire-key set every 60 ticks (~1 min)
+            // and emit a heartbeat info log every 300 ticks (~5 min) when
+            // active alarms are present but nothing fired this tick.
+            if (_tickCount % 60 == 0)
                 PruneFiredKeys(now);
-
-            // Quiet info-level summary every ~5 minutes (10 ticks at 30s)
-            // when we have active alarms but nothing fired this tick — gives
-            // the user proof in the log that the scheduler is alive without
-            // spamming a line every 30 seconds.
-            if (firedCount == 0 && recoveredCount == 0 && _tickCount % 10 == 0)
+            if (firedCount == 0 && recoveredCount == 0 && _tickCount % 300 == 0)
                 PluginLog.Info($"AlarmScheduler tick: {activeCount} active alarm(s), no fires this tick (now {now:HH:mm:ss})");
         }
         catch (Exception ex)
