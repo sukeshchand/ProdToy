@@ -362,7 +362,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
 
     // IPluginPopup plumbing: currently only used for registration; the plugin
     // drives display via the richer ShowPopup(title, message, type, ...) overload.
-    void IPluginPopup.Show() => ShowPopup(_lastMessage.Length > 0 ? "Claude" : "ProdToy", _lastMessage, _lastType);
+    void IPluginPopup.Show() => ShowPopup(_lastMessage.Length > 0 ? "Claude" : "ProdToy", _lastMessage, _lastType, bypassFilter: true);
     public new void Hide() => base.Hide();
     void IPluginPopup.BringToFront() { if (Visible) base.BringToFront(); }
 
@@ -422,7 +422,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
     /// notifications are disabled, snoozed, or the user chose tray-balloon mode.
     /// The Claude plugin's handler calls this directly; there is no generic
     /// notification facility any more.</summary>
-    public void ShowPopup(string title, string message, string type, string sessionId = "", string cwd = "", string machineName = "")
+    public void ShowPopup(string title, string message, string type, string sessionId = "", string cwd = "", string machineName = "", bool bypassFilter = false)
     {
         _lastMessage = message;
         _lastType = type;
@@ -436,8 +436,11 @@ sealed class ChatPopupForm : Form, IPluginPopup
         if (IsSnoozed) return;
 
         // Suppress messages matching the user-configured regex (default
-        // catches the bare "Claude is waiting for your input" pings).
-        if (MatchesSuppressRegex(message, settings.SuppressMessageRegex)) return;
+        // catches the bare "Claude is waiting for your input" pings) — but
+        // only for live incoming notifications. When the user explicitly
+        // clicks "Show Last Notification" we always honor the request, even
+        // if the saved message would otherwise be filtered.
+        if (!bypassFilter && MatchesSuppressRegex(message, settings.SuppressMessageRegex)) return;
 
         string mode = settings.NotificationMode;
         bool wantPopup = mode is "Popup" or "Popup + Windows";

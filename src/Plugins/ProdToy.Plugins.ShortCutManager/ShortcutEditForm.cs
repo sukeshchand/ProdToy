@@ -23,6 +23,14 @@ class ShortcutEditForm : Form
     private readonly TextBox _sendKeysBox;
     private readonly NumericUpDown _sendKeysDelayBox;
     private readonly ToggleSwitch _adminToggle;
+    private readonly ToggleSwitch _explorerMenuToggle;
+    private readonly ToggleSwitch _desktopShortcutToggle;
+    private readonly TextBox _desktopShortcutNameBox;
+    // True until the user manually edits the desktop name. While true, the
+    // box is auto-populated from "<dir-leaf> <profile-display>" whenever the
+    // working directory or profile changes — typing into the box flips this
+    // off so we don't trample a custom name.
+    private bool _desktopNameAutoSync = true;
     private readonly TextBox _notesBox;
     private readonly Label _validationLabel;
     private readonly RoundedButton _editProfileBtn;
@@ -267,6 +275,18 @@ class ShortcutEditForm : Form
                 _tabGroupBox.Text = derived;
                 lastAutoTabGroup = derived;
             }
+            if (_desktopNameAutoSync)
+            {
+                _desktopShortcutNameBox.Text = ComputeDefaultDesktopName(_dirBox.Text, _launchProfileCombo.SelectedIndex);
+            }
+        };
+
+        // Profile change should also refresh the auto-suggested desktop name
+        // (only while the user hasn't customized it).
+        _launchProfileCombo.SelectedIndexChanged += (_, _) =>
+        {
+            if (_desktopNameAutoSync)
+                _desktopShortcutNameBox.Text = ComputeDefaultDesktopName(_dirBox.Text, _launchProfileCombo.SelectedIndex);
         };
 
         void RefreshWindowTargetEnabled()
@@ -301,10 +321,48 @@ class ShortcutEditForm : Form
 
         // Optional keystrokes fired with SendKeys after the launch completes.
         // Useful for apps that rewrite the tab title on startup — you can bind
-        // your preferred rename shortcut and replay it here.
+        // your preferred rename shortcut and replay it here. SendKeys textbox
+        // and the wait-before-sending numeric live on the same row so the
+        // form doesn't waste a full row on a small numeric input.
         AddLabel("Send keys after launch", pad, y);
-        _sendKeysBox = MakeTextBox(inputX, y, inputW);
+        const int delayBoxWidth = 100;
+        const int delayLabelGap = 8;
+
+        // Delay label sits at the right end of the input column; measured
+        // first so we can reserve its width when sizing the textbox.
+        var delayCaption = new Label
+        {
+            Text = "Wait before sending (ms)",
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = theme.TextPrimary,
+            AutoSize = true,
+            BackColor = Color.Transparent,
+            Location = new Point(0, y + 4),
+        };
+        Controls.Add(delayCaption);
+        int delayCaptionWidth = delayCaption.PreferredWidth;
+        int delayCaptionX = inputX + inputW - delayBoxWidth - delayLabelGap - delayCaptionWidth;
+        delayCaption.Left = delayCaptionX;
+
+        int sendKeysWidth = delayCaptionX - inputX - delayLabelGap;
+        if (sendKeysWidth < 120) sendKeysWidth = 120; // sanity floor for narrow forms
+        _sendKeysBox = MakeTextBox(inputX, y, sendKeysWidth);
         _sendKeysBox.Text = existing?.PostLaunchSendKeys ?? "";
+
+        _sendKeysDelayBox = new NumericUpDown
+        {
+            Font = new Font("Segoe UI", 10f),
+            BackColor = theme.BgHeader,
+            ForeColor = theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            Minimum = 100,
+            Maximum = 60_000,
+            Increment = 500,
+            Value = Math.Clamp(existing?.PostLaunchDelayMs ?? 3000, 100, 60_000),
+            Size = new Size(delayBoxWidth, 26),
+            Location = new Point(inputX + inputW - delayBoxWidth, y),
+        };
+        Controls.Add(_sendKeysDelayBox);
         y += 30;
 
         var sendKeysHint = new Label
@@ -317,24 +375,7 @@ class ShortcutEditForm : Form
             BackColor = Color.Transparent,
         };
         Controls.Add(sendKeysHint);
-        y += 22;
-
-        AddLabel("Delay (ms)", pad, y);
-        _sendKeysDelayBox = new NumericUpDown
-        {
-            Font = new Font("Segoe UI", 10f),
-            BackColor = theme.BgHeader,
-            ForeColor = theme.TextPrimary,
-            BorderStyle = BorderStyle.FixedSingle,
-            Minimum = 100,
-            Maximum = 60_000,
-            Increment = 500,
-            Value = Math.Clamp(existing?.PostLaunchDelayMs ?? 3000, 100, 60_000),
-            Size = new Size(100, 26),
-            Location = new Point(inputX, y),
-        };
-        Controls.Add(_sendKeysDelayBox);
-        y += 34;
+        y += 26;
 
         AddLabel("WT profile", pad, y);
         _profileCombo = new ComboBox
@@ -423,6 +464,93 @@ class ShortcutEditForm : Form
         };
         Controls.Add(adminHint);
         y += 38;
+
+        // Explorer right-click integration toggle
+        var explorerCaption = new Label
+        {
+            Text = "Show in Explorer right-click",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            AutoSize = true,
+            Location = new Point(pad, y + 4),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(explorerCaption);
+        _explorerMenuToggle = new ToggleSwitch(theme)
+        {
+            Checked = existing?.ShowInExplorerContextMenu ?? false,
+            Location = new Point(inputX, y + 2),
+        };
+        Controls.Add(_explorerMenuToggle);
+        var explorerHint = new Label
+        {
+            Text = "Adds a “Run …” menu item when right-clicking inside this working directory",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(inputX + _explorerMenuToggle.Width + 12, y + 6),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(explorerHint);
+        y += 38;
+
+        // Desktop shortcut toggle — creates / removes a .lnk on the user's
+        // desktop that launches this shortcut.
+        var desktopCaption = new Label
+        {
+            Text = "Add shortcut to desktop",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            AutoSize = true,
+            Location = new Point(pad, y + 4),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(desktopCaption);
+        _desktopShortcutToggle = new ToggleSwitch(theme)
+        {
+            Checked = existing?.AddToDesktop ?? false,
+            Location = new Point(inputX, y + 2),
+        };
+        Controls.Add(_desktopShortcutToggle);
+        var desktopHint = new Label
+        {
+            Text = "Creates a desktop .lnk that triggers the same launch action",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(inputX + _desktopShortcutToggle.Width + 12, y + 6),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(desktopHint);
+        y += 32;
+
+        // Desktop shortcut name — what the .lnk's filename will be (without
+        // .lnk). Defaults to "<directory-leaf> <profile-display>" while the
+        // user hasn't manually edited it; mandatory when the toggle is on.
+        AddLabel("Desktop name", pad, y);
+        _desktopShortcutNameBox = MakeTextBox(inputX, y, inputW);
+        if (existing != null && !string.IsNullOrEmpty(existing.DesktopShortcutName))
+        {
+            _desktopShortcutNameBox.Text = existing.DesktopShortcutName;
+            _desktopNameAutoSync = false; // existing custom value — don't trample
+        }
+        else
+        {
+            _desktopShortcutNameBox.Text = ComputeDefaultDesktopName(
+                existing?.WorkingDirectory ?? "",
+                _launchProfileCombo.SelectedIndex);
+        }
+        _desktopShortcutNameBox.TextChanged += (_, _) =>
+        {
+            // Any direct user edit pins the value. We detect "real" edits
+            // by comparing against the auto-suggested string; the
+            // auto-fill code below re-checks _desktopNameAutoSync before
+            // overwriting so no infinite loop.
+            string suggested = ComputeDefaultDesktopName(_dirBox.Text, _launchProfileCombo.SelectedIndex);
+            if (!string.Equals(_desktopShortcutNameBox.Text, suggested, StringComparison.Ordinal))
+                _desktopNameAutoSync = false;
+        };
+        y += 34;
 
         y = AddSection("NOTES", y);
 
@@ -583,6 +711,12 @@ class ShortcutEditForm : Form
             _validationLabel.Text = "Working directory doesn't exist.";
             return;
         }
+        if (_desktopShortcutToggle.Checked
+            && string.IsNullOrWhiteSpace(_desktopShortcutNameBox.Text))
+        {
+            _validationLabel.Text = "Desktop name is required when 'Add shortcut to desktop' is on.";
+            return;
+        }
 
         var launcher = _launcherCombo.SelectedIndex == 1
             ? LauncherMode.CmdWindow
@@ -608,6 +742,9 @@ class ShortcutEditForm : Form
             PostLaunchSendKeys = _sendKeysBox.Text,
             PostLaunchDelayMs = (int)_sendKeysDelayBox.Value,
             RequireAdmin = _adminToggle.Checked,
+            ShowInExplorerContextMenu = _explorerMenuToggle.Checked,
+            AddToDesktop = _desktopShortcutToggle.Checked,
+            DesktopShortcutName = _desktopShortcutNameBox.Text.Trim(),
             Notes = _notesBox.Text,
             FolderPath = _folderPath,
             CreatedAt = _existing?.CreatedAt ?? DateTime.Now,
@@ -697,6 +834,24 @@ class ShortcutEditForm : Form
         if (string.IsNullOrWhiteSpace(leaf)) return "";
         var parts = leaf.Split(new[] { ' ', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries);
         return parts.Length > 0 ? parts[0] : leaf;
+    }
+
+    /// <summary>Default desktop-shortcut filename: directory leaf name +
+    /// profile display name (e.g. <c>"Lindex Claude CLI"</c>). Either part
+    /// missing → that part is omitted; both missing → empty string.</summary>
+    private static string ComputeDefaultDesktopName(string? workingDirectory, int profileIndex)
+    {
+        string leaf = string.IsNullOrWhiteSpace(workingDirectory)
+            ? ""
+            : Path.GetFileName(workingDirectory.TrimEnd('/', '\\')) ?? "";
+
+        string profileName = "";
+        if (profileIndex >= 0 && profileIndex < LaunchProfiles.All.Length)
+            profileName = LaunchProfiles.All[profileIndex].DisplayName ?? "";
+
+        if (string.IsNullOrWhiteSpace(leaf)) return profileName.Trim();
+        if (string.IsNullOrWhiteSpace(profileName)) return leaf.Trim();
+        return $"{leaf.Trim()} {profileName.Trim()}";
     }
 
     private void RebuildArgsChips(FlowLayoutPanel panel, LaunchProfile profile, PluginTheme theme)

@@ -184,6 +184,9 @@ static class SessionSerializer
                 data.PositionY = txt.Position.Y;
                 data.FontSize = txt.FontSize;
                 data.Bold = txt.Bold;
+                data.Italic = txt.Italic;
+                data.Underline = txt.Underline;
+                data.FontFamily = txt.FontFamily;
                 break;
             case ImageObject imgObj:
                 data.PositionX = imgObj.Position.X;
@@ -264,6 +267,9 @@ static class SessionSerializer
                 Position = new PointF(data.PositionX, data.PositionY),
                 FontSize = data.FontSize > 0 ? data.FontSize : 16f,
                 Bold = data.Bold,
+                Italic = data.Italic,
+                Underline = data.Underline,
+                FontFamily = string.IsNullOrEmpty(data.FontFamily) ? "Segoe UI" : data.FontFamily,
             },
             "ImageObject" when !string.IsNullOrEmpty(data.ImageFile) && File.Exists(data.ImageFile) =>
                 LoadImageObject(data),
@@ -594,6 +600,9 @@ class AnnotationData
     [JsonPropertyName("positionY")] public float PositionY { get; set; }
     [JsonPropertyName("fontSize")] public float FontSize { get; set; }
     [JsonPropertyName("bold")] public bool Bold { get; set; }
+    [JsonPropertyName("italic")] public bool Italic { get; set; }
+    [JsonPropertyName("underline")] public bool Underline { get; set; }
+    [JsonPropertyName("fontFamily")] public string? FontFamily { get; set; }
 
     // Image object
     [JsonPropertyName("imageFile")] public string? ImageFile { get; set; }

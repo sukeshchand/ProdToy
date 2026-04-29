@@ -195,16 +195,35 @@ class ScreenshotEditorForm : Form
         {
             var pt = _toolbar.PointToScreen(new Point(_toolbar.Width / 2 - 170, _toolbar.Height));
             var picker = new ColorPickerPopup(_session.CurrentColor, pt);
+
+            // ColorPickerPopup now fires ColorSelected on every drag/type/swatch
+            // change (and once with the original on Cancel). We mutate
+            // CurrentColor + the selected object's color live for instant
+            // visual feedback, but defer the undo entry to popup-close so the
+            // undo stack gets a single "Change color" entry per open, not
+            // hundreds. Cancel closes with the original re-applied, leaving
+            // nothing to undo.
+            var sel = _session.SelectedObject;
+            Color objStartColor = sel?.StrokeColor ?? Color.Empty;
+
             picker.ColorSelected += c =>
             {
                 _session.CurrentColor = c;
-                if (_session.SelectedObject != null)
+                if (sel != null) sel.StrokeColor = c;
+                _canvas.Invalidate();
+                _toolbar.Invalidate();
+            };
+            picker.FormClosed += (_, _) =>
+            {
+                if (sel != null && sel.StrokeColor != objStartColor)
                 {
-                    var obj = _session.SelectedObject;
-                    var old = obj.StrokeColor;
-                    _session.UndoRedo.Execute(new ModifyPropertyAction<Color>("Change color", v => obj.StrokeColor = v, old, c));
+                    var endColor = sel.StrokeColor;
+                    var captured = sel;
+                    sel.StrokeColor = objStartColor; // reset so Execute applies cleanly
+                    _session.UndoRedo.Execute(new ModifyPropertyAction<Color>(
+                        "Change color", v => captured.StrokeColor = v, objStartColor, endColor));
+                    _canvas.Invalidate();
                 }
-                _canvas.Invalidate(); _toolbar.Invalidate();
             };
             picker.Show(this);
         };

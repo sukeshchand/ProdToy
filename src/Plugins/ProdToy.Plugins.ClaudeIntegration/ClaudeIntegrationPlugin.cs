@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.409",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.410",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -344,7 +344,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
             var latest = _chatHistory.GetLatest();
             if (latest != null)
             {
-                _chatPopup!.ShowPopup(latest.Title, latest.Message, latest.Type, latest.SessionId, latest.Cwd, latest.MachineName);
+                _chatPopup!.ShowPopup(latest.Title, latest.Message, latest.Type, latest.SessionId, latest.Cwd, latest.MachineName, bypassFilter: true);
             }
             else
             {

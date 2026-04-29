@@ -49,6 +49,7 @@ static class Program
         string? envelopeCommand = null;
         string? envelopePayload = null;
         string? envelopePayloadFile = null;
+        string? cmCwd = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -67,7 +68,23 @@ static class Program
                     // Reserved for future multi-plugin routing; currently informational.
                     _ = args[++i];
                     break;
+                case "--cm-cwd" when i + 1 < args.Length:
+                    // Helper for shell context-menu invocations: Windows
+                    // expands "%V" (the active folder) cleanly as a CLI arg
+                    // but it can't be embedded inside a JSON literal because
+                    // a path's backslashes break JSON escaping. We accept it
+                    // as a separate arg and assemble the payload here.
+                    cmCwd = args[++i];
+                    break;
             }
+        }
+
+        // Auto-build payload from --cm-cwd when no explicit payload was
+        // given. The result is the equivalent of --payload {"cwd":"..."}.
+        if (envelopePayload == null && envelopePayloadFile == null && cmCwd != null)
+        {
+            string escaped = cmCwd.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            envelopePayload = "{\"cwd\":\"" + escaped + "\"}";
         }
 
         if (string.IsNullOrEmpty(envelopeCommand))
