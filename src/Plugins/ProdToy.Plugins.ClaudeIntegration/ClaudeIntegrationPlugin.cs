@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.407",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.409",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -591,6 +591,42 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
                 var s = _context.LoadSettings<ClaudePluginSettings>();
                 _context.SaveSettings(s with { HookUserPromptEnabled = checked_ });
             });
+
+        // Suppress-message regex. Matched (case-sensitive .NET regex) against
+        // the incoming notification message; if it matches, no popup/balloon
+        // is shown. Saved on every keystroke — invalid patterns are tolerated
+        // at evaluation time (a bad pattern just means nothing is suppressed).
+        var suppressLabel = new Label
+        {
+            Text = "Do not show message if the message is:",
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = theme.TextPrimary,
+            AutoSize = true,
+            Location = new Point(pad + 8, y + 4),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(suppressLabel);
+        notifSubControls.Add(suppressLabel);
+        y += 22;
+
+        var suppressBox = new TextBox
+        {
+            Font = new Font("Consolas", 9f),
+            BackColor = theme.BgHeader,
+            ForeColor = theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            Size = new Size(contentWidth - (pad + 8) - pad, 24),
+            Location = new Point(pad + 8, y),
+            Text = settings.SuppressMessageRegex,
+        };
+        suppressBox.TextChanged += (_, _) =>
+        {
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { SuppressMessageRegex = suppressBox.Text });
+        };
+        panel.Controls.Add(suppressBox);
+        notifSubControls.Add(suppressBox);
+        y += 30;
 
         y += 10;
 

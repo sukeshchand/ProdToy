@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using ProdToy.Sdk;
@@ -384,6 +385,23 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _context.SaveSettings(s with { SnoozeUntil = until });
     }
 
+    /// <summary>True when the user-configured suppress regex matches the
+    /// message. Empty pattern → never matches. Invalid pattern → never matches
+    /// (we don't want a typo in settings to silently suppress everything).</summary>
+    private static bool MatchesSuppressRegex(string message, string pattern)
+    {
+        if (string.IsNullOrEmpty(pattern) || message == null) return false;
+        try
+        {
+            return Regex.IsMatch(message, pattern);
+        }
+        catch (ArgumentException)
+        {
+            // Bad regex — treat as no filter rather than blocking everything.
+            return false;
+        }
+    }
+
     public void SetShowQuotes(bool show)
     {
         _showQuotes = show;
@@ -416,6 +434,10 @@ sealed class ChatPopupForm : Form, IPluginPopup
         var settings = _context.LoadSettings<ClaudePluginSettings>();
         if (!settings.NotificationsEnabled) return;
         if (IsSnoozed) return;
+
+        // Suppress messages matching the user-configured regex (default
+        // catches the bare "Claude is waiting for your input" pings).
+        if (MatchesSuppressRegex(message, settings.SuppressMessageRegex)) return;
 
         string mode = settings.NotificationMode;
         bool wantPopup = mode is "Popup" or "Popup + Windows";

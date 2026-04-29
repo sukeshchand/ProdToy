@@ -76,6 +76,11 @@ class ScreenshotCanvas : Control
     /// <summary>Fires when canvas needs to be resized (e.g. to fit a dropped image).</summary>
     public event Action<Size>? CanvasResizeRequested;
 
+    /// <summary>Fires when the user requests to paste a layer from the
+    /// internal layer clipboard at the given logical canvas point. The form
+    /// owns the actual paste so it can manage selection + canvas refresh.</summary>
+    public event Action<PointF>? PasteLayerRequested;
+
     public ScreenshotCanvas()
     {
         SetStyle(
@@ -871,8 +876,25 @@ class ScreenshotCanvas : Control
     {
         var menu = new ContextMenuStrip();
 
+        // Convert click position from display pixels to logical canvas
+        // coordinates so a Paste here lands where the user clicked.
+        var logicalPt = new PointF(location.X / _zoom, location.Y / _zoom);
+
         if (_session?.SelectedObject != null)
         {
+            var copyItem = new ToolStripMenuItem("Copy") { ShortcutKeyDisplayString = "Ctrl+C" };
+            copyItem.Click += (_, _) => LayerClipboard.Set(_session.SelectedObject!);
+            menu.Items.Add(copyItem);
+
+            if (LayerClipboard.HasContent)
+            {
+                var pasteItem = new ToolStripMenuItem("Paste") { ShortcutKeyDisplayString = "Ctrl+V" };
+                pasteItem.Click += (_, _) => PasteLayerRequested?.Invoke(logicalPt);
+                menu.Items.Add(pasteItem);
+            }
+
+            menu.Items.Add(new ToolStripSeparator());
+
             var bringFwd = new ToolStripMenuItem("Bring Forward");
             bringFwd.Click += (_, _) => { _session.BringForward(); Invalidate(); };
             menu.Items.Add(bringFwd);
@@ -911,8 +933,17 @@ class ScreenshotCanvas : Control
         }
         else
         {
-            var hint = new ToolStripMenuItem("Drag to select a region first") { Enabled = false };
-            menu.Items.Add(hint);
+            if (LayerClipboard.HasContent)
+            {
+                var pasteItem = new ToolStripMenuItem("Paste") { ShortcutKeyDisplayString = "Ctrl+V" };
+                pasteItem.Click += (_, _) => PasteLayerRequested?.Invoke(logicalPt);
+                menu.Items.Add(pasteItem);
+            }
+            else
+            {
+                var hint = new ToolStripMenuItem("Drag to select a region first") { Enabled = false };
+                menu.Items.Add(hint);
+            }
         }
 
         menu.Show(this, location);
