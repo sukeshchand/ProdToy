@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.410",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.411",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -130,7 +130,11 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
             if (_chatPopup != null)
             {
                 var popup = _chatPopup;
-                popup.BeginInvoke(() =>
+                // Route through the host's BeginInvokeOnUI so the marshal
+                // target is the always-handle-created dashboard form. The
+                // ChatPopupForm's own handle may not exist yet on the very
+                // first notification (same bug class that broke alarms).
+                _context.Host.BeginInvokeOnUI(() =>
                 {
                     popup.ShowPopup(title, message, type, sessionId, cwd, Environment.MachineName);
                 });

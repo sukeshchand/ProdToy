@@ -10,7 +10,7 @@ internal enum HotkeyApplyStatus
     Failed,
 }
 
-[Plugin("ProdToy.Plugin.Screenshot", "Screenshot", "1.0.366",
+[Plugin("ProdToy.Plugin.Screenshot", "Screenshot", "1.0.367",
     Description = "Screen capture and annotation editor",
     Author = "ProdToy",
     MenuPriority = 100)]
@@ -80,7 +80,7 @@ public partial class ScreenshotPlugin : IPlugin, IDoctor
             try
             {
                 _tripleCtrlReg = _context.Host.RegisterTripleCtrl(() =>
-                    _context.Host.InvokeOnUI(EditLastScreenshot));
+                    _context.Host.BeginInvokeOnUI(EditLastScreenshot));
             }
             catch (Exception ex)
             {
@@ -97,7 +97,7 @@ public partial class ScreenshotPlugin : IPlugin, IDoctor
         try
         {
             _hotkeyReg = _context.Host.RegisterHotkey(settings.ScreenshotHotkey, () =>
-                _context.Host.InvokeOnUI(TakeScreenshot));
+                _context.Host.BeginInvokeOnUI(TakeScreenshot));
         }
         catch (Exception ex)
         {
