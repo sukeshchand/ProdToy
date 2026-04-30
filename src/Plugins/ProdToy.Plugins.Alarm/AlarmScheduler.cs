@@ -97,25 +97,19 @@ static class AlarmScheduler
         {
             var now = DateTime.Now;
             var alarms = AlarmStore.LoadAlarms();
-            int activeCount = 0;
-            int firedCount = 0;
 
             if (alarms.Count == 0)
             {
-                // 1-second ticks → log every 600 ticks ≈ 10 minutes when idle.
-                if (_tickCount % 600 == 0)
-                    PluginLog.Info($"AlarmScheduler tick: no alarms (tickCount={_tickCount})");
                 _tickCount++;
                 return;
             }
 
+            int activeCount = 0;
             foreach (var a in alarms)
                 if (a.Status == AlarmStatus.Active) activeCount++;
 
             if (activeCount == 0)
             {
-                if (_tickCount % 600 == 0)
-                    PluginLog.Info($"AlarmScheduler tick: {alarms.Count} alarms loaded but none Active");
                 _tickCount++;
                 return;
             }
@@ -158,7 +152,6 @@ static class AlarmScheduler
 
                             AlarmStore.RecordTrigger(alarm.Id);
                             AlarmTriggered?.Invoke(alarm);
-                            firedCount++;
                         }
                         catch (Exception ex)
                         {
@@ -175,16 +168,12 @@ static class AlarmScheduler
                 }
             }
 
-            int recoveredCount = CheckMissedAlarms(now, alarms);
+            CheckMissedAlarms(now, alarms);
 
             _tickCount++;
-            // 1-second ticks: prune the fire-key set every 60 ticks (~1 min)
-            // and emit a heartbeat info log every 300 ticks (~5 min) when
-            // active alarms are present but nothing fired this tick.
+            // Prune the fire-key set every 60 ticks (~1 min).
             if (_tickCount % 60 == 0)
                 PruneFiredKeys(now);
-            if (firedCount == 0 && recoveredCount == 0 && _tickCount % 300 == 0)
-                PluginLog.Info($"AlarmScheduler tick: {activeCount} active alarm(s), no fires this tick (now {now:HH:mm:ss})");
         }
         catch (Exception ex)
         {
