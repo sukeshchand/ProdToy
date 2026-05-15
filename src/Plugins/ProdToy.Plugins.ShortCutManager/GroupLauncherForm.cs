@@ -63,10 +63,24 @@ class GroupLauncherPanel : UserControl
 
         int pad = 12;
 
+        // WinForms docks in reverse z-order: the Fill child must be added FIRST
+        // (it gets the lower z) so that the later-added docked-Top header
+        // reserves space above it instead of being painted under it.
+        _list = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoScroll = true,
+            BackColor = theme.BgDark,
+            Padding = new Padding(pad, 4, pad, 4),
+        };
+        Controls.Add(_list);
+
         var header = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 86,
+            Height = 92,
             BackColor = theme.BgDark,
         };
         Controls.Add(header);
@@ -93,17 +107,23 @@ class GroupLauncherPanel : UserControl
         };
         header.Controls.Add(subtitle);
 
-        _launchAllBtn = MakeButton("▶ Launch All", theme.Primary, Color.White);
-        _launchAllBtn.Size = new Size(120, 30);
-        _launchAllBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        _launchAllBtn.Click += (_, _) => LaunchAll();
-        header.Controls.Add(_launchAllBtn);
-
+        // Right-anchored buttons. We set the initial Location based on the
+        // header's current width and rely on Anchor=Top|Right to track parent
+        // resizes; no manual Resize handler needed.
+        const int btnW = 110, btnH = 30, btnGap = 8;
         _stopAllBtn = MakeButton("■ Stop All", theme.ErrorBg, theme.ErrorColor);
-        _stopAllBtn.Size = new Size(120, 30);
+        _stopAllBtn.Size = new Size(btnW, btnH);
         _stopAllBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        _stopAllBtn.Location = new Point(header.ClientSize.Width - pad - btnW, 10);
         _stopAllBtn.Click += (_, _) => StopAll();
         header.Controls.Add(_stopAllBtn);
+
+        _launchAllBtn = MakeButton("▶ Launch All", theme.Primary, Color.White);
+        _launchAllBtn.Size = new Size(btnW, btnH);
+        _launchAllBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        _launchAllBtn.Location = new Point(_stopAllBtn.Left - btnGap - btnW, 10);
+        _launchAllBtn.Click += (_, _) => LaunchAll();
+        header.Controls.Add(_launchAllBtn);
 
         _statusLabel = new Label
         {
@@ -111,36 +131,13 @@ class GroupLauncherPanel : UserControl
             Font = new Font("Segoe UI", 9f),
             ForeColor = theme.TextSecondary,
             AutoSize = false,
-            Height = 18,
-            Location = new Point(pad, 62),
+            Height = 20,
+            Location = new Point(pad, 64),
+            Size = new Size(header.ClientSize.Width - pad * 2, 20),
             BackColor = Color.Transparent,
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
         header.Controls.Add(_statusLabel);
-
-        void LayoutHeader()
-        {
-            int w = header.ClientSize.Width;
-            _launchAllBtn.Location = new Point(w - pad - 250, 10);
-            _stopAllBtn.Location = new Point(w - pad - 120, 10);
-            _statusLabel.Size = new Size(w - pad * 2, 18);
-        }
-        header.Resize += (_, _) => LayoutHeader();
-        LayoutHeader();
-
-        _list = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            AutoScroll = true,
-            BackColor = theme.BgDark,
-            Padding = new Padding(pad, 4, pad, 4),
-        };
-        Controls.Add(_list);
-        // Order matters: Fill control added first, then docked-Top is layered on top.
-        _list.BringToFront();
-        header.BringToFront();
 
         for (int i = 0; i < shortcuts.Count; i++)
         {
