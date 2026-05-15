@@ -15,7 +15,7 @@ class ShortcutsForm : Form
     private readonly TreeView _folderTree;
     private readonly RoundedButton _newShortcutBtn;
     private readonly FolderSlotRow _recycleBinRow;
-    private readonly TabControl _rightTabs;
+    private readonly ThemedTabControl _rightTabs;
     private readonly TabPage _shortcutsTab;
     private readonly TabPage _groupLauncherTab;
     private GroupLauncherPanel? _groupLauncherPanel;
@@ -205,11 +205,12 @@ class ShortcutsForm : Form
         // The Group Launcher used to be a standalone modeless window; now it's
         // a tab so the user keeps everything in one place and per-folder
         // status persists (via GroupLauncherSessions) across folder navigation.
-        _rightTabs = new TabControl
+        _rightTabs = new ThemedTabControl(theme)
         {
             Dock = DockStyle.Fill,
             Appearance = TabAppearance.Normal,
             SizeMode = TabSizeMode.Normal,
+            Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
         };
         split.Panel2.Controls.Add(_rightTabs);
 
