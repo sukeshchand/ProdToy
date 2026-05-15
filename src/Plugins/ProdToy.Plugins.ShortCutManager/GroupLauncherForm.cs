@@ -35,7 +35,19 @@ class GroupLauncherForm : Form
     private int _batchId;
 
     private string GroupPrefix => $"ProdToyShortCuts_{_groupId}_";
-    private string BatchPrefix => $"ProdToyShortCuts_{_groupId}_{_batchId}_";
+    private string BatchSuffix => $"ProdToyShortCuts_{_groupId}_{_batchId}";
+
+    /// <summary>
+    /// Title we ask the launcher to apply to the shortcut's window. We preserve
+    /// whatever the shortcut author configured as <see cref="Shortcut.WindowTitle"/>
+    /// and append the batch suffix so a title-scan can find it later. The user
+    /// keeps full control over tab/window grouping via the shortcut's own
+    /// "Open in" + tab-group settings — the launcher does not override them.
+    /// </summary>
+    private string BuildOverrideTitle(Shortcut s) =>
+        string.IsNullOrWhiteSpace(s.WindowTitle)
+            ? BatchSuffix
+            : $"{s.WindowTitle.Trim()} {BatchSuffix}";
 
     public GroupLauncherForm(PluginTheme theme, string folderPath, List<Shortcut> shortcuts)
     {
@@ -175,8 +187,7 @@ class GroupLauncherForm : Form
         for (int i = 0; i < _shortcuts.Count; i++)
         {
             var s = _shortcuts[i];
-            string overrideTitle = $"ProdToyShortCuts_{_groupId}_{_batchId}_{i + 1}";
-            var result = ShortcutLauncher.Launch(s, overrideTitle, forceNewWindow: true);
+            var result = ShortcutLauncher.Launch(s, BuildOverrideTitle(s), forceNewWindow: false);
             if (!result.Ok)
                 _rows[i].SetState(GroupRow.RowState.Failed, result.ErrorMessage ?? "Launch failed");
         }
@@ -203,7 +214,7 @@ class GroupLauncherForm : Form
 
         var row = _rows[index1Based - 1];
         var s = _shortcuts[index1Based - 1];
-        string overrideTitle = $"ProdToyShortCuts_{_groupId}_{_batchId}_{index1Based}";
+        string overrideTitle = BuildOverrideTitle(s);
 
         // Kill an existing instance of this row (if any) before relaunching so
         // the same title doesn't end up doubled.
@@ -211,7 +222,7 @@ class GroupLauncherForm : Form
             WindowFinder.CloseWindow(w.Handle);
 
         row.SetState(GroupRow.RowState.Launching, "Launching…");
-        var result = ShortcutLauncher.Launch(s, overrideTitle, forceNewWindow: true);
+        var result = ShortcutLauncher.Launch(s, overrideTitle, forceNewWindow: false);
         if (!result.Ok)
             row.SetState(GroupRow.RowState.Failed, result.ErrorMessage ?? "Launch failed");
     }
@@ -219,7 +230,8 @@ class GroupLauncherForm : Form
     private void StopOne(int index1Based)
     {
         if (_batchId == 0) return;
-        string title = $"ProdToyShortCuts_{_groupId}_{_batchId}_{index1Based}";
+        var s = _shortcuts[index1Based - 1];
+        string title = BuildOverrideTitle(s);
         int closed = 0;
         foreach (var w in WindowFinder.FindByTitleContains(title))
         {
@@ -256,7 +268,7 @@ class GroupLauncherForm : Form
         for (int i = 0; i < _rows.Count; i++)
         {
             var row = _rows[i];
-            string title = $"ProdToyShortCuts_{_groupId}_{_batchId}_{i + 1}";
+            string title = BuildOverrideTitle(_shortcuts[i]);
             bool alive = WindowFinder.AnyWindowTitleContains(title);
 
             if (alive)
