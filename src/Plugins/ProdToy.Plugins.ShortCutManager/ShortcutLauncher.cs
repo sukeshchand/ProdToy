@@ -24,12 +24,33 @@ static class ShortcutLauncher
 {
     public readonly record struct LaunchResult(bool Ok, string? ErrorMessage = null);
 
-    public static LaunchResult Launch(Shortcut s)
+    public static LaunchResult Launch(Shortcut s) => Launch(s, null, forceNewWindow: false);
+
+    /// <summary>
+    /// Group Launcher entry point. <paramref name="titleOverride"/> replaces
+    /// the shortcut's saved <see cref="Shortcut.WindowTitle"/> for this run
+    /// only — used to stamp a batch id into the window title so the launcher
+    /// can find/close it later. When <paramref name="forceNewWindow"/> is true,
+    /// the shortcut's saved WT-existing-window/tab-group settings are ignored
+    /// so the window appears as its own top-level (required for title-scan
+    /// tracking to work).
+    /// </summary>
+    public static LaunchResult Launch(Shortcut s, string? titleOverride, bool forceNewWindow)
     {
         if (string.IsNullOrWhiteSpace(s.WorkingDirectory))
             return new LaunchResult(false, "Working directory is empty.");
         if (!Directory.Exists(s.WorkingDirectory))
             return new LaunchResult(false, $"Working directory doesn't exist: {s.WorkingDirectory}");
+
+        if (titleOverride != null || forceNewWindow)
+        {
+            s = s with
+            {
+                WindowTitle = titleOverride ?? s.WindowTitle,
+                WtWindowTarget = forceNewWindow ? WtWindowTarget.NewWindow : s.WtWindowTarget,
+                WtWindowName = forceNewWindow ? "" : s.WtWindowName,
+            };
+        }
 
         bool useWt = s.LauncherMode == LauncherMode.WindowsTerminal && TryFindWindowsTerminal(out _);
         ProcessStartInfo psi = useWt ? BuildWtStartInfo(s) : BuildCmdStartInfo(s);

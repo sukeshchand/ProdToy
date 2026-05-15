@@ -151,6 +151,8 @@ static class WindowsTerminalProfiles
                 OpacityPercent = obj["opacity"] is JsonValue opv && opv.TryGetValue<int>(out var op) ? op : null,
                 CursorShape = obj["cursorShape"]?.GetValue<string>() ?? "",
                 StartingDirectory = obj["startingDirectory"]?.GetValue<string>() ?? "",
+                SuppressApplicationTitle = obj["suppressApplicationTitle"] is JsonValue sv
+                    && sv.TryGetValue<bool>(out var sb) && sb,
             };
         }
         return null;
@@ -409,6 +411,15 @@ sealed record WtProfileDraft
     public string CursorShape { get; init; } = "";
     public string StartingDirectory { get; init; } = "";
 
+    /// <summary>
+    /// When true, the tab title set via <c>wt --title</c> is locked — the
+    /// running shell/app's <c>SetConsoleTitle</c> calls are ignored. Useful
+    /// for Group Launcher's title-based tracking, which otherwise loses the
+    /// batch suffix as soon as a child program (e.g. dotnet/ASP.NET) renames
+    /// the console.
+    /// </summary>
+    public bool SuppressApplicationTitle { get; init; }
+
     public JsonObject ToJson()
     {
         var o = new JsonObject
@@ -424,6 +435,7 @@ sealed record WtProfileDraft
         if (!string.IsNullOrWhiteSpace(CursorShape))   o["cursorShape"]   = CursorShape;
         if (OpacityPercent is int op && op is > 0 and <= 100)
             o["opacity"] = op;
+        if (SuppressApplicationTitle) o["suppressApplicationTitle"] = true;
 
         if (!string.IsNullOrWhiteSpace(FontFace) || FontSize is int)
         {

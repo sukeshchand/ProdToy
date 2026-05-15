@@ -25,6 +25,7 @@ class WtProfileCreateForm : Form
     private readonly Label _opacityVal;
     private readonly ComboBox _cursorCombo;
     private readonly TextBox _startingDirBox;
+    private readonly CheckBox _suppressTitleCheck;
     private readonly Label _validationLabel;
     private readonly RoundedButton _editSchemeBtn = null!;
     private readonly RoundedButton _delSchemeBtn = null!;
@@ -272,6 +273,34 @@ class WtProfileCreateForm : Form
         Controls.Add(iconHint);
         y += 24;
 
+        y = AddSection("BEHAVIOR", y);
+
+        _suppressTitleCheck = new CheckBox
+        {
+            Text = "Suppress application title",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            BackColor = Color.Transparent,
+            Checked = existing?.SuppressApplicationTitle ?? false,
+            AutoSize = true,
+            Location = new Point(pad + 8, y),
+            Cursor = Cursors.Hand,
+        };
+        Controls.Add(_suppressTitleCheck);
+        y += 24;
+
+        var suppressHint = new Label
+        {
+            Text = "Lock the tab title to what `wt --title` set — ignore SetConsoleTitle\ncalls from the shell or app. Recommended when using Group Launcher\nso per-row Stop / Running detection survives apps that rename their console.",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(pad + 8, y),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(suppressHint);
+        y += 48;
+
         _validationLabel = new Label
         {
             Text = "",
@@ -364,6 +393,7 @@ class WtProfileCreateForm : Form
             OpacityPercent = _opacity.Value,
             CursorShape = _cursorCombo.Text.Trim(),
             StartingDirectory = _startingDirBox.Text.Trim(),
+            SuppressApplicationTitle = _suppressTitleCheck.Checked,
         };
 
         try
