@@ -14,8 +14,11 @@ class ShortcutsForm : Form
     private readonly FlowLayoutPanel _listPanel;
     private readonly TreeView _folderTree;
     private readonly RoundedButton _newShortcutBtn;
-    private readonly RoundedButton _groupLauncherBtn;
     private readonly FolderSlotRow _recycleBinRow;
+    private readonly TabControl _rightTabs;
+    private readonly TabPage _shortcutsTab;
+    private readonly TabPage _groupLauncherTab;
+    private GroupLauncherPanel? _groupLauncherPanel;
     private string? _expandedId;
 
     /// <summary>
@@ -71,12 +74,6 @@ class ShortcutsForm : Form
         _newShortcutBtn.Click += (_, _) => NewShortcut();
         toolbar.Controls.Add(_newShortcutBtn);
 
-        _groupLauncherBtn = MakeButton("⇉ Group Launcher", theme.PrimaryDim, theme.TextPrimary);
-        _groupLauncherBtn.Size = new Size(150, 30);
-        _groupLauncherBtn.Location = new Point(pad + 366, 14);
-        _groupLauncherBtn.Click += (_, _) => OpenGroupLauncher();
-        toolbar.Controls.Add(_groupLauncherBtn);
-
         var hintLabel = new Label
         {
             Text = ShortcutLauncher.TryFindWindowsTerminal(out _)
@@ -85,7 +82,7 @@ class ShortcutsForm : Form
             Font = new Font("Segoe UI", 9f),
             ForeColor = theme.TextSecondary,
             AutoSize = true,
-            Location = new Point(pad + 526, 22),
+            Location = new Point(pad + 380, 22),
             BackColor = Color.Transparent,
         };
         toolbar.Controls.Add(hintLabel);
@@ -204,7 +201,34 @@ class ShortcutsForm : Form
         };
         split.Panel1.Controls.Add(_recycleBinRow);
 
-        // --- Right: shortcut list ---
+        // --- Right: tabbed pane (Shortcuts list + Group Launcher) ---
+        // The Group Launcher used to be a standalone modeless window; now it's
+        // a tab so the user keeps everything in one place and per-folder
+        // status persists (via GroupLauncherSessions) across folder navigation.
+        _rightTabs = new TabControl
+        {
+            Dock = DockStyle.Fill,
+            Appearance = TabAppearance.Normal,
+            SizeMode = TabSizeMode.Normal,
+        };
+        split.Panel2.Controls.Add(_rightTabs);
+
+        _shortcutsTab = new TabPage("Shortcuts")
+        {
+            BackColor = theme.BgDark,
+            ForeColor = theme.TextPrimary,
+            Padding = new Padding(0),
+        };
+        _rightTabs.TabPages.Add(_shortcutsTab);
+
+        _groupLauncherTab = new TabPage("Group Launcher")
+        {
+            BackColor = theme.BgDark,
+            ForeColor = theme.TextPrimary,
+            Padding = new Padding(0),
+        };
+        _rightTabs.TabPages.Add(_groupLauncherTab);
+
         _listPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -215,7 +239,7 @@ class ShortcutsForm : Form
             Padding = new Padding(0, 4, 0, 4),
         };
         _listPanel.ClientSizeChanged += (_, _) => ResizeRows();
-        split.Panel2.Controls.Add(_listPanel);
+        _shortcutsTab.Controls.Add(_listPanel);
 
         KeyDown += OnKey;
 
@@ -235,6 +259,68 @@ class ShortcutsForm : Form
         }
     }
 
+    /// <summary>If any folder's Group Launcher session still has live PIDs
+    /// when the user closes this form, ask whether to stop them. The
+    /// session store is process-wide so a backgrounded batch from a folder
+    /// the user hasn't visited recently is also caught here.</summary>
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (GroupLauncherSessions.AnyLive())
+        {
+            var res = MessageBox.Show(this,
+                "There are launched windows from one or more Group Launcher batches still running.\n\n" +
+                "Yes — stop them all and close.\n" +
+                "No — leave them running and close.\n" +
+                "Cancel — keep this window open.",
+                "Close ProdToy Shortcuts",
+                MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button3);
+            if (res == DialogResult.Cancel)
+            {
+                e.Cancel = true;
+                return;
+            }
+            if (res == DialogResult.Yes)
+            {
+                // Stop the currently visible folder's panel (if any) so its
+                // UI flips to Stopped. Other folders' windows are caught via
+                // their stored group prefix in the session store.
+                _groupLauncherPanel?.StopAllExternal();
+                StopAllSessions();
+            }
+        }
+        base.OnFormClosing(e);
+    }
+
+    /// <summary>Close every window with a Group-Launcher prefix across every
+    /// folder that has an active session. Used by the close prompt's "Yes".</summary>
+    private static void StopAllSessions()
+    {
+        foreach (var kv in GroupLauncherSessions.All)
+        {
+            int groupId = StableGroupId(kv.Key);
+            string prefix = $"ProdToyShortCuts_{groupId}_";
+            foreach (var w in WindowFinder.FindByTitleContains(prefix))
+                WindowFinder.CloseWindow(w.Handle);
+        }
+    }
+
+    /// <summary>FNV-1a (mod 10000) — duplicated here so the close-prompt path
+    /// doesn't depend on the panel being instantiated. Must match
+    /// <see cref="GroupLauncherPanel"/>'s <c>ComputeGroupId</c>.</summary>
+    private static int StableGroupId(string folderPath)
+    {
+        const uint offset = 2166136261;
+        const uint prime = 16777619;
+        uint hash = offset;
+        var s = folderPath ?? "";
+        for (int i = 0; i < s.Length; i++)
+        {
+            hash ^= s[i];
+            hash *= prime;
+        }
+        return (int)(hash % 10000);
+    }
+
     private bool IsRootSelected => string.IsNullOrEmpty(_selectedFolder);
     private bool IsRecycleBinSelected => _selectedFolder == RecycleBinTag;
     private bool IsCreatableSelection => !IsRootSelected && !IsRecycleBinSelected;
@@ -244,22 +330,35 @@ class ShortcutsForm : Form
         _newShortcutBtn.Enabled = IsCreatableSelection;
         _newShortcutBtn.BackColor = IsCreatableSelection ? _theme.Primary : _theme.PrimaryDim;
         _newShortcutBtn.ForeColor = IsCreatableSelection ? Color.White : _theme.TextSecondary;
-
-        // Group Launcher needs a non-root folder *and* at least one shortcut
-        // in it — there's nothing to launch from an empty folder.
-        bool hasShortcuts = IsCreatableSelection
-            && ShortcutStore.Load().Any(s => string.Equals(
-                ShortcutFolders.Normalize(s.FolderPath),
-                _selectedFolder,
-                StringComparison.OrdinalIgnoreCase));
-        _groupLauncherBtn.Enabled = hasShortcuts;
-        _groupLauncherBtn.BackColor = hasShortcuts ? _theme.PrimaryDim : _theme.BgHeader;
-        _groupLauncherBtn.ForeColor = hasShortcuts ? _theme.TextPrimary : _theme.TextSecondary;
     }
 
-    private void OpenGroupLauncher()
+    /// <summary>Rebuilds the Group Launcher tab to match the currently
+    /// selected folder. The previous panel is disposed (its poll timer
+    /// stopped) but the per-folder <see cref="GroupSession"/> persists in
+    /// <see cref="GroupLauncherSessions"/>, so when the user comes back to
+    /// a folder its existing batch + PID tracking are restored.</summary>
+    private void RebuildGroupLauncherTab()
     {
-        if (!IsCreatableSelection) return;
+        _groupLauncherPanel?.Dispose();
+        _groupLauncherPanel = null;
+        _groupLauncherTab.Controls.Clear();
+
+        if (!IsCreatableSelection)
+        {
+            _groupLauncherTab.Controls.Add(new Label
+            {
+                Text = IsRecycleBinSelected
+                    ? "Group Launcher isn't available for the recycle bin."
+                    : "Select a folder on the left to use the Group Launcher.",
+                Font = new Font("Segoe UI", 10.5f),
+                ForeColor = _theme.TextSecondary,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                BackColor = Color.Transparent,
+            });
+            return;
+        }
+
         var shortcuts = ShortcutStore.Load()
             .Where(s => string.Equals(
                 ShortcutFolders.Normalize(s.FolderPath),
@@ -267,10 +366,26 @@ class ShortcutsForm : Form
                 StringComparison.OrdinalIgnoreCase))
             .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        if (shortcuts.Count == 0) return;
 
-        var form = new GroupLauncherForm(_theme, _selectedFolder, shortcuts);
-        form.Show(this);
+        if (shortcuts.Count == 0)
+        {
+            _groupLauncherTab.Controls.Add(new Label
+            {
+                Text = $"No shortcuts in \"{_selectedFolder}\" yet.\nAdd one with \"+ New Shortcut\".",
+                Font = new Font("Segoe UI", 10.5f),
+                ForeColor = _theme.TextSecondary,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                BackColor = Color.Transparent,
+            });
+            return;
+        }
+
+        _groupLauncherPanel = new GroupLauncherPanel(_theme, _selectedFolder, shortcuts)
+        {
+            Dock = DockStyle.Fill,
+        };
+        _groupLauncherTab.Controls.Add(_groupLauncherPanel);
     }
 
     /// <summary>
@@ -313,6 +428,12 @@ class ShortcutsForm : Form
 
     private void RefreshList()
     {
+        // Keep the Group Launcher tab in sync with the currently selected
+        // folder. RefreshList is the chokepoint for every state change that
+        // matters here — folder switch, shortcut add/delete/edit, recycle
+        // bin enter/exit — so attaching the rebuild here covers all paths.
+        RebuildGroupLauncherTab();
+
         _listPanel.SuspendLayout();
         _listPanel.Controls.Clear();
 

@@ -6,26 +6,27 @@ using ProdToy.Sdk;
 namespace ProdToy.Plugins.ShortCutManager;
 
 /// <summary>
-/// Modeless companion window opened from <see cref="ShortcutsForm"/>'s
-/// "Group Launcher" button. Lists every shortcut in a folder and lets the
-/// user start/stop them as a group. Each launch stamps a unique title onto
-/// the spawned window so we can find and close it later by scanning
-/// top-level window titles.
+/// Embedded "Group Launcher" panel — lives as the second tab of the right
+/// pane in <see cref="ShortcutsForm"/>. Lists every shortcut in the
+/// selected folder and lets the user start/stop them as a group while
+/// status is tracked per-row by cmd.exe PID liveness (so a backgrounded
+/// tab still shows Running).
 ///
-/// Title scheme: <c>ProdToyShortCuts_{groupId}_{batchId}_{index}</c>
-///   - groupId: stable 4-digit FNV-1a hash of the folder path
-///   - batchId: 4-digit random number, regenerated per Launch-All run
-///   - index:   1-based row position within this form
+/// Title scheme applied to launched windows:
+///   <c>{shortcut.WindowTitle} ProdToyShortCuts_{groupId}_{batchId}</c>
+///     - groupId: stable 4-digit FNV-1a hash of the folder path
+///     - batchId: 4-digit random per Launch All run
 ///
-/// Stop-all scans for the prefix <c>ProdToyShortCuts_{groupId}_</c> so it
-/// catches orphan windows from earlier sessions, not just the current batch.
+/// Per-folder state (batch id + per-shortcut PID) lives in
+/// <see cref="GroupLauncherSessions"/> so it survives folder navigation.
 /// </summary>
-class GroupLauncherForm : Form
+class GroupLauncherPanel : UserControl
 {
     private readonly PluginTheme _theme;
     private readonly string _folderPath;
     private readonly List<Shortcut> _shortcuts;
     private readonly int _groupId;
+    private readonly GroupSession _session;
     private readonly FlowLayoutPanel _list;
     private readonly Label _statusLabel;
     private readonly RoundedButton _launchAllBtn;
@@ -33,10 +34,8 @@ class GroupLauncherForm : Form
     private readonly System.Windows.Forms.Timer _pollTimer;
     private readonly List<GroupRow> _rows = new();
 
-    private int _batchId;
-
     private string GroupPrefix => $"ProdToyShortCuts_{_groupId}_";
-    private string BatchSuffix => $"ProdToyShortCuts_{_groupId}_{_batchId}";
+    private string BatchSuffix => $"ProdToyShortCuts_{_groupId}_{_session.BatchId}";
 
     /// <summary>
     /// Title we ask the launcher to apply to the shortcut's window. We preserve
@@ -50,43 +49,35 @@ class GroupLauncherForm : Form
             ? BatchSuffix
             : $"{s.WindowTitle.Trim()} {BatchSuffix}";
 
-    public GroupLauncherForm(PluginTheme theme, string folderPath, List<Shortcut> shortcuts)
+    public GroupLauncherPanel(PluginTheme theme, string folderPath, List<Shortcut> shortcuts)
     {
         _theme = theme;
         _folderPath = folderPath;
         _shortcuts = shortcuts;
         _groupId = ComputeGroupId(folderPath);
+        _session = GroupLauncherSessions.GetOrCreate(folderPath);
 
-        Text = $"Group Launcher — {folderPath}";
-        FormBorderStyle = FormBorderStyle.Sizable;
-        MaximizeBox = true;
-        MinimizeBox = true;
-        StartPosition = FormStartPosition.CenterParent;
-        Size = new Size(720, 600);
-        MinimumSize = new Size(520, 360);
         BackColor = theme.BgDark;
         ForeColor = theme.TextPrimary;
         Font = new Font("Segoe UI", 10f);
-        AutoScaleMode = AutoScaleMode.Dpi;
 
-        int pad = 18;
+        int pad = 12;
 
         var header = new Panel
         {
-            Location = new Point(0, 0),
-            Size = new Size(ClientSize.Width, 88),
+            Dock = DockStyle.Top,
+            Height = 86,
             BackColor = theme.BgDark,
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
         Controls.Add(header);
 
         var title = new Label
         {
             Text = $"📁 {folderPath}",
-            Font = new Font("Segoe UI Semibold", 13f, FontStyle.Bold),
+            Font = new Font("Segoe UI Semibold", 12f, FontStyle.Bold),
             ForeColor = theme.TextPrimary,
             AutoSize = true,
-            Location = new Point(pad, 12),
+            Location = new Point(pad, 10),
             BackColor = Color.Transparent,
         };
         header.Controls.Add(title);
@@ -97,22 +88,20 @@ class GroupLauncherForm : Form
             Font = new Font("Segoe UI", 9f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
             AutoSize = true,
-            Location = new Point(pad, 40),
+            Location = new Point(pad, 36),
             BackColor = Color.Transparent,
         };
         header.Controls.Add(subtitle);
 
         _launchAllBtn = MakeButton("▶ Launch All", theme.Primary, Color.White);
-        _launchAllBtn.Size = new Size(120, 32);
+        _launchAllBtn.Size = new Size(120, 30);
         _launchAllBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        _launchAllBtn.Location = new Point(header.ClientSize.Width - pad - 260, 28);
         _launchAllBtn.Click += (_, _) => LaunchAll();
         header.Controls.Add(_launchAllBtn);
 
         _stopAllBtn = MakeButton("■ Stop All", theme.ErrorBg, theme.ErrorColor);
-        _stopAllBtn.Size = new Size(120, 32);
+        _stopAllBtn.Size = new Size(120, 30);
         _stopAllBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        _stopAllBtn.Location = new Point(header.ClientSize.Width - pad - 130, 28);
         _stopAllBtn.Click += (_, _) => StopAll();
         header.Controls.Add(_stopAllBtn);
 
@@ -122,25 +111,36 @@ class GroupLauncherForm : Form
             Font = new Font("Segoe UI", 9f),
             ForeColor = theme.TextSecondary,
             AutoSize = false,
-            Size = new Size(ClientSize.Width - pad * 2, 18),
-            Location = new Point(pad, 64),
+            Height = 18,
+            Location = new Point(pad, 62),
             BackColor = Color.Transparent,
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
         header.Controls.Add(_statusLabel);
 
+        void LayoutHeader()
+        {
+            int w = header.ClientSize.Width;
+            _launchAllBtn.Location = new Point(w - pad - 250, 10);
+            _stopAllBtn.Location = new Point(w - pad - 120, 10);
+            _statusLabel.Size = new Size(w - pad * 2, 18);
+        }
+        header.Resize += (_, _) => LayoutHeader();
+        LayoutHeader();
+
         _list = new FlowLayoutPanel
         {
-            Location = new Point(pad, 92),
-            Size = new Size(ClientSize.Width - pad * 2, ClientSize.Height - 92 - pad),
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+            Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
             AutoScroll = true,
             BackColor = theme.BgDark,
-            Padding = new Padding(0, 4, 0, 4),
+            Padding = new Padding(pad, 4, pad, 4),
         };
         Controls.Add(_list);
+        // Order matters: Fill control added first, then docked-Top is layered on top.
+        _list.BringToFront();
+        header.BringToFront();
 
         for (int i = 0; i < shortcuts.Count; i++)
         {
@@ -150,6 +150,12 @@ class GroupLauncherForm : Form
             row.LaunchRequested += () => LaunchOne(index1Based);
             row.StopRequested += () => StopOne(index1Based);
             row.Index = index1Based;
+
+            // Restore PID from the per-folder session so a backgrounded batch
+            // keeps reporting Running when the user comes back to this tab.
+            if (_session.PidByShortcutId.TryGetValue(s.Id, out int savedPid))
+                row.LaunchedCmdPid = savedPid;
+
             _rows.Add(row);
             _list.Controls.Add(row);
         }
@@ -159,21 +165,7 @@ class GroupLauncherForm : Form
         _pollTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         _pollTimer.Tick += (_, _) => RefreshStatus();
         _pollTimer.Start();
-
-        // Capture window state at open: any orphan windows from previous runs
-        // become "Running" on the very first tick so the user can stop them.
         RefreshStatus();
-    }
-
-    /// <summary>Composite child painting to eliminate flicker on resize.</summary>
-    protected override CreateParams CreateParams
-    {
-        get
-        {
-            var cp = base.CreateParams;
-            cp.ExStyle |= 0x02000000; // WS_EX_COMPOSITED
-            return cp;
-        }
     }
 
     // wt -w <name> joins a named window, but only if that window has been
@@ -186,32 +178,31 @@ class GroupLauncherForm : Form
     private const int PostLaunchGraceMs = 250;
     private const int CloseSettleMs = 600;
 
+    /// <summary>Stop all launched windows in this folder's group. Used by
+    /// <see cref="ShortcutsForm"/>'s close prompt to gracefully end the
+    /// session from the parent form.</summary>
+    public void StopAllExternal() => StopAll();
+
     private async void LaunchAll()
     {
         int closedCount = CloseGroupWindows();
-        _batchId = Random.Shared.Next(1000, 10000);
-        _statusLabel.Text = $"Launching batch {_batchId:D4}…";
+        _session.BatchId = Random.Shared.Next(1000, 10000);
+        _statusLabel.Text = $"Launching batch {_session.BatchId:D4}…";
 
         foreach (var row in _rows)
         {
             row.LaunchedCmdPid = 0;
             row.SetState(GroupRow.RowState.Launching, "Launching…");
         }
+        _session.PidByShortcutId.Clear();
 
-        // If we just retired windows of the same group, let WT drop those
-        // names before we start reusing them — otherwise the new launch
-        // sometimes still sees the old name.
         if (closedCount > 0) await Task.Delay(CloseSettleMs);
 
         for (int i = 0; i < _shortcuts.Count; i++)
         {
+            if (IsDisposed) return;
             var s = _shortcuts[i];
             string expectedTitle = BuildOverrideTitle(s);
-
-            // Snapshot existing cmd.exe PIDs so we can identify the one our
-            // launch spawns. Status is then tracked by that PID's lifetime
-            // rather than the tab title — so a backgrounded tab still shows
-            // "Running" instead of flipping to "Stopped".
             var beforePids = GetCmdPidSnapshot();
 
             var result = ShortcutLauncher.Launch(s, expectedTitle, forceNewWindow: false);
@@ -221,115 +212,31 @@ class GroupLauncherForm : Form
                 continue;
             }
 
-            // Wait until WT has actually painted a top-level window with our
-            // title, then a short grace so its named-window registration
-            // settles. Without this, the next `wt -w <name>` call races and
-            // creates a second window instead of joining the first.
             await WaitForWindowAsync(expectedTitle, PostLaunchTimeoutMs);
             await Task.Delay(PostLaunchGraceMs);
 
             int newPid = PickNewCmdPid(beforePids);
-            if (newPid > 0) _rows[i].LaunchedCmdPid = newPid;
-        }
-    }
-
-    /// <summary>Poll for a visible top-level window whose title contains
-    /// <paramref name="needle"/>. Returns when found or when the timeout
-    /// elapses — never throws.</summary>
-    private static async Task WaitForWindowAsync(string needle, int timeoutMs)
-    {
-        if (string.IsNullOrEmpty(needle)) return;
-        var deadline = Environment.TickCount + timeoutMs;
-        while (Environment.TickCount < deadline)
-        {
-            if (WindowFinder.AnyWindowTitleContains(needle)) return;
-            await Task.Delay(PostLaunchPollMs);
-        }
-    }
-
-    /// <summary>Snapshot of every currently-running <c>cmd.exe</c> PID.</summary>
-    private static HashSet<int> GetCmdPidSnapshot()
-    {
-        try
-        {
-            return Process.GetProcessesByName("cmd").Select(p =>
+            if (newPid > 0)
             {
-                try { return p.Id; }
-                catch { return 0; }
-                finally { p.Dispose(); }
-            }).Where(id => id > 0).ToHashSet();
-        }
-        catch { return new HashSet<int>(); }
-    }
-
-    /// <summary>Pick the newest cmd.exe PID that wasn't in <paramref name="before"/>.
-    /// In rare cases more than one new cmd may have appeared (some unrelated
-    /// background spawn racing our launch); we take the one whose start time
-    /// is most recent, which is overwhelmingly likely to be ours since the
-    /// caller awaited window appearance immediately prior.</summary>
-    private static int PickNewCmdPid(HashSet<int> before)
-    {
-        try
-        {
-            (int Pid, DateTime Start)? best = null;
-            foreach (var p in Process.GetProcessesByName("cmd"))
-            {
-                try
-                {
-                    if (before.Contains(p.Id)) continue;
-                    DateTime start;
-                    try { start = p.StartTime; }
-                    catch { continue; }
-                    if (best == null || start > best.Value.Start)
-                        best = (p.Id, start);
-                }
-                finally { p.Dispose(); }
+                _rows[i].LaunchedCmdPid = newPid;
+                _session.PidByShortcutId[s.Id] = newPid;
             }
-            return best?.Pid ?? 0;
-        }
-        catch { return 0; }
-    }
-
-    /// <summary>True if the given PID still exists and hasn't exited.</summary>
-    private static bool IsPidAlive(int pid)
-    {
-        try
-        {
-            using var p = Process.GetProcessById(pid);
-            return !p.HasExited;
-        }
-        catch { return false; }
-    }
-
-    private void StopAll()
-    {
-        int n = CloseGroupWindows();
-        _statusLabel.Text = n == 0
-            ? "No windows found for this group."
-            : $"Closed {n} window(s).";
-        // Mark every row that *was* running as stopped — the next status tick
-        // will reconcile against the live window list.
-        foreach (var row in _rows)
-        {
-            if (row.State == GroupRow.RowState.Running || row.State == GroupRow.RowState.Launching)
-                row.SetState(GroupRow.RowState.Stopped, "Stopped");
         }
     }
 
     private async void LaunchOne(int index1Based)
     {
-        if (_batchId == 0) _batchId = Random.Shared.Next(1000, 10000);
+        if (_session.BatchId == 0) _session.BatchId = Random.Shared.Next(1000, 10000);
 
         var row = _rows[index1Based - 1];
         var s = _shortcuts[index1Based - 1];
         string overrideTitle = BuildOverrideTitle(s);
 
-        // Kill an existing instance of this row (if any) before relaunching so
-        // the same title doesn't end up doubled.
         foreach (var w in WindowFinder.FindByTitleContains(overrideTitle))
             WindowFinder.CloseWindow(w.Handle);
 
         row.LaunchedCmdPid = 0;
+        _session.PidByShortcutId.Remove(s.Id);
         row.SetState(GroupRow.RowState.Launching, "Launching…");
 
         var beforePids = GetCmdPidSnapshot();
@@ -343,13 +250,31 @@ class GroupLauncherForm : Form
 
         await WaitForWindowAsync(overrideTitle, PostLaunchTimeoutMs);
         await Task.Delay(PostLaunchGraceMs);
+        if (IsDisposed) return;
         int newPid = PickNewCmdPid(beforePids);
-        if (newPid > 0) row.LaunchedCmdPid = newPid;
+        if (newPid > 0)
+        {
+            row.LaunchedCmdPid = newPid;
+            _session.PidByShortcutId[s.Id] = newPid;
+        }
+    }
+
+    private void StopAll()
+    {
+        int n = CloseGroupWindows();
+        _statusLabel.Text = n == 0
+            ? "No windows found for this group."
+            : $"Closed {n} window(s).";
+        foreach (var row in _rows)
+        {
+            if (row.State == GroupRow.RowState.Running || row.State == GroupRow.RowState.Launching)
+                row.SetState(GroupRow.RowState.Stopped, "Stopped");
+        }
     }
 
     private void StopOne(int index1Based)
     {
-        if (_batchId == 0) return;
+        if (_session.BatchId == 0) return;
         var s = _shortcuts[index1Based - 1];
         string title = BuildOverrideTitle(s);
         int closed = 0;
@@ -373,10 +298,8 @@ class GroupLauncherForm : Form
 
     private void RefreshStatus()
     {
-        if (_batchId == 0)
+        if (_session.BatchId == 0)
         {
-            // No batch yet — but any orphan group windows should still show as
-            // running so the user can spot them and Stop All.
             int orphans = WindowFinder.FindByTitleContains(GroupPrefix).Count;
             _statusLabel.Text = orphans > 0
                 ? $"{orphans} orphan window(s) from a previous run — use Stop All to clean up."
@@ -397,8 +320,6 @@ class GroupLauncherForm : Form
             }
             else if (row.State == GroupRow.RowState.Launching)
             {
-                // Allow a few seconds for the cmd.exe to actually appear
-                // before declaring the launch failed.
                 if (row.SecondsSinceStateChange > 8)
                 {
                     row.SetState(GroupRow.RowState.Failed, "Process never started");
@@ -414,50 +335,93 @@ class GroupLauncherForm : Form
             else if (row.State == GroupRow.RowState.Stopped) stopped++;
         }
 
-        var parts = new List<string> { $"batch {_batchId:D4}" };
+        var parts = new List<string> { $"batch {_session.BatchId:D4}" };
         if (running > 0) parts.Add($"{running} running");
         if (stopped > 0) parts.Add($"{stopped} stopped");
         if (failed > 0) parts.Add($"{failed} failed");
         _statusLabel.Text = string.Join(" · ", parts);
     }
 
-    protected override void OnFormClosing(FormClosingEventArgs e)
+    protected override void Dispose(bool disposing)
     {
-        int live = WindowFinder.FindByTitleContains(GroupPrefix).Count;
-        if (live > 0)
+        if (disposing)
         {
-            var res = MessageBox.Show(this,
-                $"{live} launched window(s) from this group are still open.\n\n" +
-                "Yes — stop them all and close.\n" +
-                "No — leave them running and close.\n" +
-                "Cancel — keep the launcher open.",
-                "Group Launcher",
-                MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button3);
-            if (res == DialogResult.Cancel)
-            {
-                e.Cancel = true;
-                return;
-            }
-            if (res == DialogResult.Yes) CloseGroupWindows();
+            _pollTimer.Stop();
+            _pollTimer.Dispose();
         }
-        _pollTimer.Stop();
-        _pollTimer.Dispose();
-        base.OnFormClosing(e);
+        base.Dispose(disposing);
     }
 
     private void ResizeRows()
     {
-        int w = _list.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 6;
+        int w = _list.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 12;
         if (w < 200) w = 200;
         foreach (Control c in _list.Controls)
             if (c is GroupRow gr) gr.Width = w;
+    }
+
+    private static async Task WaitForWindowAsync(string needle, int timeoutMs)
+    {
+        if (string.IsNullOrEmpty(needle)) return;
+        var deadline = Environment.TickCount + timeoutMs;
+        while (Environment.TickCount < deadline)
+        {
+            if (WindowFinder.AnyWindowTitleContains(needle)) return;
+            await Task.Delay(PostLaunchPollMs);
+        }
+    }
+
+    private static HashSet<int> GetCmdPidSnapshot()
+    {
+        try
+        {
+            return Process.GetProcessesByName("cmd").Select(p =>
+            {
+                try { return p.Id; }
+                catch { return 0; }
+                finally { p.Dispose(); }
+            }).Where(id => id > 0).ToHashSet();
+        }
+        catch { return new HashSet<int>(); }
+    }
+
+    private static int PickNewCmdPid(HashSet<int> before)
+    {
+        try
+        {
+            (int Pid, DateTime Start)? best = null;
+            foreach (var p in Process.GetProcessesByName("cmd"))
+            {
+                try
+                {
+                    if (before.Contains(p.Id)) continue;
+                    DateTime start;
+                    try { start = p.StartTime; }
+                    catch { continue; }
+                    if (best == null || start > best.Value.Start)
+                        best = (p.Id, start);
+                }
+                finally { p.Dispose(); }
+            }
+            return best?.Pid ?? 0;
+        }
+        catch { return 0; }
+    }
+
+    private static bool IsPidAlive(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return !p.HasExited;
+        }
+        catch { return false; }
     }
 
     /// <summary>4-digit stable hash of a folder path. FNV-1a → mod 10000 so
     /// the same folder always yields the same id across sessions.</summary>
     private static int ComputeGroupId(string folderPath)
     {
-        // FNV-1a 32-bit
         const uint offset = 2166136261;
         const uint prime = 16777619;
         uint hash = offset;
@@ -488,7 +452,7 @@ class GroupLauncherForm : Form
 }
 
 /// <summary>
-/// One shortcut row inside <see cref="GroupLauncherForm"/>. Shows the name,
+/// One shortcut row inside <see cref="GroupLauncherPanel"/>. Shows the name,
 /// a colored status dot, the current state text, and per-row Launch / Stop
 /// buttons. State transitions are recorded with a timestamp so the parent
 /// can fail-out launches whose windows never appear.
