@@ -14,6 +14,7 @@ class ShortcutsForm : Form
     private readonly FlowLayoutPanel _listPanel;
     private readonly TreeView _folderTree;
     private readonly RoundedButton _newShortcutBtn;
+    private readonly RoundedButton _groupLauncherBtn;
     private readonly FolderSlotRow _recycleBinRow;
     private string? _expandedId;
 
@@ -70,6 +71,12 @@ class ShortcutsForm : Form
         _newShortcutBtn.Click += (_, _) => NewShortcut();
         toolbar.Controls.Add(_newShortcutBtn);
 
+        _groupLauncherBtn = MakeButton("⇉ Group Launcher", theme.PrimaryDim, theme.TextPrimary);
+        _groupLauncherBtn.Size = new Size(150, 30);
+        _groupLauncherBtn.Location = new Point(pad + 366, 14);
+        _groupLauncherBtn.Click += (_, _) => OpenGroupLauncher();
+        toolbar.Controls.Add(_groupLauncherBtn);
+
         var hintLabel = new Label
         {
             Text = ShortcutLauncher.TryFindWindowsTerminal(out _)
@@ -78,7 +85,7 @@ class ShortcutsForm : Form
             Font = new Font("Segoe UI", 9f),
             ForeColor = theme.TextSecondary,
             AutoSize = true,
-            Location = new Point(pad + 380, 22),
+            Location = new Point(pad + 526, 22),
             BackColor = Color.Transparent,
         };
         toolbar.Controls.Add(hintLabel);
@@ -237,6 +244,33 @@ class ShortcutsForm : Form
         _newShortcutBtn.Enabled = IsCreatableSelection;
         _newShortcutBtn.BackColor = IsCreatableSelection ? _theme.Primary : _theme.PrimaryDim;
         _newShortcutBtn.ForeColor = IsCreatableSelection ? Color.White : _theme.TextSecondary;
+
+        // Group Launcher needs a non-root folder *and* at least one shortcut
+        // in it — there's nothing to launch from an empty folder.
+        bool hasShortcuts = IsCreatableSelection
+            && ShortcutStore.Load().Any(s => string.Equals(
+                ShortcutFolders.Normalize(s.FolderPath),
+                _selectedFolder,
+                StringComparison.OrdinalIgnoreCase));
+        _groupLauncherBtn.Enabled = hasShortcuts;
+        _groupLauncherBtn.BackColor = hasShortcuts ? _theme.PrimaryDim : _theme.BgHeader;
+        _groupLauncherBtn.ForeColor = hasShortcuts ? _theme.TextPrimary : _theme.TextSecondary;
+    }
+
+    private void OpenGroupLauncher()
+    {
+        if (!IsCreatableSelection) return;
+        var shortcuts = ShortcutStore.Load()
+            .Where(s => string.Equals(
+                ShortcutFolders.Normalize(s.FolderPath),
+                _selectedFolder,
+                StringComparison.OrdinalIgnoreCase))
+            .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (shortcuts.Count == 0) return;
+
+        var form = new GroupLauncherForm(_theme, _selectedFolder, shortcuts);
+        form.Show(this);
     }
 
     /// <summary>
