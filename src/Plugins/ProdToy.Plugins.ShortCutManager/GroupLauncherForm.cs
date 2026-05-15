@@ -175,12 +175,15 @@ class GroupLauncherForm : Form
         }
     }
 
-    // Stagger between back-to-back wt invocations. Without this, two
-    // `wt.exe -w <name> ...` calls fired in microseconds race the named-window
-    // registration: both see "no window named <name> yet" and each creates a
-    // fresh top-level window instead of joining one. 400 ms is enough on
-    // typical machines to let WT register the name before the next launch.
-    private const int LaunchStaggerMs = 400;
+    // wt -w <name> joins a named window, but only if that window has been
+    // registered with WT. Back-to-back launches before the first window has
+    // registered race and end up with two top-level windows instead of one
+    // grouped window. We poll for the spawned title to appear before firing
+    // the next launch (with a hard timeout so we never hang).
+    private const int PostLaunchPollMs = 100;
+    private const int PostLaunchTimeoutMs = 4000;
+    private const int PostLaunchGraceMs = 250;
+    private const int CloseSettleMs = 600;
 
     private async void LaunchAll()
     {
@@ -191,17 +194,42 @@ class GroupLauncherForm : Form
         foreach (var row in _rows)
             row.SetState(GroupRow.RowState.Launching, "Launching…");
 
-        // If we just retired windows of the same group, give WT a beat to
-        // drop those names before we start reusing them.
-        if (closedCount > 0) await Task.Delay(LaunchStaggerMs);
+        // If we just retired windows of the same group, let WT drop those
+        // names before we start reusing them — otherwise the new launch
+        // sometimes still sees the old name.
+        if (closedCount > 0) await Task.Delay(CloseSettleMs);
 
         for (int i = 0; i < _shortcuts.Count; i++)
         {
-            if (i > 0) await Task.Delay(LaunchStaggerMs);
             var s = _shortcuts[i];
-            var result = ShortcutLauncher.Launch(s, BuildOverrideTitle(s), forceNewWindow: false);
+            string expectedTitle = BuildOverrideTitle(s);
+            var result = ShortcutLauncher.Launch(s, expectedTitle, forceNewWindow: false);
             if (!result.Ok)
+            {
                 _rows[i].SetState(GroupRow.RowState.Failed, result.ErrorMessage ?? "Launch failed");
+                continue;
+            }
+
+            // Wait until WT has actually painted a top-level window with our
+            // title, then a short grace so its named-window registration
+            // settles. Without this, the next `wt -w <name>` call races and
+            // creates a second window instead of joining the first.
+            await WaitForWindowAsync(expectedTitle, PostLaunchTimeoutMs);
+            await Task.Delay(PostLaunchGraceMs);
+        }
+    }
+
+    /// <summary>Poll for a visible top-level window whose title contains
+    /// <paramref name="needle"/>. Returns when found or when the timeout
+    /// elapses — never throws.</summary>
+    private static async Task WaitForWindowAsync(string needle, int timeoutMs)
+    {
+        if (string.IsNullOrEmpty(needle)) return;
+        var deadline = Environment.TickCount + timeoutMs;
+        while (Environment.TickCount < deadline)
+        {
+            if (WindowFinder.AnyWindowTitleContains(needle)) return;
+            await Task.Delay(PostLaunchPollMs);
         }
     }
 
