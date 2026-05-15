@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using ProdToy.Sdk;
@@ -192,7 +193,10 @@ class GroupLauncherForm : Form
         _statusLabel.Text = $"Launching batch {_batchId:D4}…";
 
         foreach (var row in _rows)
+        {
+            row.LaunchedCmdPid = 0;
             row.SetState(GroupRow.RowState.Launching, "Launching…");
+        }
 
         // If we just retired windows of the same group, let WT drop those
         // names before we start reusing them — otherwise the new launch
@@ -203,6 +207,13 @@ class GroupLauncherForm : Form
         {
             var s = _shortcuts[i];
             string expectedTitle = BuildOverrideTitle(s);
+
+            // Snapshot existing cmd.exe PIDs so we can identify the one our
+            // launch spawns. Status is then tracked by that PID's lifetime
+            // rather than the tab title — so a backgrounded tab still shows
+            // "Running" instead of flipping to "Stopped".
+            var beforePids = GetCmdPidSnapshot();
+
             var result = ShortcutLauncher.Launch(s, expectedTitle, forceNewWindow: false);
             if (!result.Ok)
             {
@@ -216,6 +227,9 @@ class GroupLauncherForm : Form
             // creates a second window instead of joining the first.
             await WaitForWindowAsync(expectedTitle, PostLaunchTimeoutMs);
             await Task.Delay(PostLaunchGraceMs);
+
+            int newPid = PickNewCmdPid(beforePids);
+            if (newPid > 0) _rows[i].LaunchedCmdPid = newPid;
         }
     }
 
@@ -233,6 +247,60 @@ class GroupLauncherForm : Form
         }
     }
 
+    /// <summary>Snapshot of every currently-running <c>cmd.exe</c> PID.</summary>
+    private static HashSet<int> GetCmdPidSnapshot()
+    {
+        try
+        {
+            return Process.GetProcessesByName("cmd").Select(p =>
+            {
+                try { return p.Id; }
+                catch { return 0; }
+                finally { p.Dispose(); }
+            }).Where(id => id > 0).ToHashSet();
+        }
+        catch { return new HashSet<int>(); }
+    }
+
+    /// <summary>Pick the newest cmd.exe PID that wasn't in <paramref name="before"/>.
+    /// In rare cases more than one new cmd may have appeared (some unrelated
+    /// background spawn racing our launch); we take the one whose start time
+    /// is most recent, which is overwhelmingly likely to be ours since the
+    /// caller awaited window appearance immediately prior.</summary>
+    private static int PickNewCmdPid(HashSet<int> before)
+    {
+        try
+        {
+            (int Pid, DateTime Start)? best = null;
+            foreach (var p in Process.GetProcessesByName("cmd"))
+            {
+                try
+                {
+                    if (before.Contains(p.Id)) continue;
+                    DateTime start;
+                    try { start = p.StartTime; }
+                    catch { continue; }
+                    if (best == null || start > best.Value.Start)
+                        best = (p.Id, start);
+                }
+                finally { p.Dispose(); }
+            }
+            return best?.Pid ?? 0;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>True if the given PID still exists and hasn't exited.</summary>
+    private static bool IsPidAlive(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return !p.HasExited;
+        }
+        catch { return false; }
+    }
+
     private void StopAll()
     {
         int n = CloseGroupWindows();
@@ -248,7 +316,7 @@ class GroupLauncherForm : Form
         }
     }
 
-    private void LaunchOne(int index1Based)
+    private async void LaunchOne(int index1Based)
     {
         if (_batchId == 0) _batchId = Random.Shared.Next(1000, 10000);
 
@@ -261,10 +329,22 @@ class GroupLauncherForm : Form
         foreach (var w in WindowFinder.FindByTitleContains(overrideTitle))
             WindowFinder.CloseWindow(w.Handle);
 
+        row.LaunchedCmdPid = 0;
         row.SetState(GroupRow.RowState.Launching, "Launching…");
+
+        var beforePids = GetCmdPidSnapshot();
+
         var result = ShortcutLauncher.Launch(s, overrideTitle, forceNewWindow: false);
         if (!result.Ok)
+        {
             row.SetState(GroupRow.RowState.Failed, result.ErrorMessage ?? "Launch failed");
+            return;
+        }
+
+        await WaitForWindowAsync(overrideTitle, PostLaunchTimeoutMs);
+        await Task.Delay(PostLaunchGraceMs);
+        int newPid = PickNewCmdPid(beforePids);
+        if (newPid > 0) row.LaunchedCmdPid = newPid;
     }
 
     private void StopOne(int index1Based)
@@ -308,8 +388,7 @@ class GroupLauncherForm : Form
         for (int i = 0; i < _rows.Count; i++)
         {
             var row = _rows[i];
-            string title = BuildOverrideTitle(_shortcuts[i]);
-            bool alive = WindowFinder.AnyWindowTitleContains(title);
+            bool alive = row.LaunchedCmdPid > 0 && IsPidAlive(row.LaunchedCmdPid);
 
             if (alive)
             {
@@ -318,12 +397,11 @@ class GroupLauncherForm : Form
             }
             else if (row.State == GroupRow.RowState.Launching)
             {
-                // Give the OS a few seconds to bring the window up before
-                // declaring failure. SecondsSinceStateChange is a coarse
-                // approximation but good enough for this UI.
+                // Allow a few seconds for the cmd.exe to actually appear
+                // before declaring the launch failed.
                 if (row.SecondsSinceStateChange > 8)
                 {
-                    row.SetState(GroupRow.RowState.Failed, "Window never appeared");
+                    row.SetState(GroupRow.RowState.Failed, "Process never started");
                     failed++;
                 }
             }
@@ -432,6 +510,11 @@ class GroupRow : Panel
     public int Index { get; set; }
     public RowState State => _state;
     public double SecondsSinceStateChange => (DateTime.UtcNow - _stateChangedAt).TotalSeconds;
+
+    /// <summary>The cmd.exe PID identified at launch time for this row's tab,
+    /// or 0 if this row hasn't been launched (or the spawn couldn't be
+    /// matched). Status polling reads this to decide alive vs stopped.</summary>
+    public int LaunchedCmdPid { get; set; }
 
     public event Action? LaunchRequested;
     public event Action? StopRequested;
