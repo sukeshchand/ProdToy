@@ -175,17 +175,29 @@ class GroupLauncherForm : Form
         }
     }
 
-    private void LaunchAll()
+    // Stagger between back-to-back wt invocations. Without this, two
+    // `wt.exe -w <name> ...` calls fired in microseconds race the named-window
+    // registration: both see "no window named <name> yet" and each creates a
+    // fresh top-level window instead of joining one. 400 ms is enough on
+    // typical machines to let WT register the name before the next launch.
+    private const int LaunchStaggerMs = 400;
+
+    private async void LaunchAll()
     {
-        CloseGroupWindows();
+        int closedCount = CloseGroupWindows();
         _batchId = Random.Shared.Next(1000, 10000);
         _statusLabel.Text = $"Launching batch {_batchId:D4}…";
 
         foreach (var row in _rows)
             row.SetState(GroupRow.RowState.Launching, "Launching…");
 
+        // If we just retired windows of the same group, give WT a beat to
+        // drop those names before we start reusing them.
+        if (closedCount > 0) await Task.Delay(LaunchStaggerMs);
+
         for (int i = 0; i < _shortcuts.Count; i++)
         {
+            if (i > 0) await Task.Delay(LaunchStaggerMs);
             var s = _shortcuts[i];
             var result = ShortcutLauncher.Launch(s, BuildOverrideTitle(s), forceNewWindow: false);
             if (!result.Ok)
