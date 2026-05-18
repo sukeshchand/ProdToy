@@ -3,6 +3,15 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
+/// <summary>Root for per-shortcut Playwright user data dirs. Set once at
+/// plugin Initialize so the runner can locate it without a context.</summary>
+static class AutoLoginPaths
+{
+    public static string ProfilesRoot { get; private set; } = "";
+    public static void Initialize(string scopedDataDir)
+        => ProfilesRoot = Path.Combine(scopedDataDir, "browser-profiles");
+}
+
 /// <summary>
 /// Spins up a Playwright-controlled Edge instance, navigates to a shortcut's
 /// Status URL, fills the first visible username + password input pair, clicks
@@ -19,7 +28,7 @@ static class AutoLoginRunner
 {
     // Holds onto live sessions so they don't get GC'd while the user is
     // still in the browser. Cleaned up when the browser process disconnects.
-    private static readonly List<(IPlaywright Pw, IBrowser Browser)> _sessions = new();
+    private static readonly List<(IPlaywright Pw, IBrowserContext Ctx)> _sessions = new();
     private static readonly object _lock = new();
 
     public static void RunInBackground(Shortcut s)
@@ -40,26 +49,37 @@ static class AutoLoginRunner
 
         // Fire-and-forget. Playwright is fully async; trying to await it on
         // the launcher's caller would block the UI for several seconds.
-        _ = Task.Run(() => RunAsync(s.Name, s.StatusUrl, s.LoginUsername, password));
+        _ = Task.Run(() => RunAsync(s.Id, s.Name, s.StatusUrl, s.LoginUsername, password));
     }
 
-    private static async Task RunAsync(string shortcutName, string url, string username, string password)
+    private static async Task RunAsync(string shortcutId, string shortcutName, string url, string username, string password)
     {
         IPlaywright? pw = null;
-        IBrowser? browser = null;
+        IBrowserContext? ctx = null;
         try
         {
             pw = await Playwright.CreateAsync();
-            browser = await pw.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+
+            // Per-shortcut persistent profile: cookies + localStorage stick
+            // across launches so once the user is logged in, subsequent
+            // runs land them on the post-login page without re-prompting.
+            string userDataDir = string.IsNullOrEmpty(AutoLoginPaths.ProfilesRoot)
+                ? Path.Combine(Path.GetTempPath(), "ProdToyShortcutsBrowser", shortcutId)
+                : Path.Combine(AutoLoginPaths.ProfilesRoot, shortcutId);
+            Directory.CreateDirectory(userDataDir);
+
+            ctx = await pw.Chromium.LaunchPersistentContextAsync(userDataDir, new BrowserTypeLaunchPersistentContextOptions
             {
                 Channel = "msedge",
                 Headless = false,
-            });
-            var context = await browser.NewContextAsync(new BrowserNewContextOptions
-            {
                 ViewportSize = ViewportSize.NoViewport,
+                // Hide the "browser is being controlled by automation" banner
+                // and the navigator.webdriver flag so sites don't bail.
+                Args = new[] { "--disable-blink-features=AutomationControlled" },
+                IgnoreDefaultArgs = new[] { "--enable-automation" },
             });
-            var page = await context.NewPageAsync();
+
+            var page = ctx.Pages.Count > 0 ? ctx.Pages[0] : await ctx.NewPageAsync();
 
             await page.GotoAsync(url, new PageGotoOptions
             {
@@ -67,21 +87,28 @@ static class AutoLoginRunner
                 Timeout = 20_000,
             });
 
-            await FillLoginFormAsync(page, username, password);
+            // If the page has no visible password field, assume the saved
+            // session is still valid and skip filling — the user lands
+            // already-logged-in.
+            int passwordFields = await page.Locator("input[type='password']:visible").CountAsync();
+            if (passwordFields > 0)
+                await FillLoginFormAsync(page, username, password);
+            else
+                PluginLog.Info($"AutoLogin '{shortcutName}': session looks valid, no login form found.");
 
-            // Track the session so the browser stays open. Hook Disconnected
+            // Track the session so the browser stays open. Hook context Close
             // so we drop the reference when the user closes the window.
-            lock (_lock) _sessions.Add((pw, browser));
-            browser.Disconnected += (_, _) =>
+            lock (_lock) _sessions.Add((pw, ctx));
+            ctx.Close += (_, _) =>
             {
-                lock (_lock) _sessions.RemoveAll(t => t.Browser == browser);
+                lock (_lock) _sessions.RemoveAll(t => t.Ctx == ctx);
                 try { pw?.Dispose(); } catch { }
             };
         }
         catch (Exception ex)
         {
             PluginLog.Warn($"AutoLogin '{shortcutName}': {ex.Message}");
-            try { if (browser != null) await browser.CloseAsync(); } catch { }
+            try { if (ctx != null) await ctx.CloseAsync(); } catch { }
             try { pw?.Dispose(); } catch { }
         }
     }

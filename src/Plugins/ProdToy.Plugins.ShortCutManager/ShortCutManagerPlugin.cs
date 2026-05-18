@@ -4,7 +4,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
-[Plugin("ProdToy.Plugin.ShortCutManager", "Shortcuts", "1.0.418",
+[Plugin("ProdToy.Plugin.ShortCutManager", "Shortcuts", "1.0.419",
     Description = "Folder-organized launcher for project shortcuts — Claude CLI, npm, dotnet, custom commands",
     Author = "ProdToy",
     MenuPriority = 250)]
@@ -58,6 +58,7 @@ public partial class ShortCutManagerPlugin : IPlugin, IDoctor
         OwnedWtProfilesStore.Initialize(scopedDataDir);
         OwnedWtSchemesStore.Initialize(scopedDataDir);
         DesktopShortcutSync.Initialize(scopedDataDir);
+        AutoLoginPaths.Initialize(scopedDataDir);
 
         // Two pipe handlers:
         //   shortcuts.context-launch — Explorer right-click invocation;
