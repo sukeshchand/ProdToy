@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Net.Http;
 using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
@@ -32,7 +33,13 @@ class GroupLauncherPanel : UserControl
     private readonly RoundedButton _launchAllBtn;
     private readonly RoundedButton _stopAllBtn;
     private readonly System.Windows.Forms.Timer _pollTimer;
+    private readonly System.Windows.Forms.Timer _urlPollTimer;
     private readonly List<GroupRow> _rows = new();
+
+    /// <summary>One HttpClient per panel — short timeout so probes don't pile up
+    /// when targets are dead. Reused across all rows' URL probes.</summary>
+    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(2) };
+    private bool _urlPollInFlight;
 
     private string GroupPrefix => $"ProdToyShortCuts_{_groupId}_";
     private string BatchSuffix => $"ProdToyShortCuts_{_groupId}_{_session.BatchId}";
@@ -163,6 +170,64 @@ class GroupLauncherPanel : UserControl
         _pollTimer.Tick += (_, _) => RefreshStatus();
         _pollTimer.Start();
         RefreshStatus();
+
+        // URL probing runs on a separate, slower timer (3s) so HTTP calls
+        // don't pile up while the 1s PID poll keeps the row indicator fresh.
+        _urlPollTimer = new System.Windows.Forms.Timer { Interval = 3000 };
+        _urlPollTimer.Tick += async (_, _) => await ProbeUrlsAsync();
+        _urlPollTimer.Start();
+        _ = ProbeUrlsAsync();
+    }
+
+    /// <summary>Hits every row's StatusUrl (when set) and updates that row's
+    /// <see cref="GroupRow.UrlStatus"/> with the result. Single in-flight
+    /// guard ensures slow probes don't queue up across ticks.</summary>
+    private async Task ProbeUrlsAsync()
+    {
+        if (_urlPollInFlight || IsDisposed) return;
+        _urlPollInFlight = true;
+        try
+        {
+            var tasks = new List<Task>();
+            for (int i = 0; i < _rows.Count; i++)
+            {
+                var row = _rows[i];
+                var url = _shortcuts[i].StatusUrl?.Trim() ?? "";
+                if (string.IsNullOrEmpty(url))
+                {
+                    row.SetUrlStatus(GroupRow.UrlState.NotConfigured, "");
+                    continue;
+                }
+                tasks.Add(ProbeOneAsync(row, url));
+            }
+            if (tasks.Count > 0) await Task.WhenAll(tasks);
+        }
+        finally { _urlPollInFlight = false; }
+    }
+
+    private async Task ProbeOneAsync(GroupRow row, string url)
+    {
+        try
+        {
+            using var resp = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            int code = (int)resp.StatusCode;
+            if (code is >= 200 and < 400)
+                row.SetUrlStatus(GroupRow.UrlState.Healthy, $"HTTP {code}");
+            else
+                row.SetUrlStatus(GroupRow.UrlState.ServerError, $"HTTP {code}");
+        }
+        catch (TaskCanceledException)
+        {
+            row.SetUrlStatus(GroupRow.UrlState.Unreachable, "Timeout");
+        }
+        catch (HttpRequestException ex)
+        {
+            row.SetUrlStatus(GroupRow.UrlState.Unreachable, ex.InnerException?.Message ?? "Unreachable");
+        }
+        catch (Exception ex)
+        {
+            row.SetUrlStatus(GroupRow.UrlState.Unreachable, ex.Message);
+        }
     }
 
     // wt -w <name> joins a named window, but only if that window has been
@@ -345,6 +410,9 @@ class GroupLauncherPanel : UserControl
         {
             _pollTimer.Stop();
             _pollTimer.Dispose();
+            _urlPollTimer.Stop();
+            _urlPollTimer.Dispose();
+            _httpClient.Dispose();
         }
         base.Dispose(disposing);
     }
@@ -449,24 +517,30 @@ class GroupLauncherPanel : UserControl
 }
 
 /// <summary>
-/// One shortcut row inside <see cref="GroupLauncherPanel"/>. Shows the name,
-/// a colored status dot, the current state text, and per-row Launch / Stop
-/// buttons. State transitions are recorded with a timestamp so the parent
-/// can fail-out launches whose windows never appear.
+/// One shortcut row inside <see cref="GroupLauncherPanel"/>. Top strip shows
+/// the name + Running/Stopped dot + URL health badge + per-row Launch/Stop.
+/// A read-only log box fills the bottom for future stdout capture; for now
+/// it carries status messages such as last URL probe result and PID changes.
 /// </summary>
 class GroupRow : Panel
 {
     public enum RowState { Pending, Launching, Running, Stopped, Failed }
+    public enum UrlState { NotConfigured, Healthy, ServerError, Unreachable }
 
-    private const int RowHeight = 56;
+    private const int RowHeight = 150;
+    private const int TopStripHeight = 50;
+    private const int InfoLineHeight = 22;
 
     private readonly Shortcut _shortcut;
     private readonly PluginTheme _theme;
     private readonly RoundedButton _launchBtn;
     private readonly RoundedButton _stopBtn;
+    private readonly RichTextBox _logBox;
     private RowState _state = RowState.Pending;
     private string _stateLabel = "Pending";
     private DateTime _stateChangedAt = DateTime.UtcNow;
+    private UrlState _urlState = UrlState.NotConfigured;
+    private string _urlDetail = "";
 
     public int Index { get; set; }
     public RowState State => _state;
@@ -484,7 +558,7 @@ class GroupRow : Panel
     {
         _shortcut = s;
         _theme = theme;
-        Margin = new Padding(0, 3, 0, 3);
+        Margin = new Padding(0, 4, 0, 4);
         Height = RowHeight;
         BackColor = theme.BgDark;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
@@ -521,23 +595,83 @@ class GroupRow : Panel
         _stopBtn.FlatAppearance.MouseOverBackColor = theme.ErrorColor;
         _stopBtn.Click += (_, _) => StopRequested?.Invoke();
         Controls.Add(_stopBtn);
+
+        // Read-only log surface. Empty for now (stdout capture is a future
+        // feature requiring redirected Process.Start instead of `wt.exe`).
+        // Reserved here so the user can see room for the data they're
+        // planning to add.
+        _logBox = new RichTextBox
+        {
+            Font = new Font("Cascadia Mono", 8.5f),
+            BackColor = theme.BgDark,
+            ForeColor = theme.TextSecondary,
+            BorderStyle = BorderStyle.FixedSingle,
+            ReadOnly = true,
+            DetectUrls = false,
+            Multiline = true,
+            ScrollBars = RichTextBoxScrollBars.Vertical,
+            WordWrap = false,
+        };
+        Controls.Add(_logBox);
     }
 
     public void SetState(RowState state, string label)
     {
         if (_state == state && _stateLabel == label) return;
-        if (_state != state) _stateChangedAt = DateTime.UtcNow;
+        if (_state != state)
+        {
+            _stateChangedAt = DateTime.UtcNow;
+            AppendLog($"[{DateTime.Now:HH:mm:ss}] state → {state}" +
+                (state == RowState.Running && LaunchedCmdPid > 0 ? $" (pid {LaunchedCmdPid})" : ""),
+                StateColor(state));
+        }
         _state = state;
         _stateLabel = label;
         Invalidate();
     }
 
+    public void SetUrlStatus(UrlState state, string detail)
+    {
+        bool changed = _urlState != state;
+        _urlState = state;
+        _urlDetail = detail ?? "";
+        if (changed && state != UrlState.NotConfigured)
+            AppendLog($"[{DateTime.Now:HH:mm:ss}] url → {state} {(_urlDetail.Length > 0 ? "(" + _urlDetail + ")" : "")}",
+                UrlColor(state));
+        Invalidate();
+    }
+
+    private void AppendLog(string line, Color color)
+    {
+        if (_logBox.IsDisposed) return;
+        try
+        {
+            _logBox.SelectionStart = _logBox.TextLength;
+            _logBox.SelectionLength = 0;
+            _logBox.SelectionColor = color;
+            _logBox.AppendText(line + Environment.NewLine);
+            _logBox.SelectionColor = _logBox.ForeColor;
+            _logBox.SelectionStart = _logBox.TextLength;
+            _logBox.ScrollToCaret();
+        }
+        catch { }
+    }
+
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
-        if (_launchBtn == null || _stopBtn == null) return;
-        _stopBtn.Location = new Point(Width - _stopBtn.Width - 10, 14);
-        _launchBtn.Location = new Point(_stopBtn.Left - _launchBtn.Width - 6, 14);
+        if (_launchBtn == null || _stopBtn == null || _logBox == null) return;
+
+        int btnTop = (TopStripHeight - _stopBtn.Height) / 2 + 6;
+        _stopBtn.Location = new Point(Width - _stopBtn.Width - 12, btnTop);
+        _launchBtn.Location = new Point(_stopBtn.Left - _launchBtn.Width - 6, btnTop);
+
+        int logTop = TopStripHeight + InfoLineHeight;
+        int logLeft = 14;
+        int logRight = Width - 14;
+        int logBottom = Height - 12;
+        _logBox.Location = new Point(logLeft, logTop);
+        _logBox.Size = new Size(Math.Max(50, logRight - logLeft), Math.Max(20, logBottom - logTop));
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -551,16 +685,17 @@ class GroupRow : Panel
         using var path = RoundedRect(rect, 8);
         using (var bg = new SolidBrush(_theme.BgHeader)) g.FillPath(bg, path);
 
+        // PID/state dot
         int dotX = 14;
-        int dotY = Height / 2 - 6;
-        Color dotColor = StateColor(_state);
-        using (var dotBrush = new SolidBrush(dotColor))
+        int dotY = 18;
+        using (var dotBrush = new SolidBrush(StateColor(_state)))
             g.FillEllipse(dotBrush, dotX, dotY, 12, 12);
 
         int textLeft = dotX + 22;
         int textRight = _launchBtn.Left - 10;
         if (textRight < textLeft + 80) textRight = Width - 100;
 
+        // Row title (top strip)
         string name = string.IsNullOrWhiteSpace(_shortcut.Name) ? "(untitled)" : _shortcut.Name;
         using (var titleFont = new Font("Segoe UI Semibold", 10.5f, FontStyle.Bold))
         using (var tbrush = new SolidBrush(_theme.TextPrimary))
@@ -577,7 +712,64 @@ class GroupRow : Panel
             g.DrawString(_stateLabel, subFont, subBrush,
                 new RectangleF(textLeft, 30, textRight - textLeft, 18), sf);
         }
+
+        // Info line: PID + URL badge
+        int infoY = TopStripHeight + 2;
+        int infoLeft = textLeft;
+        int infoRight = Width - 14;
+        string pidText = LaunchedCmdPid > 0 ? $"PID {LaunchedCmdPid}" : "PID —";
+        using (var labelFont = new Font("Segoe UI", 8.5f))
+        using (var labelBrush = new SolidBrush(_theme.TextSecondary))
+        {
+            g.DrawString(pidText, labelFont, labelBrush, new PointF(infoLeft, infoY));
+        }
+
+        // URL badge
+        if (!string.IsNullOrWhiteSpace(_shortcut.StatusUrl))
+        {
+            string label = UrlBadgeLabel(_urlState);
+            Color urlColor = UrlColor(_urlState);
+            using var badgeFont = new Font("Segoe UI Semibold", 8f, FontStyle.Bold);
+            var badgeSize = g.MeasureString(label, badgeFont);
+            int badgeW = (int)badgeSize.Width + 12;
+            int badgeH = 16;
+            int badgeX = infoLeft + 90;
+            int badgeY = infoY;
+
+            using var badgePath = RoundedRect(new Rectangle(badgeX, badgeY, badgeW, badgeH), 3);
+            using (var fill = new SolidBrush(urlColor))
+                g.FillPath(fill, badgePath);
+            using (var textBrush = new SolidBrush(Color.White))
+            using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                g.DrawString(label, badgeFont, textBrush, new RectangleF(badgeX, badgeY, badgeW, badgeH), sf);
+
+            int urlTextX = badgeX + badgeW + 6;
+            string urlLine = string.IsNullOrEmpty(_urlDetail)
+                ? _shortcut.StatusUrl
+                : $"{_shortcut.StatusUrl} · {_urlDetail}";
+            using var urlFont = new Font("Segoe UI", 8.5f);
+            using var urlBrush = new SolidBrush(_theme.TextSecondary);
+            using var urlSf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+            g.DrawString(urlLine, urlFont, urlBrush,
+                new RectangleF(urlTextX, infoY, Math.Max(20, infoRight - urlTextX), 16), urlSf);
+        }
     }
+
+    private static string UrlBadgeLabel(UrlState s) => s switch
+    {
+        UrlState.Healthy => "HEALTHY",
+        UrlState.ServerError => "5xx",
+        UrlState.Unreachable => "DOWN",
+        _ => "—",
+    };
+
+    private Color UrlColor(UrlState s) => s switch
+    {
+        UrlState.Healthy => _theme.SuccessColor,
+        UrlState.ServerError => Color.FromArgb(0xE6, 0xA5, 0x3A),
+        UrlState.Unreachable => _theme.ErrorColor,
+        _ => _theme.TextSecondary,
+    };
 
     private Color StateColor(RowState s) => s switch
     {

@@ -137,6 +137,15 @@ sealed record Shortcut
     [JsonPropertyName("desktopShortcutName")]
     public string DesktopShortcutName { get; init; } = "";
 
+    /// <summary>
+    /// Optional URL the Group Launcher pings to surface a live/down health
+    /// indicator per row. Typical use: an HTTP server the launched command
+    /// exposes (e.g. <c>http://localhost:5000</c> for <c>dotnet run</c> on an
+    /// ASP.NET project). Empty = no probe.
+    /// </summary>
+    [JsonPropertyName("statusUrl")]
+    public string StatusUrl { get; init; } = "";
+
     [JsonPropertyName("notes")]
     public string Notes { get; init; } = "";
 
