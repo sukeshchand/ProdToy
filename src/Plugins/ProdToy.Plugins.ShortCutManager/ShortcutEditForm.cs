@@ -31,6 +31,7 @@ class ShortcutEditForm : Form
     // working directory or profile changes — typing into the box flips this
     // off so we don't trample a custom name.
     private bool _desktopNameAutoSync = true;
+    private readonly TextBox _statusUrlBox;
     private readonly TextBox _notesBox;
     private readonly Label _validationLabel;
     private readonly RoundedButton _editProfileBtn;
@@ -552,6 +553,26 @@ class ShortcutEditForm : Form
         };
         y += 34;
 
+        y = AddSection("MONITORING", y);
+
+        AddLabel("Status URL", pad, y);
+        _statusUrlBox = MakeTextBox(inputX, y, inputW);
+        _statusUrlBox.Text = existing?.StatusUrl ?? "";
+        y += 30;
+
+        var statusUrlHint = new Label
+        {
+            Text = "Optional. Group Launcher polls this URL every 3s to show a Healthy / Unreachable badge — e.g. http://localhost:5000 for an ASP.NET app.",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = false,
+            Size = new Size(inputW, 32),
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(statusUrlHint);
+        y += 38;
+
         y = AddSection("NOTES", y);
 
         _notesBox = MakeTextBox(pad, y, ClientSize.Width - pad * 2, multiline: true, height: 60);
@@ -745,6 +766,7 @@ class ShortcutEditForm : Form
             ShowInExplorerContextMenu = _explorerMenuToggle.Checked,
             AddToDesktop = _desktopShortcutToggle.Checked,
             DesktopShortcutName = _desktopShortcutNameBox.Text.Trim(),
+            StatusUrl = _statusUrlBox.Text.Trim(),
             Notes = _notesBox.Text,
             FolderPath = _folderPath,
             CreatedAt = _existing?.CreatedAt ?? DateTime.Now,

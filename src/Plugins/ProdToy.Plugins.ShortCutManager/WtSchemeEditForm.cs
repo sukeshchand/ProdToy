@@ -142,6 +142,25 @@ class WtSchemeEditForm : Form
         }
         y = colStartY + 10 * rowH + 6;
 
+        AddSection("PREVIEW", y, sepWidth: ClientSize.Width - pad * 2);
+        y += 32;
+
+        var preview = new Panel
+        {
+            Size = new Size(ClientSize.Width - pad * 2, 158),
+            Location = new Point(pad, y),
+            BorderStyle = BorderStyle.FixedSingle,
+        };
+        preview.Paint += (_, pe) => DrawPreview(pe.Graphics, preview.ClientSize);
+        Controls.Add(preview);
+
+        // Live preview: any hex edit (or swatch pick that pushes hex back into
+        // the box) repaints the terminal mockup.
+        foreach (var box in _colorBoxes.Values)
+            box.TextChanged += (_, _) => preview.Invalidate();
+
+        y += 168;
+
         _validationLabel = new Label
         {
             Text = "",
@@ -248,17 +267,16 @@ class WtSchemeEditForm : Form
         };
         swatch.Click += (_, _) =>
         {
-            using var dlg = new ColorDialog
-            {
-                Color = ParseHexOrDefault(hex.Text, Color.Black),
-                FullOpen = true,
-                AnyColor = true,
-            };
-            if (dlg.ShowDialog(this) == DialogResult.OK)
-            {
-                var c = dlg.Color;
+            // Open our in-house picker just below the swatch so live edits
+            // (spectrum drag, hue, hex, RGB) update the hex textbox — and
+            // therefore the swatch and preview — on every change. Closes on
+            // Esc / Enter / click-outside; whatever value is in the hex
+            // box at that point is kept.
+            var anchor = swatch.PointToScreen(new Point(0, swatch.Height + 2));
+            var picker = new ColorPickerPopup(ParseHexOrDefault(hex.Text, Color.Black), anchor);
+            picker.ColorSelected += c =>
                 hex.Text = $"#{c.R:x2}{c.G:x2}{c.B:x2}";
-            }
+            picker.Show(this);
         };
         Controls.Add(swatch);
         _colorSwatches[key] = swatch;
@@ -365,6 +383,73 @@ class WtSchemeEditForm : Form
             _validationLabel.Text = $"Delete failed: {ex.Message}";
         }
     }
+
+    /// <summary>Paint a fake terminal session using the scheme's current
+    /// hex values so the user can sanity-check contrast and readability
+    /// before saving. Pulls live colors from <see cref="_colorBoxes"/> so
+    /// every keystroke updates this view.</summary>
+    private void DrawPreview(Graphics g, Size size)
+    {
+        Color bg          = ColorOf("background",   Color.Black);
+        Color fg          = ColorOf("foreground",   Color.White);
+        Color cursor      = ColorOf("cursorColor",  Color.White);
+        Color blue        = ColorOf("blue",         Color.Blue);
+        Color yellow      = ColorOf("yellow",       Color.Yellow);
+        Color brightGreen = ColorOf("brightGreen",  Color.Lime);
+        Color brightRed   = ColorOf("brightRed",    Color.Red);
+        Color brightBlue  = ColorOf("brightBlue",   Color.LightSkyBlue);
+        Color brightBlack = ColorOf("brightBlack",  Color.Gray);
+
+        using (var bgBrush = new SolidBrush(bg))
+            g.FillRectangle(bgBrush, 0, 0, size.Width, size.Height);
+
+        using var font = new Font("Cascadia Mono", 9.5f);
+        int lineH = font.Height + 2;
+        int x = 10, y = 6;
+
+        void Draw(string text, Color c)
+        {
+            using var b = new SolidBrush(c);
+            g.DrawString(text, font, b, x, y);
+            x += (int)Math.Ceiling(g.MeasureString(text, font).Width);
+        }
+        void Newline() { x = 10; y += lineH; }
+
+        Draw("PS C:\\repo> ", brightGreen);
+        Draw("ls", fg);
+        Newline();
+        Draw("drwxr-xr-x  ", brightBlack);
+        Draw("src", brightBlue);
+        Newline();
+        Draw("-rw-r--r--  ", brightBlack);
+        Draw("README.md", fg);
+        Newline();
+        Newline();
+        Draw("PS C:\\repo> ", brightGreen);
+        Draw("git status", fg);
+        Newline();
+        Draw("On branch ", fg);
+        Draw("main", brightGreen);
+        Newline();
+        Draw("  modified: ", yellow);
+        Draw("src/main.c", fg);
+        Newline();
+        Draw("  deleted:  ", brightRed);
+        Draw("old.tmp", fg);
+        Newline();
+        Newline();
+        Draw("PS C:\\repo> ", brightGreen);
+
+        // Cursor block at the end of the last prompt.
+        int cw = (int)Math.Ceiling(g.MeasureString("M", font).Width);
+        using var cb = new SolidBrush(cursor);
+        g.FillRectangle(cb, x, y + 2, cw, lineH - 4);
+    }
+
+    private Color ColorOf(string key, Color fallback)
+        => _colorBoxes.TryGetValue(key, out var box) && TryParseHex(box.Text, out var c)
+            ? c
+            : fallback;
 
     private void AddSection(string text, int y, int sepWidth)
     {
