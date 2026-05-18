@@ -4,22 +4,18 @@ using ProdToy.Sdk;
 namespace ProdToy.Plugins.ShortCutManager;
 
 /// <summary>
-/// Persistence for Shortcut records. Stored as two files in the data
-/// directory: <c>shortcuts.json</c> (shared across all machines pointing at
-/// the same data dir) and an optional <c>shortcuts.{envId}.json</c> overlay
-/// holding entries this machine owns. <see cref="Load"/> returns the union;
-/// writes partition the input list by <see cref="Shortcut.EnvId"/> and
-/// rewrite each file independently.
+/// Persistence for Shortcut records. The data directory passed to
+/// <see cref="Initialize"/> is already scoped to the current machine's
+/// envId by <see cref="ShortCutManagerPlugin"/>, so this store stays
+/// machine-local and never conflicts with other machines syncing the
+/// parent data folder. Cached in memory; writes are atomic full-file.
 /// </summary>
 static class ShortcutStore
 {
-    private static string _sharedFile = "";
-    private static string _envFile = "";
-    private static string _envId = "";
+    private static string _file = "";
     private static readonly object _lock = new();
     private static readonly JsonSerializerOptions _opts = new() { WriteIndented = true };
-    private static List<Shortcut>? _sharedCache;
-    private static List<Shortcut>? _envCache;
+    private static List<Shortcut>? _cache;
 
     /// <summary>
     /// Raised after Add/Update/Delete (and bulk Save) — i.e. anything that
@@ -29,36 +25,35 @@ static class ShortcutStore
     /// </summary>
     public static event Action? Changed;
 
-    /// <summary>Current machine's environment id (from launchSettings.json),
-    /// or empty when no machine identity is configured. Used by the edit
-    /// form's "this machine only" toggle to stamp the shortcut.</summary>
-    public static string CurrentEnvId => _envId;
-
     public static void Initialize(string dataDirectory)
     {
-        _envId = ReadEnvId();
-        _sharedFile = Path.Combine(dataDirectory, "shortcuts.json");
-        _envFile = string.IsNullOrEmpty(_envId)
-            ? ""
-            : Path.Combine(dataDirectory, $"shortcuts.{_envId}.json");
+        _file = Path.Combine(dataDirectory, "shortcuts.json");
+        _cache = null;
     }
 
     public static List<Shortcut> Load()
     {
         lock (_lock)
         {
-            _sharedCache ??= ReadFromDisk(_sharedFile);
-            _envCache ??= string.IsNullOrEmpty(_envFile)
-                ? new List<Shortcut>()
-                : ReadFromDisk(_envFile);
-
-            // Both caches stamp shortcuts with the appropriate EnvId on read
-            // so the in-memory model is uniform; saves use that stamp to
-            // route the entry back to the correct file.
-            var merged = new List<Shortcut>(_sharedCache.Count + _envCache.Count);
-            merged.AddRange(_sharedCache);
-            merged.AddRange(_envCache);
-            return merged;
+            if (_cache != null) return new List<Shortcut>(_cache);
+            try
+            {
+                if (File.Exists(_file))
+                {
+                    var json = File.ReadAllText(_file);
+                    _cache = JsonSerializer.Deserialize<List<Shortcut>>(json) ?? new();
+                }
+                else
+                {
+                    _cache = new();
+                }
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Error("ShortcutStore: load failed", ex);
+                _cache = new();
+            }
+            return new List<Shortcut>(_cache);
         }
     }
 
@@ -66,61 +61,26 @@ static class ShortcutStore
 
     private static void SaveCore(List<Shortcut> shortcuts, bool raiseChanged)
     {
-        List<Shortcut> shared, env;
+        string json;
         lock (_lock)
         {
-            shared = shortcuts.Where(s => string.IsNullOrEmpty(s.EnvId)).ToList();
-            env    = shortcuts.Where(s => !string.IsNullOrEmpty(s.EnvId)).ToList();
-
-            // Defensive: any shortcut whose EnvId names some *other* machine
-            // shouldn't be rewritten by this one. Drop those from the env
-            // payload and leave their original file alone.
-            if (!string.IsNullOrEmpty(_envId))
-                env = env.Where(s => string.Equals(s.EnvId, _envId, StringComparison.OrdinalIgnoreCase)).ToList();
-
-            _sharedCache = new List<Shortcut>(shared);
-            _envCache = new List<Shortcut>(env);
+            _cache = new List<Shortcut>(shortcuts);
+            json = JsonSerializer.Serialize(_cache, _opts);
         }
-
-        WriteToDisk(_sharedFile, shared);
-        if (!string.IsNullOrEmpty(_envFile))
-            WriteToDisk(_envFile, env);
-
+        try
+        {
+            var dir = Path.GetDirectoryName(_file);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(_file, json);
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Error("ShortcutStore: save failed", ex);
+        }
         if (raiseChanged)
         {
             try { Changed?.Invoke(); }
             catch (Exception ex) { PluginLog.Warn($"ShortcutStore.Changed handler threw: {ex.Message}"); }
-        }
-    }
-
-    private static List<Shortcut> ReadFromDisk(string path)
-    {
-        try
-        {
-            if (!File.Exists(path)) return new();
-            var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<List<Shortcut>>(json) ?? new();
-        }
-        catch (Exception ex)
-        {
-            PluginLog.Error($"ShortcutStore: load failed ({path})", ex);
-            return new();
-        }
-    }
-
-    private static void WriteToDisk(string path, List<Shortcut> shortcuts)
-    {
-        if (string.IsNullOrEmpty(path)) return;
-        try
-        {
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            var json = JsonSerializer.Serialize(shortcuts, _opts);
-            File.WriteAllText(path, json);
-        }
-        catch (Exception ex)
-        {
-            PluginLog.Error($"ShortcutStore: save failed ({path})", ex);
         }
     }
 
@@ -129,14 +89,6 @@ static class ShortcutStore
 
     public static void Add(Shortcut s)
     {
-        // Every shortcut created on this machine is per-machine: if no
-        // EnvId was supplied (the edit form never sets one) we stamp the
-        // current machine's id so the entry lands in this machine's
-        // overlay file and not the shared one. Skips when no envId is
-        // configured — the entry falls back to the shared file.
-        if (string.IsNullOrEmpty(s.EnvId) && !string.IsNullOrEmpty(_envId))
-            s = s with { EnvId = _envId };
-
         var all = Load();
         all.Add(s);
         Save(all);
@@ -171,23 +123,5 @@ static class ShortcutStore
         // Suppress Changed: launch-count bumps don't alter the shortcut set
         // and shouldn't trigger shell-extension refreshes.
         SaveCore(all, raiseChanged: false);
-    }
-
-    /// <summary>Per-installation environment id from
-    /// <c>~/.prod-toy/launchSettings.json</c>. Same source the screenshot
-    /// plugin uses; empty when not configured.</summary>
-    private static string ReadEnvId()
-    {
-        try
-        {
-            string launchSettingsPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".prod-toy", "launchSettings.json");
-            if (!File.Exists(launchSettingsPath)) return "";
-            var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(launchSettingsPath));
-            var id = root?["envId"]?.GetValue<string>();
-            return !string.IsNullOrWhiteSpace(id) ? id : "";
-        }
-        catch { return ""; }
     }
 }

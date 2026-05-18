@@ -157,16 +157,6 @@ sealed record Shortcut
     [JsonPropertyName("folderPath")]
     public string FolderPath { get; init; } = "";
 
-    /// <summary>
-    /// Empty = shared shortcut, lives in <c>shortcuts.json</c> and syncs
-    /// across all machines pointing at the same data directory.
-    /// Non-empty = pinned to a specific machine; lives in
-    /// <c>shortcuts.{envId}.json</c> and only loads on the machine whose
-    /// <c>launchSettings.json</c> declares that envId.
-    /// </summary>
-    [JsonPropertyName("envId")]
-    public string EnvId { get; init; } = "";
-
     [JsonPropertyName("createdAt")]
     public DateTime CreatedAt { get; init; } = DateTime.Now;
 

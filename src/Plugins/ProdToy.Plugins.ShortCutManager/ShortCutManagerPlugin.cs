@@ -4,7 +4,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
-[Plugin("ProdToy.Plugin.ShortCutManager", "Shortcuts", "1.0.416",
+[Plugin("ProdToy.Plugin.ShortCutManager", "Shortcuts", "1.0.417",
     Description = "Folder-organized launcher for project shortcuts — Claude CLI, npm, dotnet, custom commands",
     Author = "ProdToy",
     MenuPriority = 250)]
@@ -29,7 +29,7 @@ public partial class ShortCutManagerPlugin : IPlugin, IDoctor
         try { ExplorerContextMenuRegistrar.UnregisterAll(); } catch { }
         try
         {
-            DesktopShortcutSync.Initialize(context.DataDirectory);
+            DesktopShortcutSync.Initialize(ResolveScopedDataDir(context.DataDirectory));
             DesktopShortcutSync.Cleanup();
         }
         catch { }
@@ -46,12 +46,18 @@ public partial class ShortCutManagerPlugin : IPlugin, IDoctor
         // folders, recycled entries, or WT profiles.
         TryMigrateFromClaudeIntegration(context);
 
-        ShortcutStore.Initialize(context.DataDirectory);
-        ShortcutFolders.Initialize(context.DataDirectory);
-        ShortcutsRecycleBin.Initialize(context.DataDirectory);
-        OwnedWtProfilesStore.Initialize(context.DataDirectory);
-        OwnedWtSchemesStore.Initialize(context.DataDirectory);
-        DesktopShortcutSync.Initialize(context.DataDirectory);
+        // Scope every store under <dataDir>/<envId>/ when a machine identity
+        // is configured. This isolates shortcut state per-machine so two
+        // machines syncing the parent data folder via Google Drive can't
+        // step on each other's writes — there are no shared files anymore.
+        string scopedDataDir = ResolveScopedDataDir(context.DataDirectory);
+
+        ShortcutStore.Initialize(scopedDataDir);
+        ShortcutFolders.Initialize(scopedDataDir);
+        ShortcutsRecycleBin.Initialize(scopedDataDir);
+        OwnedWtProfilesStore.Initialize(scopedDataDir);
+        OwnedWtSchemesStore.Initialize(scopedDataDir);
+        DesktopShortcutSync.Initialize(scopedDataDir);
 
         // Two pipe handlers:
         //   shortcuts.context-launch — Explorer right-click invocation;
@@ -292,6 +298,70 @@ public partial class ShortCutManagerPlugin : IPlugin, IDoctor
     /// Quiet on any filesystem error — the feature still works with a fresh
     /// empty state, migration is only a convenience.
     /// </summary>
+    /// <summary>
+    /// Returns the data directory this machine should read/write to. When a
+    /// machine identity ("envId") is configured in <c>launchSettings.json</c>,
+    /// everything lives in <c>&lt;dataDir&gt;/&lt;envId&gt;/</c> so multiple
+    /// machines syncing the parent folder don't collide on shared json
+    /// files. The first call for a given envId migrates any pre-envId files
+    /// from the parent into the scoped subdir; missing envId leaves things
+    /// at the root (legacy behavior).
+    /// </summary>
+    private static string ResolveScopedDataDir(string dataDirectory)
+    {
+        string envId = ReadEnvId();
+        if (string.IsNullOrEmpty(envId)) return dataDirectory;
+
+        string scoped = Path.Combine(dataDirectory, envId);
+        try { Directory.CreateDirectory(scoped); }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"ResolveScopedDataDir: mkdir failed ({scoped}): {ex.Message}");
+            return dataDirectory; // fall back to unscoped rather than fail to start
+        }
+
+        // First-run migration: copy any pre-envId files from the parent dir
+        // into the scoped subdir. Skips files the subdir already has so we
+        // never clobber machine-local edits.
+        string[] knownFiles =
+        {
+            "shortcuts.json",
+            "shortcut-folders.json",
+            "shortcut-recycled.json",
+            "owned-wt-profiles.json",
+            "owned-wt-schemes.json",
+            "desktop-shortcuts.json",
+        };
+        foreach (var name in knownFiles)
+        {
+            string src = Path.Combine(dataDirectory, name);
+            string dst = Path.Combine(scoped, name);
+            if (File.Exists(dst)) continue;
+            if (!File.Exists(src)) continue;
+            try { File.Copy(src, dst); }
+            catch (Exception ex)
+            {
+                PluginLog.Warn($"ResolveScopedDataDir: migrate {name} failed: {ex.Message}");
+            }
+        }
+        return scoped;
+    }
+
+    private static string ReadEnvId()
+    {
+        try
+        {
+            string launchSettingsPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".prod-toy", "launchSettings.json");
+            if (!File.Exists(launchSettingsPath)) return "";
+            var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(launchSettingsPath));
+            var id = root?["envId"]?.GetValue<string>();
+            return !string.IsNullOrWhiteSpace(id) ? id : "";
+        }
+        catch { return ""; }
+    }
+
     private void TryMigrateFromClaudeIntegration(IPluginContext context)
     {
         try
