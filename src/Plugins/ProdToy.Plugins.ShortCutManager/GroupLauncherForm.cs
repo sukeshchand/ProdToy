@@ -41,8 +41,11 @@ class GroupLauncherPanel : UserControl
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(2) };
     private bool _urlPollInFlight;
 
-    private string GroupPrefix => $"ProdToyShortCuts_{_groupId}_";
-    private string BatchSuffix => $"ProdToyShortCuts_{_groupId}_{_session.BatchId}";
+    // Title prefix stamped onto every launched window so the title scan
+    // (StopAll fallback) can find and close them. Kept short — long prefixes
+    // crowd the WT tab title and the user's own WindowTitle gets pushed off.
+    private string GroupPrefix => $"PTS_{_groupId}_";
+    private string BatchSuffix => $"PTS_{_groupId}_{_session.BatchId}";
 
     /// <summary>
     /// Title we ask the launcher to apply to the shortcut's window. We preserve
@@ -323,30 +326,95 @@ class GroupLauncherPanel : UserControl
 
     private void StopAll()
     {
-        int n = CloseGroupWindows();
-        _statusLabel.Text = n == 0
-            ? "No windows found for this group."
-            : $"Closed {n} window(s).";
+        // PID kill is the cleanest path: Process.Kill(entireProcessTree: true)
+        // takes out cmd.exe + dotnet/npm/whatever children in one shot, and
+        // the WT tab self-closes when its pty dies — no "close all tabs?"
+        // confirmation, no orphaned processes. Only fall back to the title-
+        // scan WM_CLOSE (which DOES trigger WT's confirm prompt and can
+        // leave child processes alive) when no PID is known for the row.
+        int killed = 0, closedFallback = 0;
         foreach (var row in _rows)
         {
-            if (row.State == GroupRow.RowState.Running || row.State == GroupRow.RowState.Launching)
+            var s = _shortcuts[row.Index - 1];
+
+            if (KillPidTree(row.LaunchedCmdPid))
+            {
+                killed++;
+                _session.PidByShortcutId.Remove(s.Id);
+                row.LaunchedCmdPid = 0;
+            }
+            else
+            {
+                string title = BuildOverrideTitle(s);
+                foreach (var w in WindowFinder.FindByTitleContains(title))
+                {
+                    WindowFinder.CloseWindow(w.Handle);
+                    closedFallback++;
+                }
+            }
+
+            if (row.State == GroupRow.RowState.Running ||
+                row.State == GroupRow.RowState.Launching)
                 row.SetState(GroupRow.RowState.Stopped, "Stopped");
         }
+
+        // Group-wide orphan sweep — catches leftover windows from previous
+        // batches we have no PID for.
+        int closedOrphans = CloseGroupWindows();
+
+        _statusLabel.Text = (killed + closedFallback + closedOrphans) == 0
+            ? "Nothing to stop — no tracked PIDs and no group windows found."
+            : $"Stopped {killed} process(es) · closed {closedFallback + closedOrphans} window(s).";
     }
 
     private void StopOne(int index1Based)
     {
-        if (_session.BatchId == 0) return;
-        var s = _shortcuts[index1Based - 1];
-        string title = BuildOverrideTitle(s);
-        int closed = 0;
-        foreach (var w in WindowFinder.FindByTitleContains(title))
-        {
-            WindowFinder.CloseWindow(w.Handle);
-            closed++;
-        }
         var row = _rows[index1Based - 1];
-        row.SetState(GroupRow.RowState.Stopped, closed > 0 ? "Stopped" : "No window found");
+        var s = _shortcuts[index1Based - 1];
+
+        if (KillPidTree(row.LaunchedCmdPid))
+        {
+            _session.PidByShortcutId.Remove(s.Id);
+            row.LaunchedCmdPid = 0;
+            row.SetState(GroupRow.RowState.Stopped, "Stopped");
+            return;
+        }
+
+        // No PID — fall back to title-scan window close. Note this routes
+        // through WT's "close all tabs?" prompt when the row's tab shares a
+        // WT window with siblings, and any child processes spawned by the
+        // cmd (e.g. dotnet) may orphan because WT terminates cmd directly
+        // rather than walking its process tree.
+        int closed = 0;
+        if (_session.BatchId != 0)
+        {
+            string title = BuildOverrideTitle(s);
+            foreach (var w in WindowFinder.FindByTitleContains(title))
+            {
+                WindowFinder.CloseWindow(w.Handle);
+                closed++;
+            }
+        }
+
+        row.SetState(GroupRow.RowState.Stopped,
+            closed > 0 ? "Stopped (window closed)" : "Nothing to stop");
+    }
+
+    /// <summary>Terminate the process at <paramref name="pid"/> together with
+    /// every descendant. Returns true if a live process was actually killed.
+    /// Killing the tree is important here — cmd.exe spawns dotnet/npm/etc
+    /// and we want the user's command to go too, not just the shell.</summary>
+    private static bool KillPidTree(int pid)
+    {
+        if (pid <= 0) return false;
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            if (p.HasExited) return false;
+            p.Kill(entireProcessTree: true);
+            return true;
+        }
+        catch { return false; }
     }
 
     /// <summary>Close every visible window whose title carries this folder's
