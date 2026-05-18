@@ -451,25 +451,46 @@ static class PluginManager
                 dllPath = Path.Combine(pluginDir, $"ProdToy.Plugins.{dirName}.dll");
             }
 
-            if (!File.Exists(dllPath))
+            // Candidate list for the [Plugin] attribute scan: the conventional
+            // names first (so we don't probe huge NuGet deps unnecessarily),
+            // then every other DLL in the folder. This matters when a plugin
+            // ships transitive NuGet dependencies (e.g. Microsoft.Playwright)
+            // alongside its own DLL — the first-DLL-wins fallback would pick
+            // an alphabetically-earlier dep that has no [Plugin] attribute
+            // and silently skip the real plugin.
+            var candidates = new List<string>();
+            if (dllPath != null && File.Exists(dllPath)) candidates.Add(dllPath);
+            foreach (var d in Directory.GetFiles(pluginDir, "*.dll"))
             {
-                // Fallback: find any DLL in the directory
-                var dlls = Directory.GetFiles(pluginDir, "*.dll");
-                dllPath = dlls.FirstOrDefault(d =>
-                    !Path.GetFileName(d).Equals("ProdToy.Sdk.dll", StringComparison.OrdinalIgnoreCase));
+                if (candidates.Contains(d, StringComparer.OrdinalIgnoreCase)) continue;
+                if (Path.GetFileName(d).Equals("ProdToy.Sdk.dll", StringComparison.OrdinalIgnoreCase)) continue;
+                candidates.Add(d);
             }
 
-            if (dllPath == null || !File.Exists(dllPath))
+            PluginAttribute? attr = null;
+            string? resolvedDll = null;
+            foreach (var candidate in candidates)
+            {
+                try
+                {
+                    var tempContext = new PluginLoadContext(candidate);
+                    var assembly = tempContext.LoadFromStream(new MemoryStream(File.ReadAllBytes(candidate)));
+                    var (_, found) = FindPluginType(assembly);
+                    tempContext.Unload();
+                    if (found != null) { attr = found; resolvedDll = candidate; break; }
+                }
+                catch
+                {
+                    // Probe failures are expected for non-plugin DLLs
+                    // (transitive deps that don't carry [Plugin]); skip and
+                    // try the next.
+                }
+            }
+
+            if (attr == null || resolvedDll == null)
                 return null;
 
-            // Peek at metadata without fully loading
-            var tempContext = new PluginLoadContext(dllPath);
-            var assembly = tempContext.LoadFromStream(new MemoryStream(File.ReadAllBytes(dllPath)));
-            var (_, attr) = FindPluginType(assembly);
-            tempContext.Unload();
-
-            if (attr == null)
-                return null;
+            dllPath = resolvedDll;
 
             return new PluginInfo
             {
