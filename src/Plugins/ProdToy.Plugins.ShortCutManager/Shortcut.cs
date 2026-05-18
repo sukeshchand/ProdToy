@@ -146,6 +146,27 @@ sealed record Shortcut
     [JsonPropertyName("statusUrl")]
     public string StatusUrl { get; init; } = "";
 
+    /// <summary>
+    /// When true, the launcher kicks off a Playwright session against
+    /// <see cref="StatusUrl"/> using <see cref="LoginUsername"/> +
+    /// <see cref="LoginPasswordEncrypted"/> so the browser is ready for the
+    /// user. Requires StatusUrl to be set.
+    /// </summary>
+    [JsonPropertyName("autoLoginEnabled")]
+    public bool AutoLoginEnabled { get; init; }
+
+    [JsonPropertyName("loginUsername")]
+    public string LoginUsername { get; init; } = "";
+
+    /// <summary>
+    /// Base64 of the DPAPI-protected password bytes (CurrentUser scope).
+    /// Decryptable only by the same Windows user on the same machine —
+    /// safe to ship alongside the per-envId data folder because that's
+    /// already machine-local.
+    /// </summary>
+    [JsonPropertyName("loginPasswordEncrypted")]
+    public string LoginPasswordEncrypted { get; init; } = "";
+
     [JsonPropertyName("notes")]
     public string Notes { get; init; } = "";
 

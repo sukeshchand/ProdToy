@@ -32,6 +32,12 @@ class ShortcutEditForm : Form
     // off so we don't trample a custom name.
     private bool _desktopNameAutoSync = true;
     private readonly TextBox _statusUrlBox;
+    private readonly ToggleSwitch _autoLoginToggle;
+    private readonly TextBox _loginUsernameBox;
+    private readonly TextBox _loginPasswordBox;
+    private readonly Label _loginCaption;
+    private readonly Label _loginUsernameLabel;
+    private readonly Label _loginPasswordLabel;
     private readonly TextBox _notesBox;
     private readonly Label _validationLabel;
     private readonly RoundedButton _editProfileBtn;
@@ -573,6 +579,74 @@ class ShortcutEditForm : Form
         Controls.Add(statusUrlHint);
         y += 38;
 
+        // Auto-login toggle: when on, the launcher kicks off a Playwright
+        // session against Status URL to log the user in with the stored
+        // credentials so the browser is ready when they look at it.
+        _loginCaption = new Label
+        {
+            Text = "Auto login",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            AutoSize = true,
+            Location = new Point(pad, y + 4),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(_loginCaption);
+        _autoLoginToggle = new ToggleSwitch(theme)
+        {
+            Checked = existing?.AutoLoginEnabled ?? false,
+            Location = new Point(inputX, y + 2),
+        };
+        Controls.Add(_autoLoginToggle);
+        var loginHint = new Label
+        {
+            Text = "On launch, sign in to Status URL using the credentials below",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(inputX + _autoLoginToggle.Width + 12, y + 6),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(loginHint);
+        y += 36;
+
+        _loginUsernameLabel = AddLabel("Username", pad, y);
+        _loginUsernameBox = MakeTextBox(inputX, y, inputW);
+        _loginUsernameBox.Text = existing?.LoginUsername ?? "";
+        y += 32;
+
+        _loginPasswordLabel = AddLabel("Password", pad, y);
+        _loginPasswordBox = MakeTextBox(inputX, y, inputW);
+        _loginPasswordBox.UseSystemPasswordChar = true;
+        // DPAPI-decrypt once for display; encryption happens again on Save.
+        _loginPasswordBox.Text = CredentialProtector.Decrypt(existing?.LoginPasswordEncrypted ?? "");
+        y += 32;
+
+        var passwordHint = new Label
+        {
+            Text = "Stored encrypted via Windows DPAPI (same user + machine only).",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(passwordHint);
+        y += 24;
+
+        void RefreshAutoLoginEnabled()
+        {
+            bool on = _autoLoginToggle.Checked;
+            _loginUsernameLabel.Enabled = on;
+            _loginUsernameBox.Enabled = on;
+            _loginPasswordLabel.Enabled = on;
+            _loginPasswordBox.Enabled = on;
+            _loginUsernameBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
+            _loginPasswordBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
+        }
+        _autoLoginToggle.CheckedChanged += (_, _) => RefreshAutoLoginEnabled();
+        RefreshAutoLoginEnabled();
+
         y = AddSection("NOTES", y);
 
         _notesBox = MakeTextBox(pad, y, ClientSize.Width - pad * 2, multiline: true, height: 60);
@@ -767,6 +841,11 @@ class ShortcutEditForm : Form
             AddToDesktop = _desktopShortcutToggle.Checked,
             DesktopShortcutName = _desktopShortcutNameBox.Text.Trim(),
             StatusUrl = _statusUrlBox.Text.Trim(),
+            AutoLoginEnabled = _autoLoginToggle.Checked,
+            LoginUsername = _loginUsernameBox.Text.Trim(),
+            LoginPasswordEncrypted = _autoLoginToggle.Checked
+                ? CredentialProtector.Encrypt(_loginPasswordBox.Text)
+                : "",
             Notes = _notesBox.Text,
             FolderPath = _folderPath,
             CreatedAt = _existing?.CreatedAt ?? DateTime.Now,
