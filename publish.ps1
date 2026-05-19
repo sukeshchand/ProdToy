@@ -177,8 +177,22 @@ foreach ($plugin in $pluginProjects) {
     $stagingDir = Join-Path $pluginsReleaseDir "_stage_$($plugin.Id)"
     if (Test-Path $stagingDir) { Remove-Item $stagingDir -Recurse -Force }
     New-Item -ItemType Directory -Path $stagingDir | Out-Null
-    Copy-Item $dllSrc $stagingDir -Force
-    if (Test-Path $depsSrc) { Copy-Item $depsSrc $stagingDir -Force }
+
+    # Copy every .dll in the plugin's build output so transitive NuGet deps
+    # (e.g. Microsoft.Playwright) ship inside the plugin zip. Also pull in
+    # the deps.json + runtimeconfig.json and any data subfolders (.playwright)
+    # plus the playwright.ps1 driver script. Skip pdbs to keep the zip small.
+    Get-ChildItem -Path $buildOut -File | Where-Object {
+        $_.Extension -in '.dll', '.json', '.ps1'
+    } | ForEach-Object {
+        Copy-Item $_.FullName $stagingDir -Force
+    }
+    Get-ChildItem -Path $buildOut -Directory | Where-Object {
+        # Ship .playwright (Node driver). Skip ref/ which is build-time only.
+        $_.Name -notin @('ref')
+    } | ForEach-Object {
+        Copy-Item -Recurse $_.FullName $stagingDir -Force
+    }
 
     $zipPath = Join-Path $pluginsReleaseDir "$($plugin.Id).zip"
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }

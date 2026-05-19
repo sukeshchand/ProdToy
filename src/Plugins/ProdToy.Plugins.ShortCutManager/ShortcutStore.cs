@@ -4,9 +4,11 @@ using ProdToy.Sdk;
 namespace ProdToy.Plugins.ShortCutManager;
 
 /// <summary>
-/// Persistence for Shortcut records. Stored in its own file rather than
-/// the main plugin settings.json to keep concerns clean (settings vs. user-
-/// managed project shortcuts). Cached in memory; writes are atomic full-file.
+/// Persistence for Shortcut records. The data directory passed to
+/// <see cref="Initialize"/> is already scoped to the current machine's
+/// envId by <see cref="ShortCutManagerPlugin"/>, so this store stays
+/// machine-local and never conflicts with other machines syncing the
+/// parent data folder. Cached in memory; writes are atomic full-file.
 /// </summary>
 static class ShortcutStore
 {
@@ -26,6 +28,7 @@ static class ShortcutStore
     public static void Initialize(string dataDirectory)
     {
         _file = Path.Combine(dataDirectory, "shortcuts.json");
+        _cache = null;
     }
 
     public static List<Shortcut> Load()

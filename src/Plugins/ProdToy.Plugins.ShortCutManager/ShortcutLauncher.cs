@@ -70,6 +70,7 @@ static class ShortcutLauncher
             Process.Start(psi);
             ShortcutStore.RecordLaunch(s.Id);
             SchedulePostLaunchKeys(s);
+            AutoLoginRunner.RunInBackground(s);
             return new LaunchResult(true);
         }
         catch (System.ComponentModel.Win32Exception ex) when ((uint)ex.NativeErrorCode == 0x800704C7u

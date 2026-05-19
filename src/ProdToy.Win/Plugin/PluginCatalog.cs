@@ -161,7 +161,17 @@ static class PluginCatalog
                     foreach (var zipEntry in archive.Entries)
                     {
                         if (string.IsNullOrEmpty(zipEntry.Name)) continue; // skip directory entries
-                        string destPath = Path.Combine(destDir, zipEntry.Name);
+                        // Use FullName (not Name) so nested folders inside the
+                        // zip — notably Playwright's .playwright/node/... — are
+                        // preserved on disk instead of being flattened to the
+                        // plugin root.
+                        string relative = zipEntry.FullName.Replace('/', Path.DirectorySeparatorChar);
+                        string destPath = Path.Combine(destDir, relative);
+                        // Zip-slip guard: refuse paths that escape destDir.
+                        string fullDest = Path.GetFullPath(destPath);
+                        if (!fullDest.StartsWith(Path.GetFullPath(destDir) + Path.DirectorySeparatorChar,
+                                StringComparison.OrdinalIgnoreCase))
+                            continue;
                         Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
                         zipEntry.ExtractToFile(destPath, overwrite: true);
                     }
