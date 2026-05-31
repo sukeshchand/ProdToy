@@ -64,7 +64,7 @@ $C_RESET  = "$ESC[0m"
 
 # Read config for item visibility
 $cfg = @{
-    model = $true; dir = $true; branch = $true
+    model = $true; effort = $true; dir = $true; branch = $true
     prompts = $true; context = $true; duration = $true
     mode = $true; version = $true; editStats = $true
 }
@@ -75,6 +75,7 @@ if (Test-Path $cfgPath) {
         $cfgData = Get-Content $cfgPath -Raw | ConvertFrom-Json
         if ($null -ne $cfgData.style) { $style = [string]$cfgData.style }
         if ($null -ne $cfgData.model) { $cfg.model = [bool]$cfgData.model }
+        if ($null -ne $cfgData.effort) { $cfg.effort = [bool]$cfgData.effort }
         if ($null -ne $cfgData.dir) { $cfg.dir = [bool]$cfgData.dir }
         if ($null -ne $cfgData.branch) { $cfg.branch = [bool]$cfgData.branch }
         if ($null -ne $cfgData.prompts) { $cfg.prompts = [bool]$cfgData.prompts }
@@ -94,6 +95,11 @@ try {
 }
 
 $model = if ($jsonData.model.display_name) { $jsonData.model.display_name } else { "?" }
+# Reasoning effort level (.effort.level): low | medium | high | xhigh | max.
+# Absent when the model doesn't support the effort parameter — render nothing
+# in that case even if the item is enabled.
+$effort = if ($jsonData.effort.level) { [string]$jsonData.effort.level } else { "" }
+$showEffort = $cfg.effort -and $effort
 $cwd = $jsonData.cwd
 $dir = if ($cwd) { Split-Path -Leaf $cwd } else { "?" }
 
@@ -332,6 +338,7 @@ if ($style -ne 'classic') {
     switch ($style) {
         'minimal' {
             if ($cfg.model)   { [void]$parts.Add($model) }
+            if ($showEffort)  { [void]$parts.Add($effort) }
             if ($cfg.dir)     { [void]$parts.Add($dir) }
             if ($cfg.branch -and $branch) { [void]$parts.Add($branchStr) }
             if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("${ctxPct}%") }
@@ -348,6 +355,7 @@ if ($style -ne 'classic') {
         }
         'emoji' {
             if ($cfg.model)   { [void]$parts.Add("🤖 ${C_VALUE}${model}${C_RESET}") }
+            if ($showEffort)  { [void]$parts.Add("🧠 ${C_VALUE}${effort}${C_RESET}") }
             if ($cfg.dir)     { [void]$parts.Add("📁 ${C_VALUE}${dir}${C_RESET}") }
             if ($cfg.branch -and $branch) { [void]$parts.Add("🌿 ${branchColor}${branchStr}${C_RESET}") }
             if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("📊 ${ctxColor}${ctxPct}%${C_RESET}") }
@@ -364,6 +372,7 @@ if ($style -ne 'classic') {
         }
         'powerline' {
             if ($cfg.model) { [void]$parts.Add("${C_VALUE}${model}${C_RESET}") }
+            if ($showEffort) { [void]$parts.Add("${C_VALUE}${effort}${C_RESET}") }
             if ($cfg.dir)   { [void]$parts.Add("${C_VALUE}${dir}${C_RESET}") }
             if ($cfg.branch -and $branch) { [void]$parts.Add("${branchColor}${branchStr}${C_RESET}") }
             if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("${ctxColor}${ctxPct}%${C_RESET}") }
@@ -379,6 +388,7 @@ if ($style -ne 'classic') {
         }
         'ascii' {
             if ($cfg.model)   { [void]$parts.Add("[Model=${model}]") }
+            if ($showEffort)  { [void]$parts.Add("[Effort=${effort}]") }
             if ($cfg.dir)     { [void]$parts.Add("[Dir=${dir}]") }
             if ($cfg.branch)  { [void]$parts.Add("[Branch=" + $(if ($branch) { $branchStr } else { "none" }) + "]") }
             if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("[Ctx=${ctxPct}%]") }
@@ -396,6 +406,7 @@ if ($style -ne 'classic') {
         }
         'compact' {
             if ($cfg.model)   { [void]$parts.Add("M:${model}") }
+            if ($showEffort)  { [void]$parts.Add("e:${effort}") }
             if ($cfg.dir)     { [void]$parts.Add("d:${dir}") }
             if ($cfg.branch -and $branch) { [void]$parts.Add("b:${branchStr}") }
             if ($cfg.context -and $null -ne $ctxPct) { [void]$parts.Add("c:${ctxPct}%") }
@@ -412,6 +423,7 @@ if ($style -ne 'classic') {
         }
         'progressbar' {
             if ($cfg.model) { [void]$parts.Add("${C_LABEL}${model}${C_RESET}") }
+            if ($showEffort) { [void]$parts.Add("${C_VALUE}${effort}${C_RESET}") }
             if ($cfg.dir)   { [void]$parts.Add("${C_VALUE}${dir}${C_RESET}") }
             if ($cfg.branch -and $branch) { [void]$parts.Add("${branchColor}${branchStr}${C_RESET}") }
             if ($cfg.context -and $null -ne $ctxPct) {
@@ -431,6 +443,7 @@ if ($style -ne 'classic') {
         'verbose' {
             $envp = [System.Collections.Generic.List[string]]::new()
             if ($cfg.model)  { [void]$envp.Add("Model:${C_VALUE}${model}${C_RESET}") }
+            if ($showEffort) { [void]$envp.Add("Effort:${C_VALUE}${effort}${C_RESET}") }
             if ($cfg.dir)    { [void]$envp.Add("Dir:${C_VALUE}${dir}${C_RESET}") }
             if ($cfg.branch) { [void]$envp.Add("Branch:${branchColor}$(if ($branch) { $branchStr } else { 'none' })${C_RESET}") }
             if ($envp.Count -gt 0) { Write-Host ("${C_LABEL}Session${C_RESET}: " + ($envp -join ' · ')) }
@@ -454,6 +467,7 @@ if ($style -ne 'classic') {
         }
         default {
             if ($cfg.model) { [void]$parts.Add($model) }
+            if ($showEffort) { [void]$parts.Add($effort) }
             if ($cfg.dir)   { [void]$parts.Add($dir) }
             Write-Host ($parts -join ' ')
             break
@@ -466,6 +480,7 @@ if ($style -ne 'classic') {
 $sep = "${C_SEP} | "
 $row1Parts = [System.Collections.Generic.List[string]]::new()
 if ($cfg.model) { $row1Parts.Add("${C_LABEL}Model: ${C_VALUE}${model}") }
+if ($showEffort) { $row1Parts.Add("${C_LABEL}Effort: ${C_VALUE}${effort}") }
 if ($cfg.dir) { $row1Parts.Add("${C_LABEL}Dir: ${C_VALUE}${dir}") }
 if ($cfg.branch) {
     $branchStr = if ($branch) { $branch + $(if ($dirty -gt 0) { " *${dirty}" } else { "" }) } else { "none" }

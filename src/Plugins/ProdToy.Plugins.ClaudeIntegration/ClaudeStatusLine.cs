@@ -236,6 +236,7 @@ static class ClaudeStatusLine
             {
                 ["style"] = settings.SlStyle,
                 ["model"] = settings.SlShowModel,
+                ["effort"] = settings.SlShowEffort,
                 ["dir"] = settings.SlShowDir,
                 ["branch"] = settings.SlShowBranch,
                 ["prompts"] = settings.SlShowPrompts,
