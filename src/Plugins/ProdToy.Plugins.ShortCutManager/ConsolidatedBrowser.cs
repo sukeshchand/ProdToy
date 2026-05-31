@@ -189,6 +189,7 @@ sealed class ConsolidatedBrowserPane : UserControl
     private readonly Button _reloadBtn;
     private readonly TextBox _urlBox;
     private readonly LinkLabel _openExternalLink;
+    private readonly Button _devToolsBtn;
     private readonly Label _statusLabel;
 
     private string? _currentUrl;
@@ -234,6 +235,22 @@ sealed class ConsolidatedBrowserPane : UserControl
             if (!string.IsNullOrEmpty(typed)) _ = NavigateAsync(typed);
         };
 
+        _devToolsBtn = new Button
+        {
+            Text = "DevTools",
+            Size = new Size(72, 22),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.BgDark,
+            ForeColor = theme.TextPrimary,
+            Font = new Font("Segoe UI", 8.5F),
+            Cursor = Cursors.Hand,
+            TabStop = false,
+        };
+        _devToolsBtn.FlatAppearance.BorderColor = theme.Border;
+        _devToolsBtn.Click += (_, _) => OpenDevTools();
+        var devTip = new ToolTip();
+        devTip.SetToolTip(_devToolsBtn, "Open browser DevTools for this page (separate window)");
+
         _openExternalLink = new LinkLabel
         {
             Text = "Open externally",
@@ -255,7 +272,8 @@ sealed class ConsolidatedBrowserPane : UserControl
         toolbar.Resize += (_, _) =>
         {
             _openExternalLink.Location = new Point(toolbar.Width - _openExternalLink.PreferredWidth - 8, 8);
-            var urlRight = _openExternalLink.Left - 8;
+            _devToolsBtn.Location = new Point(_openExternalLink.Left - _devToolsBtn.Width - 10, 5);
+            var urlRight = _devToolsBtn.Left - 8;
             _urlBox.Width = Math.Max(50, urlRight - _urlBox.Left);
         };
 
@@ -263,6 +281,7 @@ sealed class ConsolidatedBrowserPane : UserControl
         toolbar.Controls.Add(_forwardBtn);
         toolbar.Controls.Add(_reloadBtn);
         toolbar.Controls.Add(_urlBox);
+        toolbar.Controls.Add(_devToolsBtn);
         toolbar.Controls.Add(_openExternalLink);
 
         _statusLabel = new Label
@@ -276,7 +295,7 @@ sealed class ConsolidatedBrowserPane : UserControl
             Visible = true,
         };
 
-        // Stack order matters: Fill child added first so Top toolbar sits above.
+        // Stack order: Fill child added first so the Top toolbar sits above.
         Controls.Add(_webView);
         Controls.Add(_statusLabel);
         Controls.Add(toolbar);
@@ -287,9 +306,8 @@ sealed class ConsolidatedBrowserPane : UserControl
     public string? CurrentUrl => _currentUrl;
 
     /// <summary>
-    /// Navigate to a URL. Initialises the WebView2 on first call (one-time
-    /// ~300ms cost, shown via the "Loading browser…" overlay). Subsequent calls
-    /// are instant.
+    /// Navigate the page to a URL. Initialises the WebView2 on first call
+    /// (one-time ~300ms cost, shown via the "Loading browser…" overlay).
     /// </summary>
     public async Task NavigateAsync(string url)
     {
@@ -300,7 +318,6 @@ sealed class ConsolidatedBrowserPane : UserControl
             if (!_ready)
             {
                 await EnsureCoreWebView2Async();
-                // The await may have spanned a Dispose() (Stop All → tab close).
                 if (IsDisposed || _webView.IsDisposed || _webView.CoreWebView2 is null) return;
 
                 _ready = true;
@@ -327,6 +344,21 @@ sealed class ConsolidatedBrowserPane : UserControl
             _statusLabel.Text = "Browser init failed: " + ex.Message;
             _statusLabel.Visible = true;
         }
+    }
+
+    // ─────────────────────────── DevTools ───────────────────────────
+
+    /// <summary>
+    /// Open the browser DevTools for this page. WebView2 only exposes DevTools
+    /// as a <b>separate window</b> — it can't be docked into the host (the
+    /// remote-debugging "embed the frontend in a second WebView2" route doesn't
+    /// work on Edge, which doesn't serve the DevTools frontend over HTTP), so
+    /// this opens the standard DevTools window.
+    /// </summary>
+    private void OpenDevTools()
+    {
+        if (!_ready || _webView.CoreWebView2 is null) return;
+        try { _webView.CoreWebView2.OpenDevToolsWindow(); } catch { }
     }
 
     private async Task EnsureCoreWebView2Async()

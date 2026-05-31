@@ -397,7 +397,15 @@ sealed class ConsolidatedLauncherForm : Form
                 _logTabs.AppendLine(ConsolidatedLogTabs.LauncherTabKey,
                     $"[{DateTime.Now:HH:mm:ss}] [{i}/{n}] Building {ShortName(s)} — {buildCmd}");
 
-                bool ok = await RunBuildAsync(s.Id, buildCmd, s.WorkingDirectory, ct);
+                // --no-restore makes a no-op rebuild noticeably faster (skips the
+                // implicit NuGet restore). If packages aren't restored yet it fails,
+                // so retry once with a full restore.
+                bool ok = await RunBuildAsync(s.Id, buildCmd + " --no-restore", s.WorkingDirectory, ct);
+                if (!ok && !ct.IsCancellationRequested)
+                {
+                    EmitBanner(s.Id, $"[{i}/{n}] retrying with restore…");
+                    ok = await RunBuildAsync(s.Id, buildCmd, s.WorkingDirectory, ct);
+                }
 
                 if (ct.IsCancellationRequested) { return; }
                 if (ok)
@@ -707,6 +715,7 @@ sealed class ConsolidatedLauncherForm : Form
                 running++;
             }
             else if (row.State == ConsolidatedRow.RowState.Exited) exited++;
+            row.TickHighlight();   // clear the post-change flash once it elapses
         }
 
         var parts = new List<string> { $"{_shortcuts.Count} shortcut(s)" };
@@ -907,6 +916,7 @@ sealed class ConsolidatedRow : Panel
     private DateTime? _startedAt;
     private UrlState _urlState = UrlState.NotConfigured;
     private string _urlDetail = "";
+    private DateTime _highlightUntil;   // brief accent border after a state change
 
     public RowState State => _state;
 
@@ -964,8 +974,22 @@ sealed class ConsolidatedRow : Panel
         _pid = pid;
         if (startedAt.HasValue) _startedAt = startedAt;
         if (state != RowState.Running) _startedAt = startedAt;   // clear uptime when not running
+        // Flash an accent border for a few seconds whenever the state changes so
+        // the user notices "something happened here". Cleared by TickHighlight.
+        if (changed) _highlightUntil = DateTime.UtcNow.AddSeconds(3);
         // Repaint every tick while running so the uptime advances.
         if (changed || state == RowState.Running) Invalidate();
+    }
+
+    /// <summary>Clear the post-change highlight once it has elapsed (called on
+    /// the launcher's status timer). Returns the row to its normal style.</summary>
+    public void TickHighlight()
+    {
+        if (_highlightUntil != default && DateTime.UtcNow >= _highlightUntil)
+        {
+            _highlightUntil = default;
+            Invalidate();
+        }
     }
 
     public void SetUrlStatus(UrlState state, string detail)
@@ -1015,6 +1039,13 @@ sealed class ConsolidatedRow : Panel
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
         using var path = RoundedRect(rect, 8);
         using (var bg = new SolidBrush(_theme.BgHeader)) g.FillPath(bg, path);
+
+        // Just-changed flash: a 2px accent border in the state colour for ~3s.
+        if (_highlightUntil != default && DateTime.UtcNow < _highlightUntil)
+        {
+            using var hp = new Pen(StateColor(_state), 2f);
+            g.DrawPath(hp, path);
+        }
 
         // Stable-colour correlation bar on the left edge.
         using (var barBrush = new SolidBrush(_swatch))
