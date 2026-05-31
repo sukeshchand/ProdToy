@@ -19,6 +19,7 @@ record ClaudePluginSettings
 
     // Status line item visibility
     [JsonPropertyName("slShowModel")] public bool SlShowModel { get; init; } = true;
+    [JsonPropertyName("slShowEffort")] public bool SlShowEffort { get; init; } = true;
     [JsonPropertyName("slShowDir")] public bool SlShowDir { get; init; } = true;
     [JsonPropertyName("slShowBranch")] public bool SlShowBranch { get; init; } = true;
     [JsonPropertyName("slShowPrompts")] public bool SlShowPrompts { get; init; } = false;

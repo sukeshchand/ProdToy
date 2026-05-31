@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.411",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.412",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -1058,9 +1058,10 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         // Status line item toggles
         var slItems = new (string Label, string Prop)[]
         {
-            ("Model", "SlShowModel"), ("Directory", "SlShowDir"), ("Branch", "SlShowBranch"),
-            ("Prompts", "SlShowPrompts"), ("Context %", "SlShowContext"), ("Duration", "SlShowDuration"),
-            ("Mode", "SlShowMode"), ("Version", "SlShowVersion"), ("Edit Stats", "SlShowEditStats"),
+            ("Model", "SlShowModel"), ("Effort", "SlShowEffort"), ("Directory", "SlShowDir"),
+            ("Branch", "SlShowBranch"), ("Prompts", "SlShowPrompts"), ("Context %", "SlShowContext"),
+            ("Duration", "SlShowDuration"), ("Mode", "SlShowMode"), ("Version", "SlShowVersion"),
+            ("Edit Stats", "SlShowEditStats"),
         };
 
         int colWidth = contentWidth / 3;
@@ -1093,6 +1094,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
                 s = propName switch
                 {
                     "SlShowModel" => s with { SlShowModel = cb.Checked },
+                    "SlShowEffort" => s with { SlShowEffort = cb.Checked },
                     "SlShowDir" => s with { SlShowDir = cb.Checked },
                     "SlShowBranch" => s with { SlShowBranch = cb.Checked },
                     "SlShowPrompts" => s with { SlShowPrompts = cb.Checked },
