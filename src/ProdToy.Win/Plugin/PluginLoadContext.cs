@@ -25,10 +25,20 @@ sealed class PluginLoadContext : AssemblyLoadContext
             return null;
 
         string? assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);
-        if (assemblyPath != null)
-            return LoadFromStream(new MemoryStream(File.ReadAllBytes(assemblyPath)));
+        if (assemblyPath == null)
+            return null;
 
-        return null;
+        // Microsoft.Playwright locates its bundled Node driver (.playwright/node/…)
+        // relative to its OWN Assembly.Location. A stream-loaded assembly has an
+        // empty Location, so Playwright would look next to the .NET runtime and
+        // fail with "Driver not found". Load it from the file path so Location is
+        // populated and the .playwright folder beside the DLL is found. (Other
+        // deps stay stream-loaded so the collectible context doesn't lock them on
+        // disk; the host restarts on update, releasing this one lock.)
+        if (assemblyName.Name == "Microsoft.Playwright")
+            return LoadFromAssemblyPath(assemblyPath);
+
+        return LoadFromStream(new MemoryStream(File.ReadAllBytes(assemblyPath)));
     }
 
     protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)

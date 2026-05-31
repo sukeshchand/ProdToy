@@ -638,11 +638,27 @@ sealed class ConsolidatedLauncherForm : Form
         _runners[id] = runner;
         row.SetState(ConsolidatedRow.RowState.Launching, "Launching…", runner.Pid);
         if (focus) _logTabs.FocusTab(id);
+        LogLauncher($"▶ Starting {ShortName(s)} (pid {runner.Pid}) — {command}");
 
         // Reuse the existing per-shortcut visible auto-login (separate Edge).
+        // Route its progress into the launcher console (thread-safe enqueue, so
+        // the user can see whether/why auto-login ran).
         ShortcutStore.RecordLaunch(id);
-        AutoLoginRunner.RunInBackground(s);
+        if (s.AutoLoginEnabled)
+        {
+            AutoLoginRunner.RunInBackground(s, msg =>
+            {
+                if (!IsDisposed)
+                    _pending.Enqueue((ConsolidatedLogTabs.LauncherTabKey,
+                        $"[{DateTime.Now:HH:mm:ss}] {ShortName(s)} · auto-login: {msg}", false));
+            });
+        }
     }
+
+    /// <summary>Append a timestamped line to the shared "Launcher" console tab —
+    /// the consolidated activity log (build/start/exit/auto-login).</summary>
+    private void LogLauncher(string message) =>
+        _logTabs.AppendLine(ConsolidatedLogTabs.LauncherTabKey, $"[{DateTime.Now:HH:mm:ss}] {message}");
 
     private void StopAll()
     {
@@ -685,7 +701,10 @@ sealed class ConsolidatedLauncherForm : Form
     {
         if (IsDisposed) return;
         var row = _rowsById.GetValueOrDefault(id);
+        var s = _shortcuts.FirstOrDefault(x => x.Id == id);
+        string name = s != null ? ShortName(s) : id;
         EmitBanner(id, code == 0 ? "exited (code 0)" : $"exited (code {code})", isError: code != 0);
+        LogLauncher($"■ {name} exited (code {code}).");
         row?.SetState(
             code == 0 ? ConsolidatedRow.RowState.Stopped : ConsolidatedRow.RowState.Exited,
             code == 0 ? "Exited (0)" : $"Exited (code {code})",

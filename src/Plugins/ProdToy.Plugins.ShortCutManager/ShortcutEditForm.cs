@@ -33,9 +33,13 @@ class ShortcutEditForm : Form
     private bool _desktopNameAutoSync = true;
     private readonly TextBox _statusUrlBox;
     private readonly ToggleSwitch _autoLoginToggle;
+    private readonly TextBox _homeUrlBox;
+    private readonly TextBox _loginUrlBox;
     private readonly TextBox _loginUsernameBox;
     private readonly TextBox _loginPasswordBox;
     private readonly Label _loginCaption;
+    private readonly Label _homeUrlLabel;
+    private readonly Label _loginUrlLabel;
     private readonly Label _loginUsernameLabel;
     private readonly Label _loginPasswordLabel;
     private readonly TextBox _notesBox;
@@ -568,7 +572,7 @@ class ShortcutEditForm : Form
 
         var statusUrlHint = new Label
         {
-            Text = "Optional. Group Launcher polls this URL every 3s to show a Healthy / Unreachable badge — e.g. http://localhost:5000 for an ASP.NET app.",
+            Text = "Health check — polled every 3s to show a Healthy / Unreachable badge. Use a URL that responds without login, e.g. http://localhost:5000.",
             Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
             AutoSize = false,
@@ -600,7 +604,7 @@ class ShortcutEditForm : Form
         Controls.Add(_autoLoginToggle);
         var loginHint = new Label
         {
-            Text = "On launch, sign in to Status URL using the credentials below",
+            Text = "On launch: open Home URL with cached cookies; if redirected to Login URL, sign in and return.",
             Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
             AutoSize = true,
@@ -609,6 +613,40 @@ class ShortcutEditForm : Form
         };
         Controls.Add(loginHint);
         y += 36;
+
+        _homeUrlLabel = AddLabel("Home URL", pad, y);
+        _homeUrlBox = MakeTextBox(inputX, y, inputW);
+        _homeUrlBox.Text = existing?.HomeUrl ?? "";
+        y += 28;
+        var homeUrlHint = new Label
+        {
+            Text = "Tried first using cached cookies. If it loads (no login redirect), you're done. Blank = use Status URL.",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = false,
+            Size = new Size(inputW, 30),
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(homeUrlHint);
+        y += 34;
+
+        _loginUrlLabel = AddLabel("Login URL", pad, y);
+        _loginUrlBox = MakeTextBox(inputX, y, inputW);
+        _loginUrlBox.Text = existing?.LoginUrl ?? "";
+        y += 28;
+        var loginUrlHint = new Label
+        {
+            Text = "The sign-in page. Blank = detect the login form on whatever page loads after Home URL.",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = false,
+            Size = new Size(inputW, 30),
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+        };
+        Controls.Add(loginUrlHint);
+        y += 34;
 
         _loginUsernameLabel = AddLabel("Username", pad, y);
         _loginUsernameBox = MakeTextBox(inputX, y, inputW);
@@ -637,10 +675,16 @@ class ShortcutEditForm : Form
         void RefreshAutoLoginEnabled()
         {
             bool on = _autoLoginToggle.Checked;
+            _homeUrlLabel.Enabled = on;
+            _homeUrlBox.Enabled = on;
+            _loginUrlLabel.Enabled = on;
+            _loginUrlBox.Enabled = on;
             _loginUsernameLabel.Enabled = on;
             _loginUsernameBox.Enabled = on;
             _loginPasswordLabel.Enabled = on;
             _loginPasswordBox.Enabled = on;
+            _homeUrlBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
+            _loginUrlBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
             _loginUsernameBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
             _loginPasswordBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
         }
@@ -842,6 +886,8 @@ class ShortcutEditForm : Form
             DesktopShortcutName = _desktopShortcutNameBox.Text.Trim(),
             StatusUrl = _statusUrlBox.Text.Trim(),
             AutoLoginEnabled = _autoLoginToggle.Checked,
+            HomeUrl = _homeUrlBox.Text.Trim(),
+            LoginUrl = _loginUrlBox.Text.Trim(),
             LoginUsername = _loginUsernameBox.Text.Trim(),
             LoginPasswordEncrypted = _autoLoginToggle.Checked
                 ? CredentialProtector.Encrypt(_loginPasswordBox.Text)

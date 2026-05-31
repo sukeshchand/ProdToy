@@ -13,16 +13,19 @@ static class AutoLoginPaths
 }
 
 /// <summary>
-/// Spins up a Playwright-controlled Edge instance, navigates to a shortcut's
-/// Status URL, fills the first visible username + password input pair, clicks
-/// the first plausible submit button, and leaves the browser open so the
-/// user can pick up where the automation left off.
+/// Spins up a Playwright-controlled Edge instance with a persistent per-shortcut
+/// profile (so cookies are cached between runs) and signs the user in:
+///   1. Open the Home URL with the cached cookies.
+///   2. If it loads without redirecting to the Login URL (and shows no login
+///      form), the session is still valid — stop, leave the browser open.
+///   3. Otherwise open the Login URL, fill the username + password, submit, and
+///      wait to be returned to the home page. Cookies persist for next time.
 ///
 /// The browser is launched against the system-installed Edge via
 /// <c>Channel = "msedge"</c> so we don't have to ship Chromium. Sessions are
-/// kept alive in a static list because Playwright disposes the browser when
-/// the IBrowser handle is collected; we want the window to stay open until
-/// the user closes it (or ProdToy exits).
+/// kept alive in a static list because Playwright disposes the browser when the
+/// handle is collected; we want the window to stay open until the user closes it
+/// (or ProdToy exits).
 /// </summary>
 static class AutoLoginRunner
 {
@@ -31,28 +34,43 @@ static class AutoLoginRunner
     private static readonly List<(IPlaywright Pw, IBrowserContext Ctx)> _sessions = new();
     private static readonly object _lock = new();
 
-    public static void RunInBackground(Shortcut s)
+    public static void RunInBackground(Shortcut s) => RunInBackground(s, null);
+
+    /// <summary><paramref name="report"/> receives human-readable progress lines
+    /// (skip reasons, waiting, signed-in, errors) so a caller can surface them in
+    /// its own UI/console. It is also mirrored to the plugin log.</summary>
+    public static void RunInBackground(Shortcut s, Action<string>? report)
     {
         if (!s.AutoLoginEnabled) return;
-        if (string.IsNullOrWhiteSpace(s.StatusUrl))
+
+        void Report(string m)
         {
-            PluginLog.Warn($"AutoLogin: shortcut '{s.Name}' has auto-login on but no StatusUrl — skipping.");
+            try { report?.Invoke(m); } catch { }
+            PluginLog.Info($"AutoLogin '{s.Name}': {m}");
+        }
+
+        // Home target: HomeUrl, falling back to StatusUrl.
+        string home = !string.IsNullOrWhiteSpace(s.HomeUrl) ? s.HomeUrl.Trim() : s.StatusUrl.Trim();
+        if (string.IsNullOrWhiteSpace(home))
+        {
+            Report("skipped — no Home/Status URL set.");
             return;
         }
 
         string password = CredentialProtector.Decrypt(s.LoginPasswordEncrypted);
         if (string.IsNullOrEmpty(s.LoginUsername) || string.IsNullOrEmpty(password))
         {
-            PluginLog.Warn($"AutoLogin: shortcut '{s.Name}' missing username or password — skipping.");
+            Report("skipped — username or password not set.");
             return;
         }
 
+        Report("starting — will open the home page with cached cookies.");
         // Fire-and-forget. Playwright is fully async; trying to await it on
         // the launcher's caller would block the UI for several seconds.
-        _ = Task.Run(() => RunAsync(s.Id, s.Name, s.StatusUrl, s.LoginUsername, password));
+        _ = Task.Run(() => RunAsync(s.Id, s.Name, home, s.LoginUrl?.Trim() ?? "", s.LoginUsername, password, Report));
     }
 
-    private static async Task RunAsync(string shortcutId, string shortcutName, string url, string username, string password)
+    private static async Task RunAsync(string shortcutId, string shortcutName, string homeUrl, string loginUrl, string username, string password, Action<string> report)
     {
         IPlaywright? pw = null;
         IBrowserContext? ctx = null;
@@ -61,8 +79,9 @@ static class AutoLoginRunner
             pw = await Playwright.CreateAsync();
 
             // Per-shortcut persistent profile: cookies + localStorage stick
-            // across launches so once the user is logged in, subsequent
-            // runs land them on the post-login page without re-prompting.
+            // across launches (this is the "cache" — Playwright writes them to
+            // this dir automatically) so once logged in, subsequent runs land
+            // on the home page without re-prompting.
             string userDataDir = string.IsNullOrEmpty(AutoLoginPaths.ProfilesRoot)
                 ? Path.Combine(Path.GetTempPath(), "ProdToyShortcutsBrowser", shortcutId)
                 : Path.Combine(AutoLoginPaths.ProfilesRoot, shortcutId);
@@ -81,41 +100,157 @@ static class AutoLoginRunner
 
             var page = ctx.Pages.Count > 0 ? ctx.Pages[0] : await ctx.NewPageAsync();
 
-            await page.GotoAsync(url, new PageGotoOptions
+            // 1. Open the home page (with cached cookies). A freshly-launched
+            //    dotnet/npm server may not be listening yet, so retry until it
+            //    responds or we time out — otherwise the browser just hits a
+            //    connection error and nothing appears to happen.
+            bool opened = false;
+            var deadline = DateTime.UtcNow.AddSeconds(90);
+            int waitNotices = 0;
+            while (!opened)
             {
-                WaitUntil = WaitUntilState.DOMContentLoaded,
-                Timeout = 20_000,
-            });
+                try
+                {
+                    await page.GotoAsync(homeUrl, new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.DOMContentLoaded,
+                        Timeout = 15_000,
+                    });
+                    opened = true;
+                }
+                catch (Exception ex)
+                {
+                    if (DateTime.UtcNow >= deadline)
+                    {
+                        report($"gave up waiting for {homeUrl} — {ex.Message.Split('\n')[0]}");
+                        TrackSession(pw, ctx);
+                        return;
+                    }
+                    if (waitNotices++ == 0) report("waiting for the server to come up…");
+                    await Task.Delay(2_000);
+                }
+            }
+            await SettleAsync(page);
 
-            // If the page has no visible password field, assume the saved
-            // session is still valid and skip filling — the user lands
-            // already-logged-in.
-            int passwordFields = await page.Locator("input[type='password']:visible").CountAsync();
-            if (passwordFields > 0)
-                await FillLoginFormAsync(page, username, password);
-            else
-                PluginLog.Info($"AutoLogin '{shortcutName}': session looks valid, no login form found.");
-
-            // Track the session so the browser stays open. Hook context Close
-            // so we drop the reference when the user closes the window.
-            lock (_lock) _sessions.Add((pw, ctx));
-            ctx.Close += (_, _) =>
+            // 2. Still signed in? (not on the login page + no visible password field)
+            if (await IsLoggedInAsync(page, loginUrl))
             {
-                lock (_lock) _sessions.RemoveAll(t => t.Ctx == ctx);
-                try { pw?.Dispose(); } catch { }
-            };
+                report("home opened with cached session — already signed in. Done.");
+                TrackSession(pw, ctx);
+                return;
+            }
+
+            // 3. Not signed in — go to the login page (if a specific one was given
+            //    and we're not already there; otherwise fill on the current page).
+            report("not signed in — opening the login page…");
+            if (!string.IsNullOrEmpty(loginUrl) && !UrlIsLoginPage(page.Url, loginUrl))
+            {
+                try
+                {
+                    await page.GotoAsync(loginUrl, new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.DOMContentLoaded,
+                        Timeout = 20_000,
+                    });
+                }
+                catch (Exception ex) { report($"couldn't open login URL — {ex.Message.Split('\n')[0]}"); }
+                await SettleAsync(page);
+            }
+
+            // 4. Fill credentials + submit.
+            report("filling credentials…");
+            bool filled = await FillLoginFormAsync(page, username, password);
+            if (!filled)
+            {
+                report("no login form found — leaving the browser as-is.");
+                TrackSession(pw, ctx);
+                return;
+            }
+
+            // 5. Wait to be taken away from the login page (back to home / returnUrl).
+            try
+            {
+                await page.WaitForURLAsync(u => !UrlIsLoginPage(u, loginUrl),
+                    new PageWaitForURLOptions { Timeout = 15_000 });
+            }
+            catch { /* SPA logins may not change the URL — fine */ }
+
+            // 6. If the site didn't redirect us home, push there ourselves.
+            if (UrlIsLoginPage(page.Url, loginUrl) || (string.IsNullOrEmpty(loginUrl) && await HasVisiblePasswordAsync(page)))
+            {
+                try
+                {
+                    await page.GotoAsync(homeUrl, new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.DOMContentLoaded,
+                        Timeout = 20_000,
+                    });
+                }
+                catch { }
+            }
+
+            report("signed in — returned to the app. Cookies cached for next time.");
+            TrackSession(pw, ctx);
         }
         catch (Exception ex)
         {
-            PluginLog.Warn($"AutoLogin '{shortcutName}': {ex.Message}");
+            report($"error — {ex.Message.Split('\n')[0]}");
             try { if (ctx != null) await ctx.CloseAsync(); } catch { }
             try { pw?.Dispose(); } catch { }
         }
     }
 
-    /// <summary>Heuristic form filler. Tries the most common patterns in
-    /// order; the first one that lands a value for both fields wins.</summary>
-    private static async Task FillLoginFormAsync(IPage page, string username, string password)
+    /// <summary>Keep the session alive so the browser window stays open; drop the
+    /// reference when the user closes it.</summary>
+    private static void TrackSession(IPlaywright pw, IBrowserContext ctx)
+    {
+        lock (_lock) _sessions.Add((pw, ctx));
+        ctx.Close += (_, _) =>
+        {
+            lock (_lock) _sessions.RemoveAll(t => t.Ctx == ctx);
+            try { pw?.Dispose(); } catch { }
+        };
+    }
+
+    /// <summary>Best-effort wait for the page to settle after a navigation.</summary>
+    private static async Task SettleAsync(IPage page)
+    {
+        try { await page.WaitForLoadStateAsync(LoadState.NetworkIdle, new PageWaitForLoadStateOptions { Timeout = 8_000 }); }
+        catch { /* timeout is fine — DOMContentLoaded already fired */ }
+    }
+
+    /// <summary>Logged in if we're not on the login page and no login form shows.</summary>
+    private static async Task<bool> IsLoggedInAsync(IPage page, string loginUrl)
+    {
+        if (!string.IsNullOrEmpty(loginUrl) && UrlIsLoginPage(page.Url, loginUrl)) return false;
+        return !await HasVisiblePasswordAsync(page);
+    }
+
+    private static async Task<bool> HasVisiblePasswordAsync(IPage page)
+    {
+        try { return await page.Locator("input[type='password']:visible").CountAsync() > 0; }
+        catch { return false; }
+    }
+
+    /// <summary>True when <paramref name="current"/> is on the same host and under
+    /// the login URL's path (ignoring query/fragment, so returnUrl params match).</summary>
+    private static bool UrlIsLoginPage(string current, string loginUrl)
+    {
+        if (string.IsNullOrEmpty(loginUrl) || string.IsNullOrEmpty(current)) return false;
+        try
+        {
+            var l = new Uri(loginUrl);
+            var c = new Uri(current);
+            return string.Equals(l.Host, c.Host, StringComparison.OrdinalIgnoreCase)
+                && c.AbsolutePath.TrimEnd('/').StartsWith(l.AbsolutePath.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return current.StartsWith(loginUrl, StringComparison.OrdinalIgnoreCase); }
+    }
+
+    /// <summary>Heuristic form filler. Tries the most common patterns in order;
+    /// the first that lands a value for both fields wins. Returns true if a
+    /// password field was found and filled (i.e. a login form was present).</summary>
+    private static async Task<bool> FillLoginFormAsync(IPage page, string username, string password)
     {
         // Username candidates — order matters; the first locator with a
         // visible match is used.
@@ -148,7 +283,7 @@ static class AutoLoginRunner
 
         await TryFillFirstAsync(page, usernameSelectors, username);
         bool pwFilled = await TryFillFirstAsync(page, passwordSelectors, password);
-        if (!pwFilled) return; // no password field — abort silently rather than mis-click
+        if (!pwFilled) return false; // no password field — abort rather than mis-click
 
         foreach (var sel in submitSelectors)
         {
@@ -157,10 +292,15 @@ static class AutoLoginRunner
                 var btn = page.Locator(sel).First;
                 if (await btn.CountAsync() == 0) continue;
                 await btn.ClickAsync(new LocatorClickOptions { Timeout = 5_000 });
-                return;
+                return true;
             }
             catch { }
         }
+
+        // No submit button matched — many forms submit on Enter in the password box.
+        try { await page.Locator("input[type='password']:visible").First.PressAsync("Enter"); }
+        catch { }
+        return true;
     }
 
     private static async Task<bool> TryFillFirstAsync(IPage page, string[] selectors, string value)

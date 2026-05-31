@@ -147,10 +147,30 @@ sealed record Shortcut
     public string StatusUrl { get; init; } = "";
 
     /// <summary>
-    /// When true, the launcher kicks off a Playwright session against
-    /// <see cref="StatusUrl"/> using <see cref="LoginUsername"/> +
-    /// <see cref="LoginPasswordEncrypted"/> so the browser is ready for the
-    /// user. Requires StatusUrl to be set.
+    /// Home/landing URL the auto-login flow opens first, reusing the cached
+    /// cookies from the per-shortcut browser profile. If it loads without being
+    /// redirected to <see cref="LoginUrl"/> (and no login form appears), the
+    /// session is still valid and no sign-in is performed. Empty = fall back to
+    /// <see cref="StatusUrl"/>.
+    /// </summary>
+    [JsonPropertyName("homeUrl")]
+    public string HomeUrl { get; init; } = "";
+
+    /// <summary>
+    /// Sign-in page URL. When opening <see cref="HomeUrl"/> redirects here (or a
+    /// login form is detected), the auto-login fills the credentials here, submits,
+    /// and waits to be returned to the home page — caching cookies for next time.
+    /// Empty = detect/fill the login form on whatever page loads after Home URL.
+    /// </summary>
+    [JsonPropertyName("loginUrl")]
+    public string LoginUrl { get; init; } = "";
+
+    /// <summary>
+    /// When true, the launcher kicks off a Playwright session that opens
+    /// <see cref="HomeUrl"/> (cached cookies first) and, if needed, signs in at
+    /// <see cref="LoginUrl"/> with <see cref="LoginUsername"/> +
+    /// <see cref="LoginPasswordEncrypted"/> so the browser is ready for the user.
+    /// Requires a home target (HomeUrl or StatusUrl) to be set.
     /// </summary>
     [JsonPropertyName("autoLoginEnabled")]
     public bool AutoLoginEnabled { get; init; }
