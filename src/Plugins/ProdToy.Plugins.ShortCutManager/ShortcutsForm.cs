@@ -18,6 +18,7 @@ class ShortcutsForm : Form
     private readonly ThemedTabControl _rightTabs;
     private readonly TabPage _shortcutsTab;
     private readonly TabPage _groupLauncherTab;
+    private readonly TabPage _consolidatedTab;
     private GroupLauncherPanel? _groupLauncherPanel;
     private string? _expandedId;
 
@@ -230,6 +231,17 @@ class ShortcutsForm : Form
         };
         _rightTabs.TabPages.Add(_groupLauncherTab);
 
+        // Consolidated launcher — runs the folder's shortcuts as captured child
+        // processes inside one window (embedded consoles + preview), in contrast
+        // to the Group Launcher's separate terminal windows.
+        _consolidatedTab = new TabPage("Consolidated")
+        {
+            BackColor = theme.BgDark,
+            ForeColor = theme.TextPrimary,
+            Padding = new Padding(0),
+        };
+        _rightTabs.TabPages.Add(_consolidatedTab);
+
         _listPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -389,6 +401,106 @@ class ShortcutsForm : Form
         _groupLauncherTab.Controls.Add(_groupLauncherPanel);
     }
 
+    /// <summary>Rebuilds the Consolidated tab for the current folder. The tab
+    /// itself is lightweight — a description plus a button that opens (or
+    /// focuses) the standalone <see cref="ConsolidatedLauncherForm"/> for the
+    /// folder, where the shortcuts run as captured child processes with embedded
+    /// consoles and a preview pane.</summary>
+    private void RebuildConsolidatedTab()
+    {
+        _consolidatedTab.Controls.Clear();
+
+        if (!IsCreatableSelection)
+        {
+            _consolidatedTab.Controls.Add(new Label
+            {
+                Text = IsRecycleBinSelected
+                    ? "Consolidated Launcher isn't available for the recycle bin."
+                    : "Select a folder on the left to use the Consolidated Launcher.",
+                Font = new Font("Segoe UI", 10.5f),
+                ForeColor = _theme.TextSecondary,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                BackColor = Color.Transparent,
+            });
+            return;
+        }
+
+        var shortcuts = ShortcutStore.Load()
+            .Where(s => string.Equals(
+                ShortcutFolders.Normalize(s.FolderPath),
+                _selectedFolder,
+                StringComparison.OrdinalIgnoreCase))
+            .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (shortcuts.Count == 0)
+        {
+            _consolidatedTab.Controls.Add(new Label
+            {
+                Text = $"No shortcuts in \"{_selectedFolder}\" yet.\nAdd one with \"+ New Shortcut\".",
+                Font = new Font("Segoe UI", 10.5f),
+                ForeColor = _theme.TextSecondary,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                BackColor = Color.Transparent,
+            });
+            return;
+        }
+
+        var panel = new Panel { Dock = DockStyle.Fill, BackColor = _theme.BgDark };
+
+        var heading = new Label
+        {
+            Text = "🖥 Consolidated Launcher",
+            Font = new Font("Segoe UI Semibold", 14f, FontStyle.Bold),
+            ForeColor = _theme.TextPrimary,
+            AutoSize = true,
+            Location = new Point(28, 32),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(heading);
+
+        var blurb = new Label
+        {
+            Text = $"Run all {shortcuts.Count} shortcut(s) in \"{_selectedFolder}\" inside one window —\n" +
+                   "each as a captured process with its own live console, plus an embedded\n" +
+                   "preview of each Status URL. (The Group Launcher's separate terminal\n" +
+                   "windows are unaffected.)",
+            Font = new Font("Segoe UI", 10f),
+            ForeColor = _theme.TextSecondary,
+            AutoSize = true,
+            Location = new Point(28, 72),
+            BackColor = Color.Transparent,
+        };
+        panel.Controls.Add(blurb);
+
+        var openBtn = MakeButton("🖥  Open Consolidated Launcher", _theme.Primary, Color.White);
+        openBtn.Size = new Size(280, 40);
+        openBtn.Font = new Font("Segoe UI Semibold", 10.5f, FontStyle.Bold);
+        openBtn.Location = new Point(28, 168);
+        // Capture the folder + a fresh snapshot of its shortcuts at click time.
+        string folder = _selectedFolder;
+        openBtn.Click += (_, _) =>
+        {
+            var current = ShortcutStore.Load()
+                .Where(s => string.Equals(
+                    ShortcutFolders.Normalize(s.FolderPath), folder, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (current.Count == 0)
+            {
+                MessageBox.Show(this, "This folder has no shortcuts to launch.", "Consolidated Launcher",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            ConsolidatedLauncherForm.OpenOrFocus(_theme, folder, current);
+        };
+        panel.Controls.Add(openBtn);
+
+        _consolidatedTab.Controls.Add(panel);
+    }
+
     /// <summary>
     /// Selects either the hard-coded "main" slot ("" tag) or the "recycle bin"
     /// slot (RecycleBinTag). Clears the TreeView's own selection so the slot
@@ -434,6 +546,7 @@ class ShortcutsForm : Form
         // matters here — folder switch, shortcut add/delete/edit, recycle
         // bin enter/exit — so attaching the rebuild here covers all paths.
         RebuildGroupLauncherTab();
+        RebuildConsolidatedTab();
 
         _listPanel.SuspendLayout();
         _listPanel.Controls.Clear();

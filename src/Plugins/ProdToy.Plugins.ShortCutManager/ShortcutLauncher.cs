@@ -146,7 +146,15 @@ static class ShortcutLauncher
         };
     }
 
-    private static string BuildProfileCmdline(Shortcut s)
+    /// <summary>
+    /// Builds the effective inner command string for a shortcut (e.g.
+    /// <c>dotnet run</c>, <c>npm run dev</c>, or a custom command). This is the
+    /// exact command the WT/cmd launchers run via <c>cmd /k …</c>; the
+    /// Consolidated Launcher reuses it to run the same command as a captured
+    /// child process via <c>cmd /c …</c>. <c>internal</c> so the consolidated
+    /// launcher can share one source of truth for the command.
+    /// </summary>
+    internal static string BuildProfileCmdline(Shortcut s)
     {
         var profile = LaunchProfiles.GetOrDefault(s.Profile);
         string args = (s.Args ?? "").Trim();
