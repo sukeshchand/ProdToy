@@ -9,9 +9,17 @@ class ShortcutEditForm : Form
     private readonly Shortcut? _existing;
     private readonly string _folderPath;
 
+    // Layout target for the AddSection/AddLabel/MakeTextBox/MakeCombo helpers.
+    // Set to the TabPage currently being populated so the same helpers can
+    // build any tab. _pageW is that page's usable content width.
+    private Control _host = null!;
+    private int _pageW;
+
     private readonly TextBox _nameBox;
     private readonly TextBox _dirBox;
     private readonly TextBox _argsBox;
+    private readonly ComboBox _shellCombo;
+    private readonly TextBox _setupStepsBox;
     private readonly ComboBox _profileCombo;
     private readonly ComboBox _launchProfileCombo;
     private readonly Label _argsLabel;
@@ -32,6 +40,7 @@ class ShortcutEditForm : Form
     // off so we don't trample a custom name.
     private bool _desktopNameAutoSync = true;
     private readonly TextBox _statusUrlBox;
+    private readonly NumericUpDown _statusTimeoutBox;
     private readonly ToggleSwitch _autoLoginToggle;
     private readonly TextBox _homeUrlBox;
     private readonly TextBox _loginUrlBox;
@@ -66,55 +75,102 @@ class ShortcutEditForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        Size = new Size(720, 720);
+        ClientSize = new Size(851, 820);
         BackColor = theme.BgDark;
         ForeColor = theme.TextPrimary;
         Font = new Font("Segoe UI", 9.5f);
         AutoScaleMode = AutoScaleMode.Dpi;
 
         int pad = 20;
-        int y = pad;
         int labelW = 170;
         int inputX = pad + labelW;
-        int inputW = ClientSize.Width - inputX - pad;
 
-        // Header
+        // Header + folder readout (live on the form, above the tab strip).
         var header = new Label
         {
             Text = isEdit ? "Edit Shortcut" : "New Shortcut",
             Font = new Font("Segoe UI Semibold", 14f, FontStyle.Bold),
             ForeColor = theme.TextPrimary,
             AutoSize = true,
-            Location = new Point(pad, y),
+            Location = new Point(pad, 12),
             BackColor = Color.Transparent,
         };
         Controls.Add(header);
 
-        // Folder readout — the shortcut's folder is chosen by tree selection,
-        // not editable here. Show "📁 <path>" next to the header so the user
-        // can confirm where it'll be saved.
         var folderReadout = new Label
         {
             Text = string.IsNullOrEmpty(_folderPath) ? "📁 (no folder)" : $"📁 {_folderPath}",
             Font = new Font("Segoe UI", 9.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
             AutoSize = true,
-            Location = new Point(pad + 180, y + 8),
+            Location = new Point(pad + 180, 18),
             BackColor = Color.Transparent,
         };
         Controls.Add(folderReadout);
-        y += 40;
 
-        // Launch profile sits at the very top — selecting it swaps the
-        // command's default args, label, and hint so the edit form works for
-        // any CLI (npm, dotnet, vite, …), not just claude.
+        // Tab scaffold. Each page scrolls on its own if its content runs long,
+        // so the dialog stays a fixed, reasonable height regardless of how many
+        // fields a single tab holds.
+        const int tabMargin = 12;
+        const int tabTop = 44;
+        const int buttonArea = 64;
+        var tabs = new TabControl
+        {
+            Location = new Point(tabMargin, tabTop),
+            Size = new Size(ClientSize.Width - tabMargin * 2, ClientSize.Height - tabTop - buttonArea),
+            BackColor = theme.BgDark,
+            DrawMode = TabDrawMode.OwnerDrawFixed,
+            SizeMode = TabSizeMode.Fixed,
+            ItemSize = new Size(165, 28),
+        };
+
+        TabPage NewPage(string title) => new TabPage(title)
+        {
+            BackColor = theme.BgDark,
+            ForeColor = theme.TextPrimary,
+            AutoScroll = true,
+            Padding = new Padding(0),
+        };
+        var pageGeneral = NewPage("General");
+        var pageCmd = NewPage("Command && Terminal");
+        var pageIntegration = NewPage("Integration");
+        var pageMonitoring = NewPage("Monitoring");
+        tabs.TabPages.AddRange(new[] { pageGeneral, pageCmd, pageIntegration, pageMonitoring });
+
+        // Owner-draw the tab headers so they match the dark theme instead of
+        // the default light system tab strip.
+        tabs.DrawItem += (sender, e) =>
+        {
+            var tc = (TabControl)sender!;
+            if (e.Index < 0 || e.Index >= tc.TabPages.Count) return;
+            bool selected = e.Index == tc.SelectedIndex;
+            Color bg = selected ? theme.Primary : theme.BgHeader;
+            Color fg = selected ? Color.White : theme.TextSecondary;
+            using var brush = new SolidBrush(bg);
+            e.Graphics.FillRectangle(brush, e.Bounds);
+            TextRenderer.DrawText(e.Graphics, tc.TabPages[e.Index].Text,
+                new Font("Segoe UI Semibold", 9f), e.Bounds, fg,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        };
+        Controls.Add(tabs);
+
+        // All pages share the same size, so one width drives every input.
+        // Subtract a little for the vertical scrollbar a long tab may show.
+        _pageW = tabs.Width - 8;
+        int inputW = _pageW - inputX - pad - 18;
+        const int topPad = 12;
+
+        var initialProfile = LaunchProfiles.GetOrDefault(existing?.Profile);
+
+        // ---------------------------------------------------------------- General
+        _host = pageGeneral;
+        int y = topPad;
+
         y = AddSection("PROFILE", y);
-
         AddLabel("Launch profile", pad, y);
         _launchProfileCombo = MakeCombo(inputX, y, 240);
         foreach (var p in LaunchProfiles.All)
             _launchProfileCombo.Items.Add(p.DisplayName);
-        var initialProfile = LaunchProfiles.GetOrDefault(existing?.Profile);
         _launchProfileCombo.SelectedIndex = Array.FindIndex(
             LaunchProfiles.All, p => p.Id == initialProfile.Id);
         if (_launchProfileCombo.SelectedIndex < 0) _launchProfileCombo.SelectedIndex = 0;
@@ -171,13 +227,22 @@ class ShortcutEditForm : Form
             if (isClaude && string.IsNullOrWhiteSpace(_argsBox.Text))
                 _argsBox.Text = $"\"/rename {leaf}\"";
         };
-        Controls.Add(browseBtn);
+        _host.Controls.Add(browseBtn);
         y += 34;
 
         AddLabel("Name", pad, y);
         _nameBox = MakeTextBox(inputX, y, inputW);
         _nameBox.Text = existing?.Name ?? "";
         y += 34;
+
+        y = AddSection("NOTES", y);
+        _notesBox = MakeTextBox(pad, y, _pageW - pad * 2, multiline: true, height: 90);
+        _notesBox.Text = existing?.Notes ?? "";
+        y += 98;
+
+        // ------------------------------------------------- Command & Terminal
+        _host = pageCmd;
+        y = topPad;
 
         y = AddSection("COMMAND", y);
 
@@ -192,12 +257,11 @@ class ShortcutEditForm : Form
             Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
             AutoSize = false,
-            // Reserve height for two wrapped lines; width matches the input.
             Size = new Size(inputW, 32),
             Location = new Point(inputX, y),
             BackColor = Color.Transparent,
         };
-        Controls.Add(_argsHintLabel);
+        _host.Controls.Add(_argsHintLabel);
         y += 34;
 
         // Chip panel — clickable token buttons for common flags/subcommands.
@@ -213,7 +277,7 @@ class ShortcutEditForm : Form
             Padding = new Padding(0),
             Margin = new Padding(0),
         };
-        Controls.Add(chipPanel);
+        _host.Controls.Add(chipPanel);
         RebuildArgsChips(chipPanel, initialProfile, theme);
         y += 68;
 
@@ -235,29 +299,83 @@ class ShortcutEditForm : Form
             RebuildArgsChips(chipPanel, p, theme);
         };
 
+        // Shell — chooses cmd vs PowerShell for the setup steps + command.
+        // Drives both the launcher and the setup-step syntax/chips below.
+        AddLabel("Shell", pad, y);
+        _shellCombo = MakeCombo(inputX, y, 200);
+        _shellCombo.Items.Add("Command Prompt (cmd)");
+        _shellCombo.Items.Add("PowerShell");
+        _shellCombo.SelectedIndex = existing?.Shell == LaunchShell.PowerShell ? 1 : 0;
+        y += 34;
+
+        // Optional setup steps — shell statements run before the command in the
+        // same session. Typical use: set env vars the command reads. One
+        // statement per line. Syntax follows the Shell selection above.
+        AddLabel("Setup steps", pad, y);
+        _setupStepsBox = MakeTextBox(inputX, y, inputW, multiline: true, height: 54);
+        _setupStepsBox.Text = existing?.SetupSteps ?? "";
+        _setupStepsBox.ScrollBars = ScrollBars.Vertical;
+        _setupStepsBox.AcceptsReturn = true;
+        _setupStepsBox.Font = new Font("Consolas", 9.5f);
+        y += 60;
+
+        // Click-to-insert snippet chips — rebuilt when the Shell changes so
+        // they show set VAR=value (cmd) or $env:VAR = "value" (PowerShell).
+        var setupChipPanel = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            AutoSize = false,
+            Size = new Size(inputW, 96),
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+            Padding = new Padding(0),
+            Margin = new Padding(0),
+        };
+        _host.Controls.Add(setupChipPanel);
+        y += 100;
+
+        var setupHint = new Label
+        {
+            Text = SetupHintFor(_shellCombo.SelectedIndex),
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = false,
+            Size = new Size(inputW, 32),
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+        };
+        _host.Controls.Add(setupHint);
+        y += 36;
+
+        RebuildSetupChips(setupChipPanel, CurrentShell(), theme);
+        _shellCombo.SelectedIndexChanged += (_, _) =>
+        {
+            setupHint.Text = SetupHintFor(_shellCombo.SelectedIndex);
+            RebuildSetupChips(setupChipPanel, CurrentShell(), theme);
+        };
+
         y = AddSection("TERMINAL", y);
 
         AddLabel("Launcher", pad, y);
         _launcherCombo = MakeCombo(inputX, y, 200);
         _launcherCombo.Items.Add("Windows Terminal");
-        _launcherCombo.Items.Add("Plain cmd window");
+        _launcherCombo.Items.Add("Standalone window");
         _launcherCombo.SelectedIndex = existing?.LauncherMode == LauncherMode.CmdWindow ? 1 : 0;
         y += 34;
 
-        // Only meaningful when launcher = Windows Terminal. Disabled for cmd
-        // fallback since cmd.exe can't attach to an existing WT window.
+        // Only meaningful when launcher = Windows Terminal. Disabled for the
+        // standalone window since it can't attach to an existing WT window.
         AddLabel("Open in", pad, y);
         _windowTargetCombo = MakeCombo(inputX, y, 240);
         _windowTargetCombo.Items.Add("New window");
         _windowTargetCombo.Items.Add("Existing window (new tab)");
-        // New shortcuts default to "Existing window" (grouping into a shared WT
-        // window is the more common case). Edits preserve the saved target.
         _windowTargetCombo.SelectedIndex = existing?.WtWindowTarget == WtWindowTarget.NewWindow ? 0 : 1;
 
         // Tab group name — routes the tab into a specific named WT window via
         // `-w <name>`. Only relevant when "Existing window" is selected.
         int tabGroupX = inputX + 248;
-        int tabGroupW = Math.Max(120, ClientSize.Width - tabGroupX - pad);
+        int tabGroupW = Math.Max(120, _pageW - tabGroupX - pad);
         _tabGroupBox = new TextBox
         {
             Font = new Font("Segoe UI", 10f),
@@ -267,12 +385,9 @@ class ShortcutEditForm : Form
             Size = new Size(tabGroupW, 26),
             Location = new Point(tabGroupX, y),
             PlaceholderText = "Tab group (optional)",
-            // Prefill with the first word of the directory's leaf folder name
-            // (split on space/dash/underscore/dot) so related shortcuts cluster
-            // into the same WT window by default. Users can still clear or edit.
             Text = existing?.WtWindowName ?? FirstWordFromPath(existing?.WorkingDirectory ?? defaultFolder),
         };
-        Controls.Add(_tabGroupBox);
+        _host.Controls.Add(_tabGroupBox);
 
         // Keep tab group synced with directory leaf — but only while the user
         // hasn't diverged from our auto-fill. Once they edit the tab group to
@@ -320,27 +435,24 @@ class ShortcutEditForm : Form
 
         var titleHint = new Label
         {
-            Text = "Leave empty to keep the default terminal title. Used for wt --title or cmd title.",
+            Text = "Leave empty to keep the default terminal title. Names the WT tab, or the standalone window's title bar.",
             Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
-            AutoSize = true,
+            AutoSize = false,
+            Size = new Size(inputW, 28),
             Location = new Point(inputX, y),
             BackColor = Color.Transparent,
         };
-        Controls.Add(titleHint);
-        y += 26;
+        _host.Controls.Add(titleHint);
+        y += 30;
 
         // Optional keystrokes fired with SendKeys after the launch completes.
-        // Useful for apps that rewrite the tab title on startup — you can bind
-        // your preferred rename shortcut and replay it here. SendKeys textbox
-        // and the wait-before-sending numeric live on the same row so the
-        // form doesn't waste a full row on a small numeric input.
+        // Useful for apps that rewrite the tab title on startup. The SendKeys
+        // textbox and the wait-before-sending numeric share one row.
         AddLabel("Send keys after launch", pad, y);
         const int delayBoxWidth = 100;
         const int delayLabelGap = 8;
 
-        // Delay label sits at the right end of the input column; measured
-        // first so we can reserve its width when sizing the textbox.
         var delayCaption = new Label
         {
             Text = "Wait before sending (ms)",
@@ -350,13 +462,13 @@ class ShortcutEditForm : Form
             BackColor = Color.Transparent,
             Location = new Point(0, y + 4),
         };
-        Controls.Add(delayCaption);
+        _host.Controls.Add(delayCaption);
         int delayCaptionWidth = delayCaption.PreferredWidth;
         int delayCaptionX = inputX + inputW - delayBoxWidth - delayLabelGap - delayCaptionWidth;
         delayCaption.Left = delayCaptionX;
 
         int sendKeysWidth = delayCaptionX - inputX - delayLabelGap;
-        if (sendKeysWidth < 120) sendKeysWidth = 120; // sanity floor for narrow forms
+        if (sendKeysWidth < 120) sendKeysWidth = 120;
         _sendKeysBox = MakeTextBox(inputX, y, sendKeysWidth);
         _sendKeysBox.Text = existing?.PostLaunchSendKeys ?? "";
 
@@ -373,7 +485,7 @@ class ShortcutEditForm : Form
             Size = new Size(delayBoxWidth, 26),
             Location = new Point(inputX + inputW - delayBoxWidth, y),
         };
-        Controls.Add(_sendKeysDelayBox);
+        _host.Controls.Add(_sendKeysDelayBox);
         y += 30;
 
         var sendKeysHint = new Label
@@ -381,14 +493,15 @@ class ShortcutEditForm : Form
             Text = "Leave empty to skip. SendKeys syntax: {ENTER}, {TAB}, ^+p = Ctrl+Shift+P, etc.",
             Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
-            AutoSize = true,
+            AutoSize = false,
+            Size = new Size(inputW, 28),
             Location = new Point(inputX, y),
             BackColor = Color.Transparent,
         };
-        Controls.Add(sendKeysHint);
-        y += 26;
+        _host.Controls.Add(sendKeysHint);
+        y += 30;
 
-        AddLabel("WT profile", pad, y);
+        AddLabel("WT appearance", pad, y);
         _profileCombo = new ComboBox
         {
             Font = new Font("Segoe UI", 10f),
@@ -402,28 +515,27 @@ class ShortcutEditForm : Form
         foreach (var p in WindowsTerminalProfiles.Discover())
             _profileCombo.Items.Add(p);
         _profileCombo.Text = existing?.WtProfile ?? "Command Prompt";
-        Controls.Add(_profileCombo);
+        _host.Controls.Add(_profileCombo);
 
         var addProfileBtn = MakeProfileActionBtn(theme, "+", inputX + 328, y);
         addProfileBtn.Click += (_, _) => OpenCreateProfile();
-        Controls.Add(addProfileBtn);
+        _host.Controls.Add(addProfileBtn);
 
         var editProfileBtn = MakeProfileActionBtn(theme, "✎", inputX + 328 + 36, y);
         editProfileBtn.Click += (_, _) => OpenEditProfile();
-        Controls.Add(editProfileBtn);
+        _host.Controls.Add(editProfileBtn);
         _editProfileBtn = editProfileBtn;
 
         var delProfileBtn = MakeProfileActionBtn(theme, "🗑", inputX + 328 + 72, y);
         delProfileBtn.Font = new Font("Segoe UI Emoji", 11f, FontStyle.Regular);
         delProfileBtn.ForeColor = theme.ErrorColor;
         delProfileBtn.Click += (_, _) => DeleteSelectedProfile();
-        Controls.Add(delProfileBtn);
+        _host.Controls.Add(delProfileBtn);
         _delProfileBtn = delProfileBtn;
 
         // Edit/Delete are hidden entirely for stock profiles — they only appear
         // when the selected name is a custom profile we created (tracked in
-        // OwnedWtProfilesStore). This keeps the control row tidy and prevents
-        // accidental clicks on disabled buttons.
+        // OwnedWtProfilesStore).
         void RefreshProfileButtons()
         {
             bool owned = OwnedWtProfilesStore.IsOwned(_profileCombo.Text?.Trim() ?? "");
@@ -437,17 +549,38 @@ class ShortcutEditForm : Form
 
         var profileHint = new Label
         {
-            Text = "Pick an existing profile, type a custom name, or click + to create / ✎ edit / 🗑 delete",
+            Text = "Windows Terminal only — sets just the tab's look (colors, font, icon). The shell is the 'Shell' setting above. + create / ✎ edit / 🗑 delete.",
             Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
-            AutoSize = true,
+            AutoSize = false,
+            Size = new Size(inputW, 32),
             Location = new Point(inputX, y),
             BackColor = Color.Transparent,
         };
-        Controls.Add(profileHint);
-        y += 22;
+        _host.Controls.Add(profileHint);
+        y += 32;
 
-        // Require admin toggle
+        // The WT appearance profile only applies to the Windows Terminal
+        // launcher; gray it out (and its +/✎/🗑 buttons) for the standalone
+        // window so it's clear it has no effect there.
+        void RefreshProfileEnabled()
+        {
+            bool wt = _launcherCombo.SelectedIndex == 0;
+            _profileCombo.Enabled = wt;
+            addProfileBtn.Enabled = wt;
+            _editProfileBtn.Enabled = wt;
+            _delProfileBtn.Enabled = wt;
+            profileHint.ForeColor = wt ? theme.TextSecondary : theme.Border;
+        }
+        _launcherCombo.SelectedIndexChanged += (_, _) => RefreshProfileEnabled();
+        RefreshProfileEnabled();
+
+        // ------------------------------------------------------------ Integration
+        _host = pageIntegration;
+        y = topPad;
+
+        y = AddSection("INTEGRATION", y);
+
         var adminCaption = new Label
         {
             Text = "Require administrator",
@@ -457,13 +590,13 @@ class ShortcutEditForm : Form
             Location = new Point(pad, y + 4),
             BackColor = Color.Transparent,
         };
-        Controls.Add(adminCaption);
+        _host.Controls.Add(adminCaption);
         _adminToggle = new ToggleSwitch(theme)
         {
             Checked = existing?.RequireAdmin ?? false,
             Location = new Point(inputX, y + 2),
         };
-        Controls.Add(_adminToggle);
+        _host.Controls.Add(_adminToggle);
         var adminHint = new Label
         {
             Text = "Elevate via UAC prompt on launch",
@@ -473,10 +606,9 @@ class ShortcutEditForm : Form
             Location = new Point(inputX + _adminToggle.Width + 12, y + 6),
             BackColor = Color.Transparent,
         };
-        Controls.Add(adminHint);
+        _host.Controls.Add(adminHint);
         y += 38;
 
-        // Explorer right-click integration toggle
         var explorerCaption = new Label
         {
             Text = "Show in Explorer right-click",
@@ -486,13 +618,13 @@ class ShortcutEditForm : Form
             Location = new Point(pad, y + 4),
             BackColor = Color.Transparent,
         };
-        Controls.Add(explorerCaption);
+        _host.Controls.Add(explorerCaption);
         _explorerMenuToggle = new ToggleSwitch(theme)
         {
             Checked = existing?.ShowInExplorerContextMenu ?? false,
             Location = new Point(inputX, y + 2),
         };
-        Controls.Add(_explorerMenuToggle);
+        _host.Controls.Add(_explorerMenuToggle);
         var explorerHint = new Label
         {
             Text = "Adds a “Run …” menu item when right-clicking inside this working directory",
@@ -502,11 +634,9 @@ class ShortcutEditForm : Form
             Location = new Point(inputX + _explorerMenuToggle.Width + 12, y + 6),
             BackColor = Color.Transparent,
         };
-        Controls.Add(explorerHint);
+        _host.Controls.Add(explorerHint);
         y += 38;
 
-        // Desktop shortcut toggle — creates / removes a .lnk on the user's
-        // desktop that launches this shortcut.
         var desktopCaption = new Label
         {
             Text = "Add shortcut to desktop",
@@ -516,13 +646,13 @@ class ShortcutEditForm : Form
             Location = new Point(pad, y + 4),
             BackColor = Color.Transparent,
         };
-        Controls.Add(desktopCaption);
+        _host.Controls.Add(desktopCaption);
         _desktopShortcutToggle = new ToggleSwitch(theme)
         {
             Checked = existing?.AddToDesktop ?? false,
             Location = new Point(inputX, y + 2),
         };
-        Controls.Add(_desktopShortcutToggle);
+        _host.Controls.Add(_desktopShortcutToggle);
         var desktopHint = new Label
         {
             Text = "Creates a desktop .lnk that triggers the same launch action",
@@ -532,18 +662,15 @@ class ShortcutEditForm : Form
             Location = new Point(inputX + _desktopShortcutToggle.Width + 12, y + 6),
             BackColor = Color.Transparent,
         };
-        Controls.Add(desktopHint);
-        y += 32;
+        _host.Controls.Add(desktopHint);
+        y += 36;
 
-        // Desktop shortcut name — what the .lnk's filename will be (without
-        // .lnk). Defaults to "<directory-leaf> <profile-display>" while the
-        // user hasn't manually edited it; mandatory when the toggle is on.
         AddLabel("Desktop name", pad, y);
         _desktopShortcutNameBox = MakeTextBox(inputX, y, inputW);
         if (existing != null && !string.IsNullOrEmpty(existing.DesktopShortcutName))
         {
             _desktopShortcutNameBox.Text = existing.DesktopShortcutName;
-            _desktopNameAutoSync = false; // existing custom value — don't trample
+            _desktopNameAutoSync = false;
         }
         else
         {
@@ -553,15 +680,15 @@ class ShortcutEditForm : Form
         }
         _desktopShortcutNameBox.TextChanged += (_, _) =>
         {
-            // Any direct user edit pins the value. We detect "real" edits
-            // by comparing against the auto-suggested string; the
-            // auto-fill code below re-checks _desktopNameAutoSync before
-            // overwriting so no infinite loop.
             string suggested = ComputeDefaultDesktopName(_dirBox.Text, _launchProfileCombo.SelectedIndex);
             if (!string.Equals(_desktopShortcutNameBox.Text, suggested, StringComparison.Ordinal))
                 _desktopNameAutoSync = false;
         };
         y += 34;
+
+        // ------------------------------------------------------------- Monitoring
+        _host = pageMonitoring;
+        y = topPad;
 
         y = AddSection("MONITORING", y);
 
@@ -572,7 +699,7 @@ class ShortcutEditForm : Form
 
         var statusUrlHint = new Label
         {
-            Text = "Health check — polled every 3s to show a Healthy / Unreachable badge. Use a URL that responds without login, e.g. http://localhost:5000.",
+            Text = "Optional. Group Launcher polls this URL every 3s to show a Healthy / Unreachable badge — e.g. http://localhost:5000 for an ASP.NET app.",
             Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
             AutoSize = false,
@@ -580,12 +707,41 @@ class ShortcutEditForm : Form
             Location = new Point(inputX, y),
             BackColor = Color.Transparent,
         };
-        Controls.Add(statusUrlHint);
+        _host.Controls.Add(statusUrlHint);
         y += 38;
 
-        // Auto-login toggle: when on, the launcher kicks off a Playwright
-        // session against Status URL to log the user in with the stored
-        // credentials so the browser is ready when they look at it.
+        // Probe timeout — how long each health check waits before marking the
+        // row DOWN. Default 5s. Used by the Group Launcher's URL poller.
+        AddLabel("Probe timeout (s)", pad, y);
+        _statusTimeoutBox = new NumericUpDown
+        {
+            Font = new Font("Segoe UI", 10f),
+            BackColor = theme.BgHeader,
+            ForeColor = theme.TextPrimary,
+            BorderStyle = BorderStyle.FixedSingle,
+            Minimum = 1,
+            Maximum = 120,
+            Increment = 1,
+            Value = Math.Clamp(existing?.StatusTimeoutSeconds ?? 5, 1, 120),
+            Size = new Size(100, 26),
+            Location = new Point(inputX, y),
+        };
+        _host.Controls.Add(_statusTimeoutBox);
+        y += 30;
+
+        var timeoutHint = new Label
+        {
+            Text = "How long each probe waits for a response before showing DOWN. Raise it for slow HTTPS dev servers.",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = false,
+            Size = new Size(inputW, 28),
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+        };
+        _host.Controls.Add(timeoutHint);
+        y += 32;
+
         _loginCaption = new Label
         {
             Text = "Auto login",
@@ -595,13 +751,13 @@ class ShortcutEditForm : Form
             Location = new Point(pad, y + 4),
             BackColor = Color.Transparent,
         };
-        Controls.Add(_loginCaption);
+        _host.Controls.Add(_loginCaption);
         _autoLoginToggle = new ToggleSwitch(theme)
         {
             Checked = existing?.AutoLoginEnabled ?? false,
             Location = new Point(inputX, y + 2),
         };
-        Controls.Add(_autoLoginToggle);
+        _host.Controls.Add(_autoLoginToggle);
         var loginHint = new Label
         {
             Text = "On launch: open Home URL with cached cookies; if redirected to Login URL, sign in and return.",
@@ -611,7 +767,7 @@ class ShortcutEditForm : Form
             Location = new Point(inputX + _autoLoginToggle.Width + 12, y + 6),
             BackColor = Color.Transparent,
         };
-        Controls.Add(loginHint);
+        _host.Controls.Add(loginHint);
         y += 36;
 
         _homeUrlLabel = AddLabel("Home URL", pad, y);
@@ -628,7 +784,7 @@ class ShortcutEditForm : Form
             Location = new Point(inputX, y),
             BackColor = Color.Transparent,
         };
-        Controls.Add(homeUrlHint);
+        _host.Controls.Add(homeUrlHint);
         y += 34;
 
         _loginUrlLabel = AddLabel("Login URL", pad, y);
@@ -645,7 +801,7 @@ class ShortcutEditForm : Form
             Location = new Point(inputX, y),
             BackColor = Color.Transparent,
         };
-        Controls.Add(loginUrlHint);
+        _host.Controls.Add(loginUrlHint);
         y += 34;
 
         _loginUsernameLabel = AddLabel("Username", pad, y);
@@ -669,7 +825,7 @@ class ShortcutEditForm : Form
             Location = new Point(inputX, y),
             BackColor = Color.Transparent,
         };
-        Controls.Add(passwordHint);
+        _host.Controls.Add(passwordHint);
         y += 24;
 
         void RefreshAutoLoginEnabled()
@@ -691,31 +847,26 @@ class ShortcutEditForm : Form
         _autoLoginToggle.CheckedChanged += (_, _) => RefreshAutoLoginEnabled();
         RefreshAutoLoginEnabled();
 
-        y = AddSection("NOTES", y);
-
-        _notesBox = MakeTextBox(pad, y, ClientSize.Width - pad * 2, multiline: true, height: 60);
-        _notesBox.Text = existing?.Notes ?? "";
-        y += 68;
-
+        // ------------------------------------------------------- Form-level chrome
+        int btnRowY = ClientSize.Height - 46;
         _validationLabel = new Label
         {
             Text = "",
             Font = new Font("Segoe UI", 9f),
             ForeColor = theme.ErrorColor,
-            AutoSize = true,
-            Location = new Point(pad, y),
+            AutoSize = false,
+            Size = new Size(ClientSize.Width - pad * 2, 18),
+            Location = new Point(pad, btnRowY - 22),
             BackColor = Color.Transparent,
         };
         Controls.Add(_validationLabel);
-        y += 22;
 
-        // Buttons
         var saveBtn = new RoundedButton
         {
             Text = isEdit ? "Save" : "Add Shortcut",
             Font = new Font("Segoe UI Semibold", 10f, FontStyle.Bold),
             Size = new Size(140, 36),
-            Location = new Point(ClientSize.Width - pad - 140, y),
+            Location = new Point(ClientSize.Width - pad - 140, btnRowY),
             FlatStyle = FlatStyle.Flat,
             BackColor = theme.Primary,
             ForeColor = Color.White,
@@ -731,7 +882,7 @@ class ShortcutEditForm : Form
             Text = "Cancel",
             Font = new Font("Segoe UI", 9.5f),
             Size = new Size(90, 36),
-            Location = new Point(ClientSize.Width - pad - 140 - 10 - 90, y),
+            Location = new Point(ClientSize.Width - pad - 140 - 10 - 90, btnRowY),
             FlatStyle = FlatStyle.Flat,
             BackColor = theme.PrimaryDim,
             ForeColor = theme.TextSecondary,
@@ -749,7 +900,7 @@ class ShortcutEditForm : Form
                 Text = "Delete",
                 Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
                 Size = new Size(90, 36),
-                Location = new Point(pad, y),
+                Location = new Point(pad, btnRowY),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = theme.ErrorBg,
                 ForeColor = theme.ErrorColor,
@@ -760,8 +911,6 @@ class ShortcutEditForm : Form
             deleteBtn.Click += (_, _) => TryDelete();
             Controls.Add(deleteBtn);
         }
-
-        ClientSize = new Size(ClientSize.Width, y + 36 + pad);
     }
 
     private int AddSection(string text, int y)
@@ -775,14 +924,14 @@ class ShortcutEditForm : Form
             Location = new Point(20, y),
             BackColor = Color.Transparent,
         };
-        Controls.Add(hdr);
+        _host.Controls.Add(hdr);
         var rule = new Panel
         {
             BackColor = _theme.Border,
             Location = new Point(20, y + 22),
-            Size = new Size(ClientSize.Width - 40, 1),
+            Size = new Size(_pageW - 40, 1),
         };
-        Controls.Add(rule);
+        _host.Controls.Add(rule);
         return y + 32;
     }
 
@@ -797,7 +946,7 @@ class ShortcutEditForm : Form
             Location = new Point(x, y + 4),
             BackColor = Color.Transparent,
         };
-        Controls.Add(lbl);
+        _host.Controls.Add(lbl);
         return lbl;
     }
 
@@ -813,7 +962,7 @@ class ShortcutEditForm : Form
             Size = new Size(w, height),
             Location = new Point(x, y),
         };
-        Controls.Add(tb);
+        _host.Controls.Add(tb);
         return tb;
     }
 
@@ -829,7 +978,7 @@ class ShortcutEditForm : Form
             Size = new Size(w, 26),
             Location = new Point(x, y),
         };
-        Controls.Add(cb);
+        _host.Controls.Add(cb);
         return cb;
     }
 
@@ -853,7 +1002,7 @@ class ShortcutEditForm : Form
         if (_desktopShortcutToggle.Checked
             && string.IsNullOrWhiteSpace(_desktopShortcutNameBox.Text))
         {
-            _validationLabel.Text = "Desktop name is required when 'Add shortcut to desktop' is on.";
+            _validationLabel.Text = "Desktop name is required when 'Add shortcut to desktop' is on (Integration tab).";
             return;
         }
 
@@ -871,6 +1020,8 @@ class ShortcutEditForm : Form
                 : LaunchProfiles.Default.Id,
             WorkingDirectory = _dirBox.Text.Trim(),
             Args = _argsBox.Text.Trim(),
+            SetupSteps = _setupStepsBox.Text,
+            Shell = _shellCombo.SelectedIndex == 1 ? LaunchShell.PowerShell : LaunchShell.Cmd,
             WtProfile = _profileCombo.Text.Trim(),
             LauncherMode = launcher,
             WtWindowTarget = _windowTargetCombo.SelectedIndex == 1
@@ -885,6 +1036,7 @@ class ShortcutEditForm : Form
             AddToDesktop = _desktopShortcutToggle.Checked,
             DesktopShortcutName = _desktopShortcutNameBox.Text.Trim(),
             StatusUrl = _statusUrlBox.Text.Trim(),
+            StatusTimeoutSeconds = (int)_statusTimeoutBox.Value,
             AutoLoginEnabled = _autoLoginToggle.Checked,
             HomeUrl = _homeUrlBox.Text.Trim(),
             LoginUrl = _loginUrlBox.Text.Trim(),
@@ -1003,7 +1155,6 @@ class ShortcutEditForm : Form
 
     private void RebuildArgsChips(FlowLayoutPanel panel, LaunchProfile profile, PluginTheme theme)
     {
-        // Dispose + clear any chips from a previous profile so we don't leak handles.
         foreach (Control c in panel.Controls) c.Dispose();
         panel.Controls.Clear();
 
@@ -1028,8 +1179,6 @@ class ShortcutEditForm : Form
             chip.Click += (_, _) =>
             {
                 var current = _argsBox.Text ?? "";
-                // Append with a space separator when existing text is non-empty and
-                // doesn't already end with whitespace. Avoid duplicate exact tokens.
                 if (string.IsNullOrWhiteSpace(current))
                 {
                     _argsBox.Text = captured;
@@ -1042,6 +1191,52 @@ class ShortcutEditForm : Form
                 }
                 _argsBox.Focus();
                 _argsBox.SelectionStart = _argsBox.Text.Length;
+            };
+            panel.Controls.Add(chip);
+        }
+    }
+
+    private LaunchShell CurrentShell() =>
+        _shellCombo.SelectedIndex == 1 ? LaunchShell.PowerShell : LaunchShell.Cmd;
+
+    private static string SetupHintFor(int shellIndex) => shellIndex == 1
+        ? "Optional. One PowerShell statement per line, run before the command. e.g. $env:NEXT_LOG_LEVEL = \"error\""
+        : "Optional. One cmd statement per line, run before the command. e.g. set NEXT_LOG_LEVEL=error";
+
+    /// <summary>Rebuilds the click-to-insert snippet chips for the current
+    /// shell. Each chip appends its snippet as a new line in the setup-steps
+    /// box (one statement per line).</summary>
+    private void RebuildSetupChips(FlowLayoutPanel panel, LaunchShell shell, PluginTheme theme)
+    {
+        foreach (Control c in panel.Controls) c.Dispose();
+        panel.Controls.Clear();
+
+        foreach (var snippet in SetupStepChips.For(shell))
+        {
+            var chip = new RoundedButton
+            {
+                Text = snippet,
+                Font = new Font("Consolas", 9f),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Margin = new Padding(0, 0, 6, 6),
+                Padding = new Padding(8, 2, 8, 2),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = theme.PrimaryDim,
+                ForeColor = theme.TextPrimary,
+                Cursor = Cursors.Hand,
+            };
+            chip.FlatAppearance.BorderSize = 0;
+            chip.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
+            string captured = snippet;
+            chip.Click += (_, _) =>
+            {
+                var cur = _setupStepsBox.Text ?? "";
+                _setupStepsBox.Text = string.IsNullOrWhiteSpace(cur)
+                    ? captured
+                    : cur.TrimEnd('\r', '\n') + Environment.NewLine + captured;
+                _setupStepsBox.Focus();
+                _setupStepsBox.SelectionStart = _setupStepsBox.Text.Length;
             };
             panel.Controls.Add(chip);
         }
