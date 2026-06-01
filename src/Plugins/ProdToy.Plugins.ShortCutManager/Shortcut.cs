@@ -192,10 +192,10 @@ sealed record Shortcut
 
     /// <summary>
     /// Home/landing URL the auto-login flow opens first, reusing the cached
-    /// cookies from the per-shortcut browser profile. If it loads without being
-    /// redirected to <see cref="LoginUrl"/> (and no login form appears), the
-    /// session is still valid and no sign-in is performed. Empty = fall back to
-    /// <see cref="StatusUrl"/>.
+    /// cookies from the per-shortcut browser profile. After a successful
+    /// sign-in the browser is also navigated back here. Not related to
+    /// <see cref="StatusUrl"/>, which is purely the Group Launcher's
+    /// liveness probe. Empty = auto-login is skipped.
     /// </summary>
     [JsonPropertyName("homeUrl")]
     public string HomeUrl { get; init; } = "";
@@ -218,6 +218,18 @@ sealed record Shortcut
     /// </summary>
     [JsonPropertyName("autoLoginEnabled")]
     public bool AutoLoginEnabled { get; init; }
+
+    /// <summary>
+    /// Optional Playwright locator that resolves to an element only visible
+    /// when the user is signed in (e.g. <c>text=Mina sidor</c>,
+    /// <c>a[href*='/logout']</c>, <c>[data-testid='user-menu']</c>). Used by
+    /// <see cref="AutoLoginRunner"/>'s detection step when the home URL
+    /// renders for anonymous users too. Empty = fall back to the URL +
+    /// visible-password-field heuristic. Accepts any Playwright selector
+    /// syntax: CSS, <c>text=</c>, <c>role=</c>, etc.
+    /// </summary>
+    [JsonPropertyName("loggedInSelector")]
+    public string LoggedInSelector { get; init; } = "";
 
     [JsonPropertyName("loginUsername")]
     public string LoginUsername { get; init; } = "";

@@ -46,9 +46,11 @@ class ShortcutEditForm : Form
     private readonly TextBox _loginUrlBox;
     private readonly TextBox _loginUsernameBox;
     private readonly TextBox _loginPasswordBox;
+    private readonly TextBox _loggedInSelectorBox;
     private readonly Label _loginCaption;
     private readonly Label _homeUrlLabel;
     private readonly Label _loginUrlLabel;
+    private readonly Label _loggedInSelectorLabel;
     private readonly Label _loginUsernameLabel;
     private readonly Label _loginPasswordLabel;
     private readonly TextBox _notesBox;
@@ -804,6 +806,28 @@ class ShortcutEditForm : Form
         _host.Controls.Add(loginUrlHint);
         y += 34;
 
+        // Logged-in selector — Playwright locator that's only visible when
+        // the user is signed in. Needed for storefronts where the home URL
+        // renders for anonymous users too (the URL + visible-password
+        // heuristic can't tell the difference there).
+        _loggedInSelectorLabel = AddLabel("Logged-in selector", pad, y);
+        _loggedInSelectorBox = MakeTextBox(inputX, y, inputW);
+        _loggedInSelectorBox.Text = existing?.LoggedInSelector ?? "";
+        _loggedInSelectorBox.Font = new Font("Cascadia Mono", 9.5f);
+        y += 28;
+        var loggedInSelectorHint = new Label
+        {
+            Text = "Playwright locator visible only when signed in. Examples: text=Mina sidor, a[href*='/logout'], [data-testid='user-menu']. Empty = fall back to URL + password-field heuristic.",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = false,
+            Size = new Size(inputW, 44),
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+        };
+        _host.Controls.Add(loggedInSelectorHint);
+        y += 48;
+
         _loginUsernameLabel = AddLabel("Username", pad, y);
         _loginUsernameBox = MakeTextBox(inputX, y, inputW);
         _loginUsernameBox.Text = existing?.LoginUsername ?? "";
@@ -835,12 +859,15 @@ class ShortcutEditForm : Form
             _homeUrlBox.Enabled = on;
             _loginUrlLabel.Enabled = on;
             _loginUrlBox.Enabled = on;
+            _loggedInSelectorLabel.Enabled = on;
+            _loggedInSelectorBox.Enabled = on;
             _loginUsernameLabel.Enabled = on;
             _loginUsernameBox.Enabled = on;
             _loginPasswordLabel.Enabled = on;
             _loginPasswordBox.Enabled = on;
             _homeUrlBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
             _loginUrlBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
+            _loggedInSelectorBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
             _loginUsernameBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
             _loginPasswordBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
         }
@@ -1040,6 +1067,7 @@ class ShortcutEditForm : Form
             AutoLoginEnabled = _autoLoginToggle.Checked,
             HomeUrl = _homeUrlBox.Text.Trim(),
             LoginUrl = _loginUrlBox.Text.Trim(),
+            LoggedInSelector = _loggedInSelectorBox.Text.Trim(),
             LoginUsername = _loginUsernameBox.Text.Trim(),
             LoginPasswordEncrypted = _autoLoginToggle.Checked
                 ? CredentialProtector.Encrypt(_loginPasswordBox.Text)
