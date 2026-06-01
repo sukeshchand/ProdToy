@@ -4,7 +4,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ShortCutManager;
 
-[Plugin("ProdToy.Plugin.ShortCutManager", "Shortcuts", "1.0.433",
+[Plugin("ProdToy.Plugin.ShortCutManager", "Shortcuts", "1.0.440",
     Description = "Folder-organized launcher for project shortcuts — Claude CLI, npm, dotnet, custom commands",
     Author = "ProdToy",
     MenuPriority = 250)]
@@ -82,6 +82,13 @@ public partial class ShortCutManagerPlugin : IPlugin, IDoctor
         // current shortcuts (newly installed plugin, or shortcuts modified
         // while the host was off).
         RefreshContextMenu();
+
+        // Wipe per-tab log files from the previous host session. Consolidated
+        // Launcher's Clear / Reload is session-scoped — old files would
+        // accumulate and confuse Reload of a re-opened launcher window
+        // (different session id, but the leftover files would still take
+        // disk space).
+        LogFileStore.WipeAll();
     }
 
     public void Stop()
