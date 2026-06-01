@@ -36,12 +36,47 @@ record ClaudePluginSettings
     [JsonPropertyName("historyEnabled")] public bool HistoryEnabled { get; init; } = true;
 
     /// <summary>
-    /// Claude config directories the plugin has registered hooks/statusLine into.
-    /// Populated by <see cref="ClaudeInstallDiscovery.Scan"/> on first install and
-    /// whenever the user clicks "Rescan" in the settings panel. Each entry is an
-    /// absolute path like "C:\\Users\\sukesh.chand\\.claude".
+    /// LEGACY single-machine list. Kept only so older JSON files still load —
+    /// at runtime, <see cref="LocalConfigDirs"/> and <see cref="WithLocalConfigDirs"/>
+    /// migrate any entries here into <see cref="ClaudeConfigDirsByEnv"/> under
+    /// the current machine's <see cref="ClaudePaths.EnvId"/>. New writes clear
+    /// this field. Do not read it directly outside the migration shim.
     /// </summary>
     [JsonPropertyName("claudeConfigDirs")] public List<string> ClaudeConfigDirs { get; init; } = new();
+
+    /// <summary>
+    /// Per-machine map of Claude install dirs the plugin has registered into.
+    /// Keyed by <see cref="ClaudePaths.EnvId"/> so a synced data folder doesn't
+    /// clobber other machines' entries — each machine writes only its own slot
+    /// and reads only its own slot via <see cref="LocalConfigDirs"/>.
+    /// </summary>
+    [JsonPropertyName("claudeConfigDirsByEnv")]
+    public Dictionary<string, List<string>> ClaudeConfigDirsByEnv { get; init; } = new();
+
+    /// <summary>This machine's registered Claude config dirs. Reads
+    /// <see cref="ClaudeConfigDirsByEnv"/> by env id; falls back to the legacy
+    /// <see cref="ClaudeConfigDirs"/> when the new dict is missing this env
+    /// (one-shot migration: the next save will move them into the dict).</summary>
+    [JsonIgnore]
+    public List<string> LocalConfigDirs =>
+        ClaudeConfigDirsByEnv.TryGetValue(ClaudePaths.EnvId, out var v) && v != null
+            ? v
+            : ClaudeConfigDirs;
+
+    /// <summary>Return a copy with <paramref name="dirs"/> stored under this
+    /// machine's env id. Other machines' entries are preserved. The legacy
+    /// single-machine list is cleared as the migration completes.</summary>
+    public ClaudePluginSettings WithLocalConfigDirs(IEnumerable<string> dirs)
+    {
+        var dict = new Dictionary<string, List<string>>(
+            ClaudeConfigDirsByEnv,
+            StringComparer.OrdinalIgnoreCase);
+        dict[ClaudePaths.EnvId] = dirs
+            .Where(d => !string.IsNullOrWhiteSpace(d))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return this with { ClaudeConfigDirsByEnv = dict, ClaudeConfigDirs = new() };
+    }
 
     /// <summary>
     /// True when the host process is currently running. Written to settings.json
