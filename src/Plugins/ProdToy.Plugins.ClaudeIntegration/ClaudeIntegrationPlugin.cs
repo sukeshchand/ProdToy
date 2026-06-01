@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.412",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.416",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -43,11 +43,11 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         if (settings.AutoTitleToFolder)
             ClaudeHookManager.SetAutoTitleHook(installs, enabled: true);
 
-        // 5. Remember the installs we registered into so Uninstall() can find them.
-        context.SaveSettings(settings with
-        {
-            ClaudeConfigDirs = installs.Select(i => i.ConfigDir).ToList(),
-        });
+        // 5. Remember the installs we registered into so Uninstall() can find
+        //    them. Keyed by env id so a synced data folder doesn't make this
+        //    machine's slot stomp on another machine's slot.
+        context.SaveSettings(settings.WithLocalConfigDirs(
+            installs.Select(i => i.ConfigDir)));
 
         context.Log($"Claude integration installed into {installs.Count} Claude install(s)");
     }
@@ -57,7 +57,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         ClaudePaths.Initialize(context.DataDirectory);
 
         var settings = context.LoadSettings<ClaudePluginSettings>();
-        var installs = settings.ClaudeConfigDirs
+        var installs = settings.LocalConfigDirs
             .Where(Directory.Exists)
             .Select(d => new ClaudeInstall(d))
             .ToList();
@@ -224,6 +224,14 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
 
         // Mark host as running so the PS1 scripts know they can dispatch.
         SetHostRunning(true);
+
+        // Rescan local Claude installs every Start — same flow as the
+        // "Rescan" button in the settings panel. This replaces a one-shot
+        // migration: on every launch we (a) populate this machine's slot in
+        // claudeConfigDirsByEnv with the current scan, and (b) re-apply
+        // Install() so new installs since last run pick up hook + status-line
+        // entries. Install() is idempotent, so re-running is safe.
+        RescanLocalConfigDirsAndReinstall();
 
         // Force Claude to re-run the status-line script so the bar appears
         // immediately on host start (HostRunning flipped from false → true,
@@ -411,7 +419,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         };
         var installsList = new Label
         {
-            Text = BuildInstallsListText(settings.ClaudeConfigDirs),
+            Text = BuildInstallsListText(settings.LocalConfigDirs),
             Font = new Font("Segoe UI", 8.5f),
             ForeColor = theme.TextSecondary,
             AutoSize = true,
@@ -438,7 +446,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         {
             var found = ClaudeInstallDiscovery.Scan();
             var s = _context.LoadSettings<ClaudePluginSettings>();
-            _context.SaveSettings(s with { ClaudeConfigDirs = found.Select(i => i.ConfigDir).ToList() });
+            _context.SaveSettings(s.WithLocalConfigDirs(found.Select(i => i.ConfigDir)));
 
             // Re-apply installation into any newly discovered installs so
             // their settings.json picks up the hook/statusLine entries.
@@ -1123,13 +1131,51 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
     /// just changing plugin settings isn't visible immediately — bumping the
     /// script filename invalidates the cache.
     /// </summary>
+    /// <summary>
+    /// Discover Claude installs on this machine and write the result into
+    /// <see cref="ClaudePluginSettings.ClaudeConfigDirsByEnv"/> under this
+    /// machine's env id, then re-run <see cref="Install"/> so any newly
+    /// discovered installs get their hook + status-line entries written.
+    /// Mirrors the "Rescan" button — kept idempotent and side-effect-light
+    /// so it's safe to run on every Start().
+    /// </summary>
+    private void RescanLocalConfigDirsAndReinstall()
+    {
+        try
+        {
+            var found = ClaudeInstallDiscovery.Scan();
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s.WithLocalConfigDirs(found.Select(i => i.ConfigDir)));
+            _context.Log($"Rescan on start: {found.Count} Claude install(s) on this machine");
+
+            // Install() re-extracts the status-line script, re-writes hook
+            // entries into each install's settings.json, and re-saves the
+            // local config-dirs slot. All idempotent.
+            try { Install(_context); }
+            catch (Exception ex) { _context.LogError("Rescan-on-start: Install re-apply failed", ex); }
+        }
+        catch (Exception ex)
+        {
+            _context.LogError("RescanLocalConfigDirsAndReinstall failed", ex);
+        }
+    }
+
     private void BumpStatusLineNow()
     {
         try
         {
+            // Re-discover installs on THIS machine instead of trusting
+            // ClaudeConfigDirs from settings — that list may have been written
+            // by Install() on a different machine via the synced data folder
+            // (e.g. "C:\\Users\\otheruser\\.claude") and won't exist here.
+            // Union with the saved list so unusual locations a user added
+            // manually on this machine still get bumped.
             var s = _context.LoadSettings<ClaudePluginSettings>();
-            var installs = s.ClaudeConfigDirs
+            var localInstalls = ClaudeInstallDiscovery.Scan().Select(i => i.ConfigDir);
+            var installs = localInstalls
+                .Concat(s.LocalConfigDirs)
                 .Where(Directory.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(d => new ClaudeInstall(d))
                 .ToList();
             if (installs.Count == 0) return;

@@ -36,10 +36,34 @@ class GroupLauncherPanel : UserControl
     private readonly System.Windows.Forms.Timer _urlPollTimer;
     private readonly List<GroupRow> _rows = new();
 
-    /// <summary>One HttpClient per panel — short timeout so probes don't pile up
-    /// when targets are dead. Reused across all rows' URL probes.</summary>
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(2) };
+    /// <summary>One HttpClient per panel, reused across all rows' URL probes.
+    /// Timeout is left infinite — each probe enforces the shortcut's own
+    /// <see cref="Shortcut.StatusTimeoutSeconds"/> via a CancellationToken so
+    /// the cap is per-target. The handler also trusts self-signed certs for
+    /// loopback hosts so a local dev server's cert never shows a false DOWN.</summary>
+    private readonly HttpClient _httpClient = CreateProbeClient();
     private bool _urlPollInFlight;
+
+    private static HttpClient CreateProbeClient()
+    {
+        var handler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (request, cert, chain, errors) =>
+            {
+                if (errors == System.Net.Security.SslPolicyErrors.None) return true;
+                // Only bypass validation for localhost / loopback — never for
+                // real remote URLs, so we don't silently weaken security.
+                return IsLoopbackHost(request.RequestUri?.Host ?? "");
+            },
+        };
+        return new HttpClient(handler) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+    }
+
+    private static bool IsLoopbackHost(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase);
 
     // Title prefix stamped onto every launched window so the title scan
     // (StopAll fallback) can find and close them. Kept short — long prefixes
@@ -125,7 +149,7 @@ class GroupLauncherPanel : UserControl
         _stopAllBtn.Size = new Size(btnW, btnH);
         _stopAllBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _stopAllBtn.Location = new Point(header.ClientSize.Width - pad - btnW, 10);
-        _stopAllBtn.Click += (_, _) => StopAll();
+        _stopAllBtn.Click += (_, _) => _ = StopAllAsync();
         header.Controls.Add(_stopAllBtn);
 
         _launchAllBtn = MakeButton("▶ Launch All", theme.Primary, Color.White);
@@ -201,25 +225,47 @@ class GroupLauncherPanel : UserControl
                     row.SetUrlStatus(GroupRow.UrlState.NotConfigured, "");
                     continue;
                 }
-                tasks.Add(ProbeOneAsync(row, url));
+                // Only probe a service that's actually up. Hitting the URL while
+                // it's Stopped/Pending/Failed/Launching is pointless and (for an
+                // SSR route) needlessly loads the dev server. Clear the badge so
+                // it doesn't show a stale Healthy/DOWN from a previous run.
+                if (row.State != GroupRow.RowState.Running)
+                {
+                    row.SetUrlStatus(GroupRow.UrlState.NotConfigured, "");
+                    continue;
+                }
+                tasks.Add(ProbeOneAsync(row, url, _shortcuts[i].StatusTimeoutSeconds));
             }
             if (tasks.Count > 0) await Task.WhenAll(tasks);
         }
         finally { _urlPollInFlight = false; }
     }
 
-    private async Task ProbeOneAsync(GroupRow row, string url)
+    private async Task ProbeOneAsync(GroupRow row, string url, int timeoutSeconds)
     {
+        // Per-target cap via a linked token (the shared client's own Timeout is
+        // infinite). Clamp to a sane range so a bad saved value can't hang.
+        using var cts = new CancellationTokenSource(
+            TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 120)));
         try
         {
-            using var resp = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            // Probe with HEAD — no body transferred, and it's the conventional
+            // "is it up?" request. Some servers/routes reject HEAD (405/501);
+            // fall back to GET once in that case so the badge stays accurate.
+            using var resp = await SendProbeAsync(HttpMethod.Head, url, cts.Token);
             int code = (int)resp.StatusCode;
+            if (code is 405 or 501)
+            {
+                using var getResp = await SendProbeAsync(HttpMethod.Get, url, cts.Token);
+                code = (int)getResp.StatusCode;
+            }
+
             if (code is >= 200 and < 400)
                 row.SetUrlStatus(GroupRow.UrlState.Healthy, $"HTTP {code}");
             else
                 row.SetUrlStatus(GroupRow.UrlState.ServerError, $"HTTP {code}");
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException)
         {
             row.SetUrlStatus(GroupRow.UrlState.Unreachable, "Timeout");
         }
@@ -231,6 +277,14 @@ class GroupLauncherPanel : UserControl
         {
             row.SetUrlStatus(GroupRow.UrlState.Unreachable, ex.Message);
         }
+    }
+
+    /// <summary>Sends a single probe request (headers only) with the given
+    /// method. Caller owns the returned response (dispose it).</summary>
+    private Task<HttpResponseMessage> SendProbeAsync(HttpMethod method, string url, CancellationToken ct)
+    {
+        var req = new HttpRequestMessage(method, url);
+        return _httpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
     }
 
     // wt -w <name> joins a named window, but only if that window has been
@@ -246,7 +300,7 @@ class GroupLauncherPanel : UserControl
     /// <summary>Stop all launched windows in this folder's group. Used by
     /// <see cref="ShortcutsForm"/>'s close prompt to gracefully end the
     /// session from the parent form.</summary>
-    public void StopAllExternal() => StopAll();
+    public void StopAllExternal() => _ = StopAllAsync();
 
     private async void LaunchAll()
     {
@@ -324,47 +378,69 @@ class GroupLauncherPanel : UserControl
         }
     }
 
-    private void StopAll()
+    // Stop All: how long to wait between the PID-kill phase and the
+    // straggler-check phase. Long enough for WT to react to a killed cmd
+    // and tear down its tab, short enough that the user isn't left staring.
+    private const int StopVerifyDelayMs = 4000;
+
+    /// <summary>Two-phase Stop All:
+    ///   1. Kill each row's tracked PID tree. WT tears down the tab when its
+    ///      pty dies — no "close all tabs?" prompt, no orphaned processes.
+    ///   2. Wait briefly for WT to settle, then for any tab still carrying our
+    ///      group prefix, foreground its WT window and send Ctrl+Shift+W per
+    ///      matching tab (via <see cref="TerminalTabCloser"/>). Per-tab close
+    ///      never prompts and never touches unrelated tabs in the same WT
+    ///      window. The keystroke loop sleeps between sends, so we run it on
+    ///      a background thread to keep the panel responsive.
+    /// We deliberately do NOT kill the WT process tree — when shortcuts open
+    /// in an existing WT window via <c>wt -w 0</c>, that WT also hosts
+    /// unrelated tabs (e.g. a Claude CLI session in a different group).</summary>
+    private async Task StopAllAsync()
     {
-        // PID kill is the cleanest path: Process.Kill(entireProcessTree: true)
-        // takes out cmd.exe + dotnet/npm/whatever children in one shot, and
-        // the WT tab self-closes when its pty dies — no "close all tabs?"
-        // confirmation, no orphaned processes. Only fall back to the title-
-        // scan WM_CLOSE (which DOES trigger WT's confirm prompt and can
-        // leave child processes alive) when no PID is known for the row.
-        int killed = 0, closedFallback = 0;
+        int killed = 0;
         foreach (var row in _rows)
         {
             var s = _shortcuts[row.Index - 1];
-
             if (KillPidTree(row.LaunchedCmdPid))
             {
                 killed++;
                 _session.PidByShortcutId.Remove(s.Id);
                 row.LaunchedCmdPid = 0;
             }
-            else
-            {
-                string title = BuildOverrideTitle(s);
-                foreach (var w in WindowFinder.FindByTitleContains(title))
-                {
-                    WindowFinder.CloseWindow(w.Handle);
-                    closedFallback++;
-                }
-            }
+        }
 
+        _statusLabel.Text = killed > 0
+            ? $"Stopped {killed} tracked process(es). Verifying…"
+            : "No tracked PIDs. Verifying…";
+
+        await Task.Delay(StopVerifyDelayMs);
+        if (IsDisposed) return;
+
+        var distinctWtWindows = WindowFinder.FindByTitleContains(GroupPrefix)
+            .Select(w => w.Handle)
+            .Distinct()
+            .ToList();
+        string prefix = GroupPrefix;
+        int closedFallback = await Task.Run(() =>
+        {
+            int total = 0;
+            foreach (var hwnd in distinctWtWindows)
+                total += TerminalTabCloser.CloseTabsContaining(hwnd, prefix);
+            return total;
+        });
+        if (IsDisposed) return;
+
+        foreach (var row in _rows)
+        {
             if (row.State == GroupRow.RowState.Running ||
                 row.State == GroupRow.RowState.Launching)
                 row.SetState(GroupRow.RowState.Stopped, "Stopped");
         }
 
-        // Group-wide orphan sweep — catches leftover windows from previous
-        // batches we have no PID for.
-        int closedOrphans = CloseGroupWindows();
-
-        _statusLabel.Text = (killed + closedFallback + closedOrphans) == 0
+        _statusLabel.Text = (killed + closedFallback) == 0
             ? "Nothing to stop — no tracked PIDs and no group windows found."
-            : $"Stopped {killed} process(es) · closed {closedFallback + closedOrphans} window(s).";
+            : $"Stopped {killed} tracked"
+              + (closedFallback > 0 ? $", closed {closedFallback} ghost tab(s)" : "") + ".";
     }
 
     private void StopOne(int index1Based)

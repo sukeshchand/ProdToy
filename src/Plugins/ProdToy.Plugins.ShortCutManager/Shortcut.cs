@@ -9,6 +9,20 @@ enum LauncherMode
 }
 
 /// <summary>
+/// Which shell interprets the setup steps + command line.
+///   <see cref="Cmd"/> → cmd.exe; env vars use <c>set VAR=value</c>.
+///   <see cref="PowerShell"/> → Windows PowerShell; env vars use
+///   <c>$env:VAR = "value"</c>.
+/// Defaults to <see cref="Cmd"/> so shortcuts saved before this field
+/// existed keep their historical cmd behavior.
+/// </summary>
+enum LaunchShell
+{
+    Cmd,
+    PowerShell,
+}
+
+/// <summary>
 /// Where a Windows Terminal-launched shortcut should open:
 ///   <see cref="NewWindow"/> → a brand-new WT window (the historical default,
 ///   passes no -w flag so WT uses its own new-window behavior).
@@ -53,6 +67,26 @@ sealed record Shortcut
     // shortcut data; the C# property is the generic "Args".
     [JsonPropertyName("claudeArgs")]
     public string Args { get; init; } = "--dangerously-skip-permissions --continue";
+
+    /// <summary>
+    /// Optional shell statements run before the main command, one per line.
+    /// They execute in the same shell session as the command, so env-var
+    /// assignments stick for the command that follows. Syntax follows the
+    /// selected <see cref="Shell"/>: cmd → <c>set VAR=value</c>, PowerShell →
+    /// <c>$env:VAR = "value"</c>. Empty = no setup steps. Existing JSON
+    /// without this field loads as "" (back-compat).
+    /// </summary>
+    [JsonPropertyName("setupSteps")]
+    public string SetupSteps { get; init; } = "";
+
+    /// <summary>
+    /// Which shell runs <see cref="SetupSteps"/> + the command. Drives both
+    /// the launcher (cmd <c>/k</c> vs <c>powershell -NoExit</c>) and the
+    /// syntax of the setup steps. Defaults to <see cref="LaunchShell.Cmd"/>
+    /// for back-compat. Serialized as an int (no string-enum converter).
+    /// </summary>
+    [JsonPropertyName("shell")]
+    public LaunchShell Shell { get; init; } = LaunchShell.Cmd;
 
     /// <summary>Windows Terminal profile name, e.g. "Command Prompt". Empty = wt default.</summary>
     [JsonPropertyName("wtProfile")]
@@ -145,6 +179,16 @@ sealed record Shortcut
     /// </summary>
     [JsonPropertyName("statusUrl")]
     public string StatusUrl { get; init; } = "";
+
+    /// <summary>
+    /// Per-probe timeout (seconds) for the Group Launcher's
+    /// <see cref="StatusUrl"/> health check. Defaults to 5 — long enough for an
+    /// HTTPS dev server doing server-side rendering, short enough that a dead
+    /// target is flagged quickly. Clamped to 1–120 when used. Existing JSON
+    /// without this field loads as 5.
+    /// </summary>
+    [JsonPropertyName("statusTimeoutSeconds")]
+    public int StatusTimeoutSeconds { get; init; } = 5;
 
     /// <summary>
     /// Home/landing URL the auto-login flow opens first, reusing the cached

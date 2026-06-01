@@ -130,7 +130,7 @@ public partial class ClaudeIntegrationPlugin
                     {
                         ClaudePaths.SetEnvId(capturedId);
                         var s = _context.LoadSettings<ClaudePluginSettings>();
-                        var installs = s.ClaudeConfigDirs
+                        var installs = s.LocalConfigDirs
                             .Where(Directory.Exists)
                             .Select(d => new ClaudeInstall(d))
                             .ToList();

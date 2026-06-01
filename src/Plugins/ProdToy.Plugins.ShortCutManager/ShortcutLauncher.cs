@@ -119,31 +119,123 @@ static class ShortcutLauncher
         }
         psi.ArgumentList.Add("-d");
         psi.ArgumentList.Add(s.WorkingDirectory);
-        psi.ArgumentList.Add("cmd");
-        psi.ArgumentList.Add("/k");
-        psi.ArgumentList.Add(BuildProfileCmdline(s));
+        // wt sets the tab title via --title above, so the script must NOT
+        // touch the console title (it would clobber the tab name the Group
+        // Launcher keys off when closing tabs).
+        AppendShellInvocation(psi.ArgumentList, s, includeTitleInScript: false);
         return psi;
     }
 
     private static ProcessStartInfo BuildCmdStartInfo(Shortcut s)
     {
-        // Plain cmd window fallback. We wrap the whole thing in one argument
-        // so cmd /k gets the combined "cd && [title &&] claude" line.
-        var line = $"cd /d \"{s.WorkingDirectory}\"";
-        if (!string.IsNullOrWhiteSpace(s.WindowTitle))
+        // Plain shell window fallback (no Windows Terminal). The shell's
+        // working directory is set via ProcessStartInfo.WorkingDirectory, and
+        // the window title is set inside the generated script (no --title flag
+        // here as there is for wt).
+        var psi = new ProcessStartInfo
         {
-            // cmd's built-in `title` command sets the console window title.
-            // No quoting needed — `title` consumes the rest of the line.
-            line += $" && title {s.WindowTitle}";
-        }
-        line += $" && {BuildProfileCmdline(s)}";
-        return new ProcessStartInfo
-        {
-            FileName = "cmd.exe",
-            Arguments = $"/k {line}",
             UseShellExecute = true,
             WorkingDirectory = s.WorkingDirectory,
         };
+        AppendShellInvocation(psi.ArgumentList, s, includeTitleInScript: true);
+        // ArgumentList holds the program + args (e.g. "cmd","/k",<script> or
+        // "powershell","-NoExit",…). Pull the program name into FileName.
+        psi.FileName = psi.ArgumentList[0];
+        psi.ArgumentList.RemoveAt(0);
+        return psi;
+    }
+
+    /// <summary>
+    /// Appends the shell program and its arguments to <paramref name="args"/>:
+    /// cmd → <c>cmd /k &lt;script.cmd&gt;</c>, PowerShell →
+    /// <c>powershell -NoExit -ExecutionPolicy Bypass -File &lt;script.ps1&gt;</c>.
+    /// The setup steps + command are written to a throwaway script (see
+    /// <see cref="WriteLaunchScript"/>) rather than crammed onto the command
+    /// line — that sidesteps cmd/PowerShell/wt quoting and delimiter rules
+    /// (notably wt treating <c>;</c> as a tab separator), and lets each setup
+    /// step be a plain line in its native shell syntax.
+    /// </summary>
+    private static void AppendShellInvocation(IList<string> args, Shortcut s, bool includeTitleInScript)
+    {
+        string script = WriteLaunchScript(s, includeTitleInScript);
+        if (s.Shell == LaunchShell.PowerShell)
+        {
+            args.Add("powershell.exe");
+            args.Add("-NoExit");
+            args.Add("-ExecutionPolicy");
+            args.Add("Bypass");
+            args.Add("-File");
+            args.Add(script);
+        }
+        else
+        {
+            args.Add("cmd.exe");
+            args.Add("/k");
+            args.Add(script);
+        }
+    }
+
+    /// <summary>
+    /// Writes a throwaway launch script (.cmd or .ps1, per the shortcut's
+    /// shell) into a temp folder and returns its path. The script optionally
+    /// sets the window title, then runs each non-blank
+    /// <see cref="Shortcut.SetupSteps"/> line, then the profile command — one
+    /// statement per line in the shell's native syntax. The caller invokes it
+    /// via <c>cmd /k</c> or <c>powershell -NoExit -File</c>, so the window
+    /// stays open and any env vars the setup set persist for the command.
+    /// </summary>
+    private static string WriteLaunchScript(Shortcut s, bool includeTitle)
+    {
+        bool ps = s.Shell == LaunchShell.PowerShell;
+
+        string dir = Path.Combine(Path.GetTempPath(), "ProdToyShortcuts");
+        Directory.CreateDirectory(dir);
+        PruneOldScripts(dir);
+
+        string idSafe = new string((s.Id ?? "").Where(char.IsLetterOrDigit).ToArray());
+        if (idSafe.Length == 0) idSafe = "x";
+        string path = Path.Combine(dir,
+            $"launch-{idSafe}-{DateTime.Now:yyyyMMddHHmmssfff}.{(ps ? "ps1" : "cmd")}");
+
+        var lines = new List<string>();
+
+        if (includeTitle && !string.IsNullOrWhiteSpace(s.WindowTitle))
+        {
+            lines.Add(ps
+                ? $"$host.UI.RawUI.WindowTitle = '{s.WindowTitle.Replace("'", "''")}'"
+                : $"title {s.WindowTitle}");
+        }
+
+        foreach (var step in (s.SetupSteps ?? "")
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0))
+        {
+            lines.Add(step);
+        }
+
+        string main = BuildProfileCmdline(s);
+        if (!string.IsNullOrEmpty(main)) lines.Add(main);
+
+        File.WriteAllText(path, string.Join(Environment.NewLine, lines) + Environment.NewLine);
+        return path;
+    }
+
+    /// <summary>Best-effort delete of launch scripts older than an hour so the
+    /// temp folder doesn't grow without bound. A stale script never hurts a
+    /// future launch, so failures here are swallowed.</summary>
+    private static void PruneOldScripts(string dir)
+    {
+        try
+        {
+            var cutoff = DateTime.Now.AddHours(-1);
+            foreach (var f in Directory.EnumerateFiles(dir, "launch-*"))
+            {
+                try { if (File.GetLastWriteTime(f) < cutoff) File.Delete(f); }
+                catch (Exception ex) { Debug.WriteLine($"PruneOldScripts delete: {ex.Message}"); }
+            }
+        }
+        catch (Exception ex) { Debug.WriteLine($"PruneOldScripts: {ex.Message}"); }
     }
 
     /// <summary>
@@ -169,7 +261,9 @@ static class ShortcutLauncher
         // For profiles that opt in (Claude today), a trailing --continue/-c in
         // the args gets a "(X args || X stripped)" retry wrapper so the user
         // doesn't land in a dead terminal when there's no prior conversation.
-        if (profile.SupportsContinueFallback)
+        // The wrapper is cmd syntax (|| and parens), so it's only emitted for
+        // the cmd shell — PowerShell gets the plain command.
+        if (profile.SupportsContinueFallback && s.Shell == LaunchShell.Cmd)
         {
             string stripped = StripContinueFlag(args);
             if (stripped != args)

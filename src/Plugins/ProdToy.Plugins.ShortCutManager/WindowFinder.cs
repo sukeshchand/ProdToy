@@ -30,6 +30,25 @@ static class WindowFinder
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    /// <summary>Resolve the owning process id of <paramref name="hWnd"/>.
+    /// For a Windows Terminal tab this returns the WT process pid (one per
+    /// WT window), which can then be walked via <see cref="ProcessTree"/>.</summary>
+    public static bool TryGetWindowPid(IntPtr hWnd, out int pid)
+    {
+        pid = 0;
+        if (hWnd == IntPtr.Zero) return false;
+        try
+        {
+            GetWindowThreadProcessId(hWnd, out uint upid);
+            pid = (int)upid;
+            return pid > 0;
+        }
+        catch { return false; }
+    }
+
     public readonly record struct WindowInfo(IntPtr Handle, string Title);
 
     /// <summary>Enumerate visible top-level windows with non-empty titles.</summary>
