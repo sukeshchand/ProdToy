@@ -49,11 +49,14 @@ static class AutoLoginRunner
             PluginLog.Info($"AutoLogin '{s.Name}': {m}");
         }
 
-        // Home target: HomeUrl, falling back to StatusUrl.
-        string home = !string.IsNullOrWhiteSpace(s.HomeUrl) ? s.HomeUrl.Trim() : s.StatusUrl.Trim();
+        // Home target: HomeUrl only. Status URL is reserved for the Group
+        // Launcher's liveness probe and isn't a navigation target — landing
+        // an auto-login session on a status endpoint can hit non-HTML routes
+        // or land the user somewhere they didn't ask for.
+        string home = s.HomeUrl?.Trim() ?? "";
         if (string.IsNullOrWhiteSpace(home))
         {
-            Report("skipped — no Home/Status URL set.");
+            Report("skipped — Home URL is not set.");
             return;
         }
 
@@ -67,10 +70,10 @@ static class AutoLoginRunner
         Report("starting — will open the home page with cached cookies.");
         // Fire-and-forget. Playwright is fully async; trying to await it on
         // the launcher's caller would block the UI for several seconds.
-        _ = Task.Run(() => RunAsync(s.Id, s.Name, home, s.LoginUrl?.Trim() ?? "", s.LoginUsername, password, Report));
+        _ = Task.Run(() => RunAsync(s.Id, s.Name, home, s.LoginUrl?.Trim() ?? "", s.LoginUsername, password, s.LoggedInSelector?.Trim() ?? "", Report));
     }
 
-    private static async Task RunAsync(string shortcutId, string shortcutName, string homeUrl, string loginUrl, string username, string password, Action<string> report)
+    private static async Task RunAsync(string shortcutId, string shortcutName, string homeUrl, string loginUrl, string username, string password, string loggedInSelector, Action<string> report)
     {
         IPlaywright? pw = null;
         IBrowserContext? ctx = null;
@@ -132,8 +135,9 @@ static class AutoLoginRunner
             }
             await SettleAsync(page);
 
-            // 2. Still signed in? (not on the login page + no visible password field)
-            if (await IsLoggedInAsync(page, loginUrl))
+            // 2. Still signed in? Selector-based check first when configured,
+            //    fall back to the URL + visible-password heuristic.
+            if (await IsLoggedInAsync(page, loginUrl, loggedInSelector))
             {
                 report("home opened with cached session — already signed in. Done.");
                 TrackSession(pw, ctx);
@@ -175,8 +179,13 @@ static class AutoLoginRunner
             }
             catch { /* SPA logins may not change the URL — fine */ }
 
-            // 6. If the site didn't redirect us home, push there ourselves.
-            if (UrlIsLoginPage(page.Url, loginUrl) || (string.IsNullOrEmpty(loginUrl) && await HasVisiblePasswordAsync(page)))
+            // 6. Land on the user's Home URL — the app's default post-login
+            //    redirect may point at a different page (account confirmation,
+            //    status URL, store dashboard, etc.), but the user picked
+            //    Home URL as the page they want to see when launching this
+            //    shortcut. Skip the navigation if we're already there to
+            //    avoid an unnecessary reload.
+            if (!UrlIsUnder(page.Url, homeUrl))
             {
                 try
                 {
@@ -219,9 +228,42 @@ static class AutoLoginRunner
         catch { /* timeout is fine — DOMContentLoaded already fired */ }
     }
 
-    /// <summary>Logged in if we're not on the login page and no login form shows.</summary>
-    private static async Task<bool> IsLoggedInAsync(IPage page, string loginUrl)
+    /// <summary>Decide whether the page is in a signed-in state.
+    /// <para>
+    /// When <paramref name="loggedInSelector"/> is non-empty, it's authoritative:
+    /// if Playwright's locator resolves to at least one visible element the
+    /// user is signed in. This is the only reliable check for storefronts
+    /// where the home URL renders for both anonymous and authed users
+    /// (e.g. Lindex / SFB Bokhandeln — "Mina sidor" is visible only when
+    /// signed in).
+    /// </para>
+    /// <para>
+    /// With no selector configured, fall back to the heuristic: we're signed
+    /// in if we're not on the login page AND no visible password field shows.
+    /// </para>
+    /// </summary>
+    private static async Task<bool> IsLoggedInAsync(IPage page, string loginUrl, string loggedInSelector)
     {
+        if (!string.IsNullOrEmpty(loggedInSelector))
+        {
+            try
+            {
+                // Locator(...).First.WaitForAsync with a short timeout would
+                // miss the case "selector exists but invisible". Use Count
+                // on a visible-only locator chain: in Playwright .NET the
+                // ":visible" pseudo isn't available for arbitrary selectors,
+                // so use the Locator's own count + IsVisibleAsync probe.
+                var loc = page.Locator(loggedInSelector);
+                int count = await loc.CountAsync();
+                for (int i = 0; i < count; i++)
+                {
+                    if (await loc.Nth(i).IsVisibleAsync()) return true;
+                }
+                return false;
+            }
+            catch { /* bad selector → fall through to the heuristic */ }
+        }
+
         if (!string.IsNullOrEmpty(loginUrl) && UrlIsLoginPage(page.Url, loginUrl)) return false;
         return !await HasVisiblePasswordAsync(page);
     }
@@ -245,6 +287,27 @@ static class AutoLoginRunner
                 && c.AbsolutePath.TrimEnd('/').StartsWith(l.AbsolutePath.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
         }
         catch { return current.StartsWith(loginUrl, StringComparison.OrdinalIgnoreCase); }
+    }
+
+    /// <summary>True when <paramref name="current"/> is on the same host AND
+    /// the same (or a sub-) path of <paramref name="target"/>. Used post-login
+    /// to skip the "navigate to home" step when the app already redirected
+    /// the user under the home URL. Query string + fragment are ignored.</summary>
+    private static bool UrlIsUnder(string current, string target)
+    {
+        if (string.IsNullOrEmpty(target) || string.IsNullOrEmpty(current)) return false;
+        try
+        {
+            var t = new Uri(target);
+            var c = new Uri(current);
+            if (!string.Equals(t.Host, c.Host, StringComparison.OrdinalIgnoreCase)) return false;
+            string tp = t.AbsolutePath.TrimEnd('/');
+            string cp = c.AbsolutePath.TrimEnd('/');
+            if (tp.Length == 0) return true;
+            return string.Equals(cp, tp, StringComparison.OrdinalIgnoreCase)
+                || cp.StartsWith(tp + "/", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return current.StartsWith(target, StringComparison.OrdinalIgnoreCase); }
     }
 
     /// <summary>Heuristic form filler. Tries the most common patterns in order;
