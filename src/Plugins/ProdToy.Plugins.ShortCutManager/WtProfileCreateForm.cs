@@ -42,6 +42,7 @@ class WtProfileCreateForm : Form
         bool isEdit = existing != null;
 
         Text = isEdit ? "Edit Windows Terminal Profile" : "New Windows Terminal Profile";
+        Icon = IconHelper.CreateAppIcon(theme.Primary);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;

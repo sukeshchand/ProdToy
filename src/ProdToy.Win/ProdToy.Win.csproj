@@ -17,10 +17,21 @@
     <Product>ProdToy</Product>
     <Company>ProdToy</Company>
     <Description>Productivity toolkit for Windows</Description>
+    <!-- App/exe/taskbar icon (red teddy + gear). Also becomes the default
+         Form.Icon for any window that doesn't set its own — including plugin
+         windows, since they run in this process. -->
+    <ApplicationIcon>..\..\assets\app-icon-red\ProdToy.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Runtime brand icon loaded by Themes.CreateAppIcon for forms + tray. -->
+    <EmbeddedResource Include="..\..\assets\app-icon-red\icon-256.png">
+      <LogicalName>ProdToy.AppIcon.png</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>

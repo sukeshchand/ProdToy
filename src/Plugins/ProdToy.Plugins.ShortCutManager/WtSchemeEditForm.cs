@@ -57,6 +57,7 @@ class WtSchemeEditForm : Form
         var src = existing ?? new WtSchemeDraft();
 
         Text = isEdit ? "Edit Color Scheme" : "New Color Scheme";
+        Icon = IconHelper.CreateAppIcon(theme.Primary);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;

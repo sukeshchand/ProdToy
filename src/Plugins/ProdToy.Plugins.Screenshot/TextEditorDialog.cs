@@ -36,6 +36,7 @@ class TextEditorDialog : Form
         Result = initial;
 
         Text = "Edit Text";
+        Icon = IconHelper.CreateAppIcon(theme.Primary);
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = false;

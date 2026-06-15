@@ -27,6 +27,7 @@ sealed class LogHighlightRulesForm : Form
     {
         _theme = theme;
         Text = "Highlight rules";
+        Icon = IconHelper.CreateAppIcon(theme.Primary);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;

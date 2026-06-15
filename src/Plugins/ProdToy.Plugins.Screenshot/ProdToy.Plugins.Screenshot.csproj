@@ -18,6 +18,13 @@
     </ProjectReference>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Red brand icon used by IconHelper.CreateAppIcon for this plugin's forms. -->
+    <EmbeddedResource Include="..\..\..\assets\app-icon-red\icon-256.png">
+      <LogicalName>ProdToy.AppIcon.png</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <!-- Copy plugin DLL to user's plugins directory after build -->
   <Target Name="DeployPlugin" AfterTargets="Build">
     <PropertyGroup>

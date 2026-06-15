@@ -22,6 +22,10 @@
          with the plugin (~50MB). -->
     <PackageReference Include="Microsoft.Playwright" Version="1.49.0" />
 
+    <!-- WMI (Win32_Process command lines) for the Consolidated Launcher's
+         working-directory process-match fallback. Ships with the plugin. -->
+    <PackageReference Include="System.Management" Version="8.0.0" />
+
     <!-- WebView2 powers the Consolidated Launcher's embedded preview pane.
          The runtime is bundled with the host, so Private=false +
          ExcludeAssets=runtime keeps the DLLs out of the plugin package
@@ -30,6 +34,12 @@
       <Private>false</Private>
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
+
+    <!-- The shared red brand icon, embedded so plugin windows (Consolidated /
+         Group Launcher, editors) show the ProdToy icon instead of the default. -->
+    <EmbeddedResource Include="..\..\..\assets\app-icon-red\icon-256.png">
+      <LogicalName>ProdToy.AppIcon.png</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <!-- Copy plugin DLL to user's plugins directory after build -->

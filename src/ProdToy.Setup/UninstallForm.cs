@@ -27,7 +27,7 @@ class UninstallForm : Form
         ShowInTaskbar = true;
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = _theme.BgDark;
-        Icon = SystemIcons.Warning;
+        Icon = SetupIcon.App();
 
         // --- Header ---
         var headerPanel = new Panel

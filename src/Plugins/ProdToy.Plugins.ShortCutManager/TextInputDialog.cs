@@ -15,6 +15,7 @@ class TextInputDialog : Form
     public TextInputDialog(PluginTheme theme, string title, string prompt, string initial = "")
     {
         Text = title;
+        Icon = IconHelper.CreateAppIcon(theme.Primary);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;

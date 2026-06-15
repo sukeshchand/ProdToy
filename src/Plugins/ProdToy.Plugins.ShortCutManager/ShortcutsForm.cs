@@ -34,6 +34,7 @@ class ShortcutsForm : Form
         _theme = theme;
 
         Text = "ProdToy — Shortcuts";
+        Icon = IconHelper.CreateAppIcon(theme.Primary);
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true;
         MinimizeBox = true;

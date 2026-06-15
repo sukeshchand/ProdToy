@@ -22,7 +22,7 @@ class WelcomeForm : Form
         ShowInTaskbar = true;
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = _theme.BgDark;
-        Icon = SystemIcons.Information;
+        Icon = SetupIcon.App();
 
         var headerPanel = new Panel
         {

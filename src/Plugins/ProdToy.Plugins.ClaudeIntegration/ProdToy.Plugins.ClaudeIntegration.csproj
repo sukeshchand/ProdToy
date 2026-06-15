@@ -27,6 +27,12 @@
   <ItemGroup>
     <EmbeddedResource Include="Scripts\context-bar.ps1" LogicalName="ProdToy.Plugins.ClaudeIntegration.Scripts.context-bar.ps1" />
     <EmbeddedResource Include="Scripts\Show-ProdToy.ps1" LogicalName="ProdToy.Plugins.ClaudeIntegration.Scripts.Show-ProdToy.ps1" />
+
+    <!-- The shared red brand icon, embedded so plugin windows (Claude chat,
+         filter dialog) show the ProdToy icon instead of the default. -->
+    <EmbeddedResource Include="..\..\..\assets\app-icon-red\icon-256.png">
+      <LogicalName>ProdToy.AppIcon.png</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <!-- Copy plugin DLL to user's plugins directory after build -->

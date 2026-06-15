@@ -43,6 +43,26 @@ static class ProcessTree
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr hObject);
 
+    /// <summary>pid → (parentPid, exeName) for every process, via one ToolHelp32
+    /// snapshot. Used to climb the parent chain when resolving a launch root.</summary>
+    public static Dictionary<int, (int Parent, string Name)> SnapshotByPid()
+    {
+        var map = new Dictionary<int, (int, string)>();
+        IntPtr snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap == IntPtr.Zero || snap == new IntPtr(-1)) return map;
+        try
+        {
+            var entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
+            if (!Process32First(snap, ref entry)) return map;
+            do
+            {
+                map[(int)entry.th32ProcessID] = ((int)entry.th32ParentProcessID, entry.szExeFile ?? "");
+            } while (Process32Next(snap, ref entry));
+        }
+        finally { CloseHandle(snap); }
+        return map;
+    }
+
     private static Dictionary<int, List<(int Pid, string Name)>> BuildChildMap()
     {
         var map = new Dictionary<int, List<(int, string)>>();

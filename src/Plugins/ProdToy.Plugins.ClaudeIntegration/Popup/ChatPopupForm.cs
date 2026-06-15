@@ -103,6 +103,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _showQuotes = context.LoadSettings<ClaudePluginSettings>().ShowQuotes;
 
         Text = "ProdToy — Claude";
+        Icon = IconHelper.CreateAppIcon(_theme.Primary);
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true;
         MinimizeBox = true;

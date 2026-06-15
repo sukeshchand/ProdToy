@@ -40,6 +40,7 @@ class FilterDialog : Form
         _selectedDate = currentDate.Date;
         SelectedDate = _selectedDate;
         Text = "Filter History";
+        Icon = IconHelper.CreateAppIcon(theme.Primary);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;

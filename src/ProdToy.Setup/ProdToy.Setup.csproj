@@ -17,6 +17,7 @@
     <Product>ProdToy Setup</Product>
     <Company>ProdToy</Company>
     <Description>Installer for ProdToy</Description>
+    <ApplicationIcon>..\..\assets\app-icon-red\ProdToy.ico</ApplicationIcon>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -24,5 +25,12 @@
     <PublishDocumentationFiles>false</PublishDocumentationFiles>
     <DebugType>none</DebugType>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Red brand icon for the setup wizard windows. -->
+    <EmbeddedResource Include="..\..\assets\app-icon-red\icon-256.png">
+      <LogicalName>ProdToy.AppIcon.png</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
 
 </Project>

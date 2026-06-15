@@ -15,6 +15,7 @@ class ContextMenuShortcutPicker : Form
     public ContextMenuShortcutPicker(IReadOnlyList<Shortcut> matches, PluginTheme theme, string folderPath)
     {
         Text = "ProdToy shortcuts";
+        Icon = IconHelper.CreateAppIcon(theme.Primary);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = false;

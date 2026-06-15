@@ -218,29 +218,29 @@ static class Themes
     }
 
     /// <summary>
-    /// Create a simple colored icon programmatically for the tray and window.
+    /// The app icon for the tray and windows — the fixed red brand mark (teddy
+    /// bear + gear), loaded from the embedded PNG. The <paramref name="primary"/>
+    /// argument is ignored: the icon is intentionally always red, independent of
+    /// the active theme. Kept for call-site compatibility.
     /// </summary>
     public static Icon CreateAppIcon(Color primary)
     {
-        using var bmp = new Bitmap(32, 32);
-        using var g = Graphics.FromImage(bmp);
+        try
+        {
+            using var s = typeof(Themes).Assembly.GetManifestResourceStream("ProdToy.AppIcon.png");
+            if (s != null)
+            {
+                using var bmp = new Bitmap(s);
+                return Icon.FromHandle(bmp.GetHicon());
+            }
+        }
+        catch { /* fall back to a generated mark below */ }
+
+        using var fb = new Bitmap(32, 32);
+        using var g = Graphics.FromImage(fb);
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        g.Clear(Color.Transparent);
-
-        // Filled circle with primary color
-        using var brush = new SolidBrush(primary);
+        using var brush = new SolidBrush(Color.FromArgb(0xE5, 0x48, 0x4D));
         g.FillEllipse(brush, 2, 2, 28, 28);
-
-        // "C" letter in white
-        using var font = new Font("Segoe UI", 16f, FontStyle.Bold);
-        using var textBrush = new SolidBrush(Color.White);
-        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString("D", font, textBrush, new RectangleF(0, 0, 32, 32), sf);
-
-        // Outer glow ring
-        using var pen = new Pen(Color.FromArgb(100, primary), 1.5f);
-        g.DrawEllipse(pen, 1, 1, 30, 30);
-
-        return Icon.FromHandle(bmp.GetHicon());
+        return Icon.FromHandle(fb.GetHicon());
     }
 }

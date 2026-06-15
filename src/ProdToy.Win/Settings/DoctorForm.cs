@@ -42,6 +42,7 @@ class DoctorForm : Form
         _sources = HostDoctor.GetSources();
 
         Text = "ProdToy Doctor";
+        Icon = Themes.CreateAppIcon(theme.Primary);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;

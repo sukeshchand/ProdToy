@@ -33,6 +33,9 @@ static class ConsolidatedSettings
     public sealed class FolderPrefs
     {
         public bool SequentialBuild { get; set; }
+        /// <summary>Shortcut ids (within this folder) whose row has "clean bin/obj
+        /// before run" enabled. Per-shortcut, dotnet-only.</summary>
+        public List<string> CleanBinObjIds { get; set; } = new();
     }
 
     public static void Initialize(string dataDirectory)
@@ -56,6 +59,33 @@ static class ConsolidatedSettings
             if (!_byFolder!.TryGetValue(key, out var p)) { p = new FolderPrefs(); _byFolder[key] = p; }
             if (p.SequentialBuild == value) return;
             p.SequentialBuild = value;
+            Save();
+        }
+    }
+
+    public static bool GetCleanBinObj(string folderPath, string shortcutId)
+    {
+        lock (_lock)
+        {
+            EnsureLoaded();
+            return _byFolder!.TryGetValue(Key(folderPath), out var p)
+                && p.CleanBinObjIds != null
+                && p.CleanBinObjIds.Contains(shortcutId, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    public static void SetCleanBinObj(string folderPath, string shortcutId, bool value)
+    {
+        lock (_lock)
+        {
+            EnsureLoaded();
+            var key = Key(folderPath);
+            if (!_byFolder!.TryGetValue(key, out var p)) { p = new FolderPrefs(); _byFolder[key] = p; }
+            p.CleanBinObjIds ??= new();
+            bool has = p.CleanBinObjIds.Contains(shortcutId, StringComparer.OrdinalIgnoreCase);
+            if (value && !has) p.CleanBinObjIds.Add(shortcutId);
+            else if (!value && has) p.CleanBinObjIds.RemoveAll(x => string.Equals(x, shortcutId, StringComparison.OrdinalIgnoreCase));
+            else return;
             Save();
         }
     }

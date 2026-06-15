@@ -392,16 +392,33 @@ class SettingsForm : Form
             Location = new Point(tp, ab),
             BackColor = Color.Transparent,
         };
+        // Show the real brand icon (red teddy + gear) in the About header.
+        Image? appIconImg = null;
+        try
+        {
+            using var s = typeof(Themes).Assembly.GetManifestResourceStream("ProdToy.AppIcon.png");
+            if (s != null) { using var tmp = Image.FromStream(s); appIconImg = new Bitmap(tmp); }
+        }
+        catch { /* fall back to the lettered mark below */ }
         appIconPanel.Paint += (_, e) =>
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            using var bgBrush = new SolidBrush(currentTheme.PrimaryDim);
-            e.Graphics.FillEllipse(bgBrush, 0, 0, 47, 47);
-            using var textBrush = new SolidBrush(currentTheme.Primary);
-            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            using var iconFont = new Font("Segoe UI Semibold", 18f, FontStyle.Bold);
-            e.Graphics.DrawString("P", iconFont, textBrush, new RectangleF(0, 0, 48, 48), sf);
+            e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            if (appIconImg != null)
+            {
+                e.Graphics.DrawImage(appIconImg, 0, 0, 48, 48);
+            }
+            else
+            {
+                using var bgBrush = new SolidBrush(currentTheme.PrimaryDim);
+                e.Graphics.FillEllipse(bgBrush, 0, 0, 47, 47);
+                using var textBrush = new SolidBrush(currentTheme.Primary);
+                using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                using var iconFont = new Font("Segoe UI Semibold", 18f, FontStyle.Bold);
+                e.Graphics.DrawString("P", iconFont, textBrush, new RectangleF(0, 0, 48, 48), sf);
+            }
         };
+        appIconPanel.Disposed += (_, _) => appIconImg?.Dispose();
         _aboutPage.Controls.Add(appIconPanel);
 
         var aboutNameLabel = new Label

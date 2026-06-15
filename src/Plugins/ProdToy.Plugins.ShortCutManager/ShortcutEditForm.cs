@@ -73,6 +73,7 @@ class ShortcutEditForm : Form
         bool isEdit = existing != null;
 
         Text = isEdit ? "Edit Shortcut" : "New Shortcut";
+        Icon = IconHelper.CreateAppIcon(theme.Primary);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -694,6 +695,25 @@ class ShortcutEditForm : Form
 
         y = AddSection("MONITORING", y);
 
+        // Home URL — the page opened in the preview when the app is running, and
+        // the page Auto login navigates to. Independent of the Auto login toggle.
+        _homeUrlLabel = AddLabel("Home URL", pad, y);
+        _homeUrlBox = MakeTextBox(inputX, y, inputW);
+        _homeUrlBox.Text = existing?.HomeUrl ?? "";
+        y += 28;
+        var homeUrlHint = new Label
+        {
+            Text = "Opened in the preview when the app is running (and the page Auto login signs into). Blank = use the Status URL.",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = false,
+            Size = new Size(inputW, 30),
+            Location = new Point(inputX, y),
+            BackColor = Color.Transparent,
+        };
+        _host.Controls.Add(homeUrlHint);
+        y += 36;
+
         AddLabel("Status URL", pad, y);
         _statusUrlBox = MakeTextBox(inputX, y, inputW);
         _statusUrlBox.Text = existing?.StatusUrl ?? "";
@@ -701,7 +721,7 @@ class ShortcutEditForm : Form
 
         var statusUrlHint = new Label
         {
-            Text = "Optional. Group Launcher polls this URL every 3s to show a Healthy / Unreachable badge — e.g. http://localhost:5000 for an ASP.NET app.",
+            Text = "Optional. Polled every 3s for a Healthy / Unreachable badge — used only for the status check, not opened. e.g. http://localhost:5000.",
             Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
             AutoSize = false,
@@ -772,23 +792,6 @@ class ShortcutEditForm : Form
         _host.Controls.Add(loginHint);
         y += 36;
 
-        _homeUrlLabel = AddLabel("Home URL", pad, y);
-        _homeUrlBox = MakeTextBox(inputX, y, inputW);
-        _homeUrlBox.Text = existing?.HomeUrl ?? "";
-        y += 28;
-        var homeUrlHint = new Label
-        {
-            Text = "Tried first using cached cookies. If it loads (no login redirect), you're done. Blank = use Status URL.",
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-            ForeColor = theme.TextSecondary,
-            AutoSize = false,
-            Size = new Size(inputW, 30),
-            Location = new Point(inputX, y),
-            BackColor = Color.Transparent,
-        };
-        _host.Controls.Add(homeUrlHint);
-        y += 34;
-
         _loginUrlLabel = AddLabel("Login URL", pad, y);
         _loginUrlBox = MakeTextBox(inputX, y, inputW);
         _loginUrlBox.Text = existing?.LoginUrl ?? "";
@@ -852,11 +855,11 @@ class ShortcutEditForm : Form
         _host.Controls.Add(passwordHint);
         y += 24;
 
+        // Home URL is independent of Auto login (it's the preview/landing page),
+        // so it stays enabled. The toggle only gates the sign-in fields.
         void RefreshAutoLoginEnabled()
         {
             bool on = _autoLoginToggle.Checked;
-            _homeUrlLabel.Enabled = on;
-            _homeUrlBox.Enabled = on;
             _loginUrlLabel.Enabled = on;
             _loginUrlBox.Enabled = on;
             _loggedInSelectorLabel.Enabled = on;
@@ -865,7 +868,6 @@ class ShortcutEditForm : Form
             _loginUsernameBox.Enabled = on;
             _loginPasswordLabel.Enabled = on;
             _loginPasswordBox.Enabled = on;
-            _homeUrlBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
             _loginUrlBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
             _loggedInSelectorBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;
             _loginUsernameBox.BackColor = on ? _theme.BgHeader : _theme.BgDark;

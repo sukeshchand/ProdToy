@@ -79,7 +79,7 @@ class SetupForm : Form
         ShowInTaskbar = true;
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = _theme.BgDark;
-        Icon = SystemIcons.Information;
+        Icon = SetupIcon.App();
 
         // --- Header panel ---
         var headerPanel = new Panel

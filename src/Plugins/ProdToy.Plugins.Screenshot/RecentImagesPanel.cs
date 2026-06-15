@@ -1,5 +1,7 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Threading;
+using System.Threading.Tasks;
 using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.Screenshot;
@@ -25,6 +27,10 @@ class RecentImagesPanel : Panel
     private string? _selectedFilePath;
     private Panel? _selectedItemPanel;
     private string? _editingEditId;
+
+    // Bumped on every (re)load so a background thumbnail decode started for an
+    // earlier load is ignored once a newer load has replaced the items.
+    private int _loadGeneration;
 
     // Ordered: first marked = compare "left", second marked = compare "right".
     // Capped at 2; marking a third drops the oldest (FIFO).
@@ -165,6 +171,8 @@ class RecentImagesPanel : Panel
         int innerW = PanelWidth - 16;
 
         var visible = new List<string>(files);
+        // (PictureBox, path) pairs whose thumbnails are decoded off the UI thread.
+        var toLoad = new List<(PictureBox thumb, string path)>();
 
         foreach (var filePath in files)
         {
@@ -173,7 +181,7 @@ class RecentImagesPanel : Panel
                 Path.GetFileNameWithoutExtension(filePath)
                     .Equals(_editingEditId, StringComparison.OrdinalIgnoreCase);
 
-            var item = CreateItem(filePath, y, innerW, isEditing);
+            var item = CreateItem(filePath, y, innerW, isEditing, toLoad);
             _scrollContent.Controls.Add(item);
             y += item.Height + ItemPad;
         }
@@ -207,7 +215,7 @@ class RecentImagesPanel : Panel
                     Path.GetFileNameWithoutExtension(filePath)
                         .Equals(_editingEditId, StringComparison.OrdinalIgnoreCase);
 
-                var item = CreateItem(filePath, y, innerW, isEditing);
+                var item = CreateItem(filePath, y, innerW, isEditing, toLoad);
                 _scrollContent.Controls.Add(item);
                 y += item.Height + ItemPad;
                 visible.Add(filePath);
@@ -215,9 +223,75 @@ class RecentImagesPanel : Panel
         }
 
         _visibleFilePaths = visible;
+
+        // Decode thumbnails off the UI thread so opening the editor is instant —
+        // each thumbnail pops in as it's ready instead of blocking on 10-15
+        // full-resolution image decodes up front.
+        LoadThumbnailsAsync(toLoad);
     }
 
-    private Panel CreateItem(string filePath, int y, int innerW, bool isEditing)
+    /// <summary>
+    /// Decodes each item's thumbnail on a background thread and assigns it to the
+    /// PictureBox on the UI thread. Guarded by <see cref="_loadGeneration"/> so a
+    /// <see cref="Reload"/> mid-decode discards stale results.
+    /// </summary>
+    private void LoadThumbnailsAsync(List<(PictureBox thumb, string path)> items)
+    {
+        if (items.Count == 0) return;
+        int gen = ++_loadGeneration;
+        int targetW = PanelWidth - 16 - 4;   // matches the synchronous bitmap size
+        int targetH = ThumbHeight;
+        var snapshot = new List<(PictureBox thumb, string path)>(items);
+
+        _ = Task.Run(() =>
+        {
+            // The panel handle may not exist yet (editor still constructing);
+            // wait briefly so BeginInvoke is valid. Normally ready in <100ms.
+            int spins = 0;
+            while (!IsHandleCreated && !IsDisposed && spins++ < 250) Thread.Sleep(20);
+            if (IsDisposed || !IsHandleCreated) return;
+
+            foreach (var (thumb, path) in snapshot)
+            {
+                if (gen != _loadGeneration || IsDisposed) return;
+
+                Bitmap? bmp = null;
+                try { bmp = LoadThumbnail(path, targetW, targetH); }
+                catch (Exception ex) { PluginLog.Warn($"Thumb load failed: {ex.Message}"); }
+                if (bmp == null) continue;
+
+                try
+                {
+                    BeginInvoke(() =>
+                    {
+                        if (gen != _loadGeneration || thumb.IsDisposed) { bmp.Dispose(); return; }
+                        var old = thumb.Image;
+                        thumb.Image = bmp;
+                        old?.Dispose();
+                    });
+                }
+                catch (Exception) { bmp.Dispose(); }   // handle gone / disposed mid-flight
+            }
+        });
+    }
+
+    /// <summary>Decode + scale a single thumbnail (pure; no UI). Runs off the UI thread.</summary>
+    private static Bitmap LoadThumbnail(string filePath, int targetW, int targetH)
+    {
+        using var stream = File.OpenRead(filePath);
+        // validateImageData:false skips a redundant full-decode validation pass.
+        using var img = Image.FromStream(stream, useEmbeddedColorManagement: false, validateImageData: false);
+        var bmp = new Bitmap(targetW, targetH);
+        using var g = Graphics.FromImage(bmp);
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.Clear(Color.FromArgb(35, 35, 35));
+        float scale = Math.Min((float)bmp.Width / img.Width, (float)bmp.Height / img.Height);
+        int w = (int)(img.Width * scale), h = (int)(img.Height * scale);
+        g.DrawImage(img, (bmp.Width - w) / 2, (bmp.Height - h) / 2, w, h);
+        return bmp;
+    }
+
+    private Panel CreateItem(string filePath, int y, int innerW, bool isEditing, List<(PictureBox thumb, string path)> toLoad)
     {
         string fileName = Path.GetFileNameWithoutExtension(filePath);
         if (fileName.Length > 20) fileName = fileName[..17] + "...";
@@ -261,22 +335,9 @@ class RecentImagesPanel : Panel
             SizeMode = PictureBoxSizeMode.Zoom,
             BackColor = Color.FromArgb(35, 35, 35),
         };
-        try
-        {
-            using var stream = File.OpenRead(filePath);
-            using var img = Image.FromStream(stream);
-            var bmp = new Bitmap(innerW - 4, ThumbHeight);
-            using (var g = Graphics.FromImage(bmp))
-            {
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.Clear(Color.FromArgb(35, 35, 35));
-                float scale = Math.Min((float)bmp.Width / img.Width, (float)bmp.Height / img.Height);
-                int w = (int)(img.Width * scale), h = (int)(img.Height * scale);
-                g.DrawImage(img, (bmp.Width - w) / 2, (bmp.Height - h) / 2, w, h);
-            }
-            thumb.Image = bmp;
-        }
-        catch (Exception ex) { PluginLog.Warn($"Thumb load failed: {ex.Message}"); }
+        // Thumbnail is decoded on a background thread (see LoadThumbnailsAsync);
+        // the gray PictureBox shows as a placeholder until it's ready.
+        toLoad.Add((thumb, filePath));
         panel.Controls.Add(thumb);
 
         var label = new Label
