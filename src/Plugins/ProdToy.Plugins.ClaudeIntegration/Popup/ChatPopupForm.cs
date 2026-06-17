@@ -906,6 +906,32 @@ sealed class ChatPopupForm : Form, IPluginPopup
         try
         {
             string html = RenderHtml(_lastMessage);
+            // Standalone-page only: wrap the content in a centered, fixed-width card
+            // (padding + rounded border + shadow) sitting on the page background.
+            // The popup preview / clipboard HTML are untouched.
+            string bgPage = ToHex(_theme.BgDark);
+            string bgCard = ToHex(_theme.BgHeader);
+            string border = ToHex(_theme.Border);
+            string overrideCss =
+                "<style>html,body{background:" + bgPage + ";}" +
+                "body{padding:28px 16px !important;}" +
+                ".prodtoy-card{max-width:860px;margin:0 auto;padding:32px 36px 40px 36px;background:" + bgCard +
+                ";border:1px solid " + border + ";border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,0.35);}</style>";
+            html = html.Contains("</head>")
+                ? html.Replace("</head>", overrideCss + "</head>")
+                : overrideCss + html;
+            // Wrap everything between the real <body> and </body> in the card div.
+            int bodyOpen = html.IndexOf("<body>", StringComparison.OrdinalIgnoreCase);
+            int bodyClose = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+            if (bodyOpen >= 0 && bodyClose > bodyOpen)
+            {
+                int contentStart = bodyOpen + "<body>".Length;
+                html = html.Substring(0, contentStart)
+                    + "<div class=\"prodtoy-card\">"
+                    + html.Substring(contentStart, bodyClose - contentStart)
+                    + "</div>"
+                    + html.Substring(bodyClose);
+            }
             string dir = Path.Combine(Path.GetTempPath(), "ProdToy");
             Directory.CreateDirectory(dir);
             string file = Path.Combine(dir, $"claude-{DateTime.Now:yyyyMMdd-HHmmss-fff}.html");
