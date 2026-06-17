@@ -35,8 +35,33 @@ static class ShortcutLauncher
     /// so the window appears as its own top-level (required for title-scan
     /// tracking to work).
     /// </summary>
+    /// <summary>True when the shortcut's profile is the URL kind (opens a URL
+    /// instead of running a command). In-app callers open the URL in a WebView2
+    /// preview; this static path is the headless fallback (desktop .lnk / Explorer
+    /// menu) which opens the system default browser.</summary>
+    internal static bool IsUrl(Shortcut s) =>
+        LaunchProfiles.GetOrDefault(s.Profile).Kind == LaunchKind.Url;
+
     public static LaunchResult Launch(Shortcut s, string? titleOverride, bool forceNewWindow)
     {
+        // URL shortcut: no command/terminal, no working directory — just open the
+        // URL. Reached from desktop .lnk / Explorer (no UI to host a preview), so
+        // fall back to the system default browser.
+        if (IsUrl(s))
+        {
+            var url = (s.Args ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(url))
+                return new LaunchResult(false, "No URL set for this shortcut.");
+            try
+            {
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                ShortcutStore.RecordLaunch(s.Id);
+                AutoLoginRunner.RunInBackground(s);   // no-op unless enabled + HomeUrl set
+                return new LaunchResult(true);
+            }
+            catch (Exception ex) { return new LaunchResult(false, ex.Message); }
+        }
+
         if (string.IsNullOrWhiteSpace(s.WorkingDirectory))
             return new LaunchResult(false, "Working directory is empty.");
         if (!Directory.Exists(s.WorkingDirectory))

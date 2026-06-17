@@ -129,16 +129,11 @@ class SettingsForm : Form
             ItemHeight = 24,
         };
 
-        // Populate with installed font families
-        using var installedFonts = new System.Drawing.Text.InstalledFontCollection();
-        var families = installedFonts.Families;
-        int selectedFontIdx = 0;
-        for (int fi = 0; fi < families.Length; fi++)
-        {
-            fontCombo.Items.Add(families[fi].Name);
-            if (families[fi].Name.Equals(currentFont, StringComparison.OrdinalIgnoreCase))
-                selectedFontIdx = fi;
-        }
+        // Enumerating installed fonts (InstalledFontCollection) is slow — hundreds
+        // of ms on machines with many fonts — and was running synchronously here,
+        // stalling every Settings open. Show just the current font now and fill the
+        // full list off the UI thread once the window is shown (see Shown handler).
+        fontCombo.Items.Add(string.IsNullOrWhiteSpace(currentFont) ? "Segoe UI" : currentFont);
 
         // Owner-draw to preview each font
         fontCombo.DrawItem += (_, de) =>
@@ -168,8 +163,10 @@ class SettingsForm : Form
             }
         };
 
-        fontCombo.SelectedIndex = selectedFontIdx;
+        fontCombo.SelectedIndex = 0;
         generalPage.Controls.Add(fontCombo);
+        // Fill the full installed-font list lazily, off the UI thread.
+        Shown += (_, _) => PopulateFontComboAsync(fontCombo, currentFont);
         gy += 34;
 
         // Preview label
@@ -984,6 +981,52 @@ class SettingsForm : Form
         var savedGlobalFont = AppSettings.Load().GlobalFont;
         if (!string.IsNullOrEmpty(savedGlobalFont) && savedGlobalFont != "Segoe UI")
             ApplyGlobalFont(savedGlobalFont);
+    }
+
+    /// <summary>Enumerate installed fonts off the UI thread and fill the global-font
+    /// combo when done. InstalledFontCollection is slow (hundreds of ms with many
+    /// fonts), so doing it here — after the window is shown — keeps Settings instant.</summary>
+    private void PopulateFontComboAsync(ComboBox combo, string currentFont)
+    {
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            string[] names;
+            try
+            {
+                using var installed = new System.Drawing.Text.InstalledFontCollection();
+                var fams = installed.Families;
+                names = new string[fams.Length];
+                for (int i = 0; i < fams.Length; i++) names[i] = fams[i].Name;
+            }
+            catch { return; }
+
+            void Apply()
+            {
+                if (combo.IsDisposed) return;
+                combo.BeginUpdate();
+                try
+                {
+                    combo.Items.Clear();
+                    int sel = 0;
+                    for (int i = 0; i < names.Length; i++)
+                    {
+                        combo.Items.Add(names[i]);
+                        if (names[i].Equals(currentFont, StringComparison.OrdinalIgnoreCase)) sel = i;
+                    }
+                    if (combo.Items.Count > 0) combo.SelectedIndex = sel;
+                }
+                finally { combo.EndUpdate(); }
+            }
+
+            try
+            {
+                if (combo.IsDisposed) return;
+                if (combo.InvokeRequired) combo.BeginInvoke((Action)Apply);
+                else Apply();
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        });
     }
 
     public void OnPluginsChanged()

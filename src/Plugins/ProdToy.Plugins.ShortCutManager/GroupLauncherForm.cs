@@ -321,6 +321,7 @@ class GroupLauncherPanel : UserControl
         {
             if (IsDisposed) return;
             var s = _shortcuts[i];
+            if (ShortcutLauncher.IsUrl(s)) { OpenUrlRow(_rows[i], s); continue; }
             string expectedTitle = BuildOverrideTitle(s);
             var beforePids = GetCmdPidSnapshot();
 
@@ -343,12 +344,39 @@ class GroupLauncherPanel : UserControl
         }
     }
 
+    /// <summary>"Launch" a URL shortcut from the Group Launcher: open it in the
+    /// in-app preview (no terminal/window/pid). Used by Launch All and per-row launch.</summary>
+    private void OpenUrlRow(GroupRow row, Shortcut s)
+    {
+        var url = (s.Args ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            row.SetState(GroupRow.RowState.Failed, "No URL set");
+            return;
+        }
+        row.LaunchedCmdPid = 0;
+        try
+        {
+            UrlPreviewForm.OpenOrFocus(_theme, s.Id,
+                string.IsNullOrWhiteSpace(s.Name) ? "Preview" : s.Name, url);
+        }
+        catch (Exception ex)
+        {
+            row.SetState(GroupRow.RowState.Failed, ex.Message);
+            return;
+        }
+        row.SetState(GroupRow.RowState.Running, "Opened in preview ↗");
+        ShortcutStore.RecordLaunch(s.Id);
+        AutoLoginRunner.RunInBackground(s);   // no-op unless enabled + HomeUrl set
+    }
+
     private async void LaunchOne(int index1Based)
     {
         if (_session.BatchId == 0) _session.BatchId = Random.Shared.Next(1000, 10000);
 
         var row = _rows[index1Based - 1];
         var s = _shortcuts[index1Based - 1];
+        if (ShortcutLauncher.IsUrl(s)) { OpenUrlRow(row, s); return; }
         string overrideTitle = BuildOverrideTitle(s);
 
         foreach (var w in WindowFinder.FindByTitleContains(overrideTitle))

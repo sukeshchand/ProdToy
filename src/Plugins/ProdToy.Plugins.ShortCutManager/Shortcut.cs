@@ -144,6 +144,16 @@ sealed record Shortcut
     public bool RequireAdmin { get; init; }
 
     /// <summary>
+    /// When true, the Consolidated Launcher's "Stop All" (and Launch-All cleanup)
+    /// skips this shortcut, leaving its process running. For always-on support
+    /// tools (a mock server, DB, tunnel) launched once alongside the app under
+    /// development. The row's own ■ Stop button still stops it explicitly.
+    /// Default false (back-compat).
+    /// </summary>
+    [JsonPropertyName("excludeFromStopAll")]
+    public bool ExcludeFromStopAll { get; init; }
+
+    /// <summary>
     /// When true, the plugin registers a Windows Explorer right-click verb
     /// scoped to <see cref="WorkingDirectory"/>: right-clicking inside that
     /// folder shows a "Run …" menu item that launches this shortcut. Off

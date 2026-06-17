@@ -287,6 +287,7 @@ sealed class ConsolidatedLauncherForm : Form
             if (cleanInit) _cleanIds.Add(s.Id);
             row.SetCommand(cleanInit ? StripNoBuildFlags(baseCmd) : baseCmd);
             row.SetCleanOption(isDotnet, cleanInit);
+            row.SetKeepRunning(s.ExcludeFromStopAll);
             row.CleanToggled += on =>
             {
                 if (on) _cleanIds.Add(s.Id); else _cleanIds.Remove(s.Id);
@@ -672,6 +673,36 @@ sealed class ConsolidatedLauncherForm : Form
         if (s is null) return;
         var row = _rowsById[id];
 
+        // URL shortcut → open it in the preview pane; no captured process.
+        if (ShortcutLauncher.IsUrl(s))
+        {
+            var url = (s.Args ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                row.SetState(ConsolidatedRow.RowState.Failed, "No URL set", null);
+                return;
+            }
+            _autoOpened.Add(id);
+            try { _browserTabs.OpenOrFocus(id, ShortName(s), url); }
+            catch (Exception ex)
+            {
+                _logTabs.AppendLine(id, $"[{DateTime.Now:HH:mm:ss}] ✖ Preview failed: {ex.Message}", isError: true);
+            }
+            row.SetState(ConsolidatedRow.RowState.Running, "Opened in preview ↗", null);
+            LogLauncher($"↗ {ShortName(s)} — opened URL in preview: {url}");
+            ShortcutStore.RecordLaunch(id);
+            if (s.AutoLoginEnabled)
+            {
+                AutoLoginRunner.RunInBackground(s, msg =>
+                {
+                    if (!IsDisposed)
+                        _pending.Enqueue((ConsolidatedLogTabs.LauncherTabKey,
+                            $"[{DateTime.Now:HH:mm:ss}] {ShortName(s)} · auto-login: {msg}", false));
+                });
+            }
+            return;
+        }
+
         // Already running — focus its console tab instead of double-launching.
         if (_runners.TryGetValue(id, out var existing) && existing.IsRunning)
         {
@@ -720,9 +751,15 @@ sealed class ConsolidatedLauncherForm : Form
             row.SetState(ConsolidatedRow.RowState.Building, "Cleaning bin/obj…", null);
             EmitBanner(id, "clean · removing bin/obj before run");
             string workDir = s.WorkingDirectory, cmd = runCommand;
+            // Reflect each step of the clean on the row's status line.
+            void OnCleanStatus(string status) => RunOnUi(() =>
+            {
+                if (!IsDisposed && _rowsById.TryGetValue(id, out var r0))
+                    r0.SetState(ConsolidatedRow.RowState.Building, status, null);
+            });
             _ = Task.Run(async () =>
             {
-                try { await CleanBinObjAsync(id, cmd, workDir); }
+                try { await CleanBinObjAsync(id, cmd, workDir, OnCleanStatus); }
                 catch (Exception ex) { _pending.Enqueue((id, $"✖ clean error: {ex.Message}", true)); }
                 RunOnUi(() => { if (!IsDisposed) StartRunnerCore(id, cmd, focus); });
             });
@@ -820,26 +857,33 @@ sealed class ConsolidatedLauncherForm : Form
     /// <summary>Delete bin/ and obj/ under the working directory (and the
     /// <c>--project</c> directory, if the command targets one) before running.
     /// Reports progress into the shortcut's console.</summary>
-    private async Task CleanBinObjAsync(string id, string command, string workingDir)
+    private async Task CleanBinObjAsync(string id, string command, string workingDir, Action<string>? onStatus = null)
     {
         var baseDirs = ResolveCleanDirs(command, workingDir);
-        int removed = 0, failed = 0;
+        int removed = 0, failed = 0, found = 0;
         foreach (var baseDir in baseDirs)
             foreach (var sub in new[] { "bin", "obj" })
             {
                 string target = Path.Combine(baseDir, sub);
                 if (!Directory.Exists(target)) continue;
-                if (await DeleteDirWithRetryAsync(id, target)) removed++; else failed++;
+                found++;
+                onStatus?.Invoke($"Cleaning {sub}/ …");
+                if (await DeleteDirWithRetryAsync(id, target, onStatus)) removed++; else failed++;
             }
         _pending.Enqueue((id,
             $"[{DateTime.Now:HH:mm:ss}] clean · done — {removed} folder(s) removed{(failed > 0 ? $", {failed} still locked" : "")}.",
             failed > 0));
+        onStatus?.Invoke(
+            failed > 0 ? $"Clean: {failed} locked — starting anyway…"
+            : found == 0 ? "Nothing to clean — starting…"
+            : "Cleaned ✓ — starting…");
     }
 
     /// <summary>Recursively delete <paramref name="dir"/>, retrying up to 10 times
     /// when a file is locked, with a progressive 1s → 2s → 3s back-off, then give up.</summary>
-    private async Task<bool> DeleteDirWithRetryAsync(string id, string dir)
+    private async Task<bool> DeleteDirWithRetryAsync(string id, string dir, Action<string>? onStatus = null)
     {
+        string sub = Path.GetFileName(dir.TrimEnd('\\', '/'));
         const int maxAttempts = 10;
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
@@ -854,10 +898,12 @@ sealed class ConsolidatedLauncherForm : Form
             {
                 if (attempt >= maxAttempts)
                 {
+                    onStatus?.Invoke($"{sub}/ locked — gave up");
                     _pending.Enqueue((id, $"[{DateTime.Now:HH:mm:ss}] clean · gave up on {ShortPath(dir)} after {maxAttempts} tries — locked.", true));
                     return false;
                 }
                 int delaySec = Math.Min(attempt, 3);              // 1s, 2s, 3s, 3s…
+                onStatus?.Invoke($"{sub}/ locked — retry {attempt}/{maxAttempts} in {delaySec}s…");
                 _pending.Enqueue((id, $"[{DateTime.Now:HH:mm:ss}] clean · {ShortPath(dir)} locked — retry {attempt}/{maxAttempts} in {delaySec}s…", false));
                 await Task.Delay(delaySec * 1000);
             }
@@ -933,16 +979,41 @@ sealed class ConsolidatedLauncherForm : Form
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { }
         }
 
-        int stopped = 0;
+        int stopped = 0, kept = 0;
         foreach (var s in _shortcuts)
+        {
+            // "Keep running on Stop All" shortcuts (always-on support tools) are
+            // left alone here; the row's own ■ still stops them explicitly.
+            if (s.ExcludeFromStopAll)
+            {
+                bool live = (_runners.TryGetValue(s.Id, out var r) && r.IsRunning)
+                            || _matchedRoot.ContainsKey(s.Id);
+                if (live) kept++;
+                continue;
+            }
             if (StopOne(s.Id, silent: true)) stopped++;
-        _statusLabel.Text = stopped == 0 ? "Nothing to stop." : $"Stopped {stopped} process(es).";
+        }
+        var msg = stopped == 0 ? "Nothing to stop." : $"Stopped {stopped} process(es).";
+        if (kept > 0) msg += $" {kept} kept running.";
+        _statusLabel.Text = msg;
     }
 
     private bool StopOne(string id) => StopOne(id, silent: false);
 
     private bool StopOne(string id, bool silent)
     {
+        // URL shortcut → "stop" just closes its preview tab.
+        var su = _shortcuts.FirstOrDefault(x => x.Id == id);
+        if (su != null && ShortcutLauncher.IsUrl(su))
+        {
+            bool wasOpen = _browserTabs.HasTab(id);
+            if (wasOpen) _browserTabs.CloseTab(id);
+            _autoOpened.Remove(id);
+            _rowsById[id].SetState(ConsolidatedRow.RowState.Stopped, "Stopped", null);
+            if (!silent) _statusLabel.Text = wasOpen ? "Closed 1 preview." : "Nothing to stop.";
+            return wasOpen;
+        }
+
         bool stopped = false;
 
         if (_runners.TryGetValue(id, out var runner))
@@ -1477,6 +1548,7 @@ sealed class ConsolidatedRow : Panel
     private List<(string Label, string Command)> _variants = new();
     private bool _cleanApplicable;      // dotnet command → show the Clean toggle button
     private bool _cleanOn;              // clean bin/obj before run
+    private bool _keepRunning;          // excluded from Stop All (📌 in the title)
 
     // Faint, theme-adaptive chip fills (a tint of the foreground over the row).
     private static readonly Color AmberDim = Color.FromArgb(0x40, 0xE6, 0xA5, 0x3A);
@@ -1590,6 +1662,14 @@ sealed class ConsolidatedRow : Panel
         Controls.Add(_cleanBtn);
         var cleanTip = new ToolTip();
         cleanTip.SetToolTip(_cleanBtn, "Delete bin/ and obj/ before running this dotnet shortcut (retries if files are locked).");
+    }
+
+    /// <summary>Mark this row as excluded from Stop All (shows a 📌 in the title).</summary>
+    public void SetKeepRunning(bool on)
+    {
+        if (_keepRunning == on) return;
+        _keepRunning = on;
+        Invalidate();
     }
 
     /// <summary>Show/hide the "Clean bin/obj" toggle (dotnet only) and set its state.</summary>
@@ -1769,12 +1849,13 @@ sealed class ConsolidatedRow : Panel
         if (textRight < textLeft + 80) textRight = Width - 120;
         int fullRight = Width - 16;   // command/process lines can run wider (no top buttons there)
 
-        // Line 1: index + name.
+        // Line 1: index + name (📌 prefix when excluded from Stop All).
         string name = string.IsNullOrWhiteSpace(_shortcut.Name) ? "(untitled)" : _shortcut.Name;
+        string title = _keepRunning ? $"📌 {_index}. {name}" : $"{_index}. {name}";
         using (var titleFont = new Font("Segoe UI Semibold", 10.5f, FontStyle.Bold))
         using (var tbrush = new SolidBrush(_theme.TextPrimary))
         using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString($"{_index}. {name}", titleFont, tbrush, new RectangleF(textLeft, 8, textRight - textLeft, 22), sf);
+            g.DrawString(title, titleFont, tbrush, new RectangleF(textLeft, 8, textRight - textLeft, 22), sf);
 
         // Chips/args stop before the bottom-right button cluster (refresh always
         // present; Run as ▾ and Clean bin/obj to its left when shown).

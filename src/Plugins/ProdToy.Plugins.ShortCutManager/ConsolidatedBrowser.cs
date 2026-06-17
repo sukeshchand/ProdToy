@@ -44,15 +44,47 @@ sealed class ConsolidatedBrowserTabs : UserControl
         _emptyHint = new Label
         {
             Dock = DockStyle.Fill,
-            Text = "Preview pane\n\nClick \"open ↗\" on a shortcut (or set a Status URL)\nto load it here.",
+            Text = "Preview pane\n\nClick \"+ New tab\" above to type any URL,\nor \"open ↗\" on a shortcut to load it here.",
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = theme.TextSecondary,
             Font = new Font("Segoe UI", 11F),
             BackColor = theme.BgDark,
         };
 
+        // Top strip with a "+ New tab" button so the user can open a blank tab and
+        // browse any URL — not just shortcut Status/Home URLs.
+        var topBar = new Panel { Dock = DockStyle.Top, Height = 30, BackColor = theme.BgHeader };
+        var newTabBtn = new Button
+        {
+            Text = "+ New tab",
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.BgDark,
+            ForeColor = theme.TextPrimary,
+            Font = new Font("Segoe UI", 8.5F),
+            Size = new Size(86, 22),
+            Location = new Point(6, 4),
+            Cursor = Cursors.Hand,
+            TabStop = false,
+        };
+        newTabBtn.FlatAppearance.BorderColor = theme.Border;
+        newTabBtn.Click += (_, _) => OpenAdHocTab();
+        topBar.Controls.Add(newTabBtn);
+        var newTabTip = new ToolTip();
+        newTabTip.SetToolTip(newTabBtn, "Open a blank preview tab — type a URL in the address bar to browse.");
+
+        // Fill controls first (low z), then the docked top bar so it reserves the top.
         Controls.Add(_tabs);
         Controls.Add(_emptyHint);
+        Controls.Add(topBar);
+    }
+
+    private int _adhocCounter;
+
+    /// <summary>Open a fresh blank preview tab the user can type any URL into.</summary>
+    public void OpenAdHocTab()
+    {
+        int n = ++_adhocCounter;
+        OpenOrFocus($"adhoc:{n}", $"New tab {n}", "");
     }
 
     /// <summary>Whether a tab for the given key already exists.</summary>
@@ -314,6 +346,7 @@ sealed class ConsolidatedBrowserPane : UserControl
         try
         {
             if (IsDisposed || Disposing) return;
+            url = NormalizeUrl(url);
 
             if (!_ready)
             {
@@ -344,6 +377,22 @@ sealed class ConsolidatedBrowserPane : UserControl
             _statusLabel.Text = "Browser init failed: " + ex.Message;
             _statusLabel.Visible = true;
         }
+    }
+
+    /// <summary>Make a typed address navigable: pass through about:/already-scheme'd
+    /// URLs, default localhost/loopback to http and everything else to https so the
+    /// user can type "localhost:5000" or "example.com" without a scheme.</summary>
+    private static string NormalizeUrl(string url)
+    {
+        var u = (url ?? "").Trim();
+        if (u.Length == 0) return "about:blank";
+        if (u.StartsWith("about:", StringComparison.OrdinalIgnoreCase)) return u;
+        if (u.Contains("://")) return u;   // already has a scheme
+        bool local = u.StartsWith("localhost", StringComparison.OrdinalIgnoreCase)
+                  || u.StartsWith("127.0.0.1")
+                  || u.StartsWith("0.0.0.0")
+                  || u.StartsWith("[::1]");
+        return (local ? "http://" : "https://") + u;
     }
 
     // ─────────────────────────── DevTools ───────────────────────────

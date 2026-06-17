@@ -33,6 +33,7 @@ class ShortcutEditForm : Form
     private readonly ToggleSwitch _adminToggle;
     private readonly ToggleSwitch _explorerMenuToggle;
     private readonly ToggleSwitch _desktopShortcutToggle;
+    private readonly ToggleSwitch _keepRunningToggle;
     private readonly TextBox _desktopShortcutNameBox;
     // True until the user manually edits the desktop name. While true, the
     // box is auto-populated from "<dir-leaf> <profile-display>" whenever the
@@ -300,7 +301,25 @@ class ShortcutEditForm : Form
                 _argsBox.Text = p.DefaultArgs;
             prevDefault = p.DefaultArgs;
             RebuildArgsChips(chipPanel, p, theme);
+            RefreshForUrlKind();
         };
+
+        // "Open URL" profile: keep only the URL field on the Command & Terminal
+        // tab (the args box, relabeled) and disable the working directory. The
+        // Integration + Monitoring tabs stay — auto-login, Status URL, desktop
+        // shortcut, etc. all apply to a URL shortcut too.
+        void RefreshForUrlKind()
+        {
+            bool isUrl = CurrentProfileIsUrl();
+            foreach (Control c in pageCmd.Controls)
+                c.Visible = !isUrl || c == _argsLabel || c == _argsBox || c == _argsHintLabel;
+            if (isUrl)
+            {
+                _argsLabel.Text = "URL";
+                _argsHintLabel.Text = "The URL to open in the in-app preview — e.g. https://localhost:5001";
+            }
+            _dirBox.Enabled = !isUrl;   // working directory is irrelevant for URL
+        }
 
         // Shell — chooses cmd vs PowerShell for the setup steps + command.
         // Drives both the launcher and the setup-step syntax/chips below.
@@ -583,6 +602,35 @@ class ShortcutEditForm : Form
         y = topPad;
 
         y = AddSection("INTEGRATION", y);
+
+        var keepRunningCaption = new Label
+        {
+            Text = "Keep running on Stop All",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            AutoSize = true,
+            Location = new Point(pad, y + 4),
+            BackColor = Color.Transparent,
+        };
+        _host.Controls.Add(keepRunningCaption);
+        _keepRunningToggle = new ToggleSwitch(theme)
+        {
+            Checked = existing?.ExcludeFromStopAll ?? false,
+            Location = new Point(inputX, y + 2),
+        };
+        _host.Controls.Add(_keepRunningToggle);
+        var keepRunningHint = new Label
+        {
+            Text = "Consolidated Launcher's “Stop All” skips this (for always-on support tools). The row’s ■ still stops it.",
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = theme.TextSecondary,
+            AutoSize = false,
+            Size = new Size(inputW, 30),
+            Location = new Point(inputX + _keepRunningToggle.Width + 12, y + 4),
+            BackColor = Color.Transparent,
+        };
+        _host.Controls.Add(keepRunningHint);
+        y += 42;
 
         var adminCaption = new Label
         {
@@ -876,6 +924,9 @@ class ShortcutEditForm : Form
         _autoLoginToggle.CheckedChanged += (_, _) => RefreshAutoLoginEnabled();
         RefreshAutoLoginEnabled();
 
+        // Apply URL-kind field/tab visibility once everything is built.
+        RefreshForUrlKind();
+
         // ------------------------------------------------------- Form-level chrome
         int btnRowY = ClientSize.Height - 46;
         _validationLabel = new Label
@@ -940,6 +991,14 @@ class ShortcutEditForm : Form
             deleteBtn.Click += (_, _) => TryDelete();
             Controls.Add(deleteBtn);
         }
+    }
+
+    /// <summary>True when the currently-selected launch profile is the URL kind.</summary>
+    private bool CurrentProfileIsUrl()
+    {
+        int i = _launchProfileCombo.SelectedIndex;
+        return i >= 0 && i < LaunchProfiles.All.Length
+            && LaunchProfiles.All[i].Kind == LaunchKind.Url;
     }
 
     private int AddSection(string text, int y)
@@ -1018,15 +1077,33 @@ class ShortcutEditForm : Form
             _validationLabel.Text = "Name is required.";
             return;
         }
-        if (string.IsNullOrWhiteSpace(_dirBox.Text))
+        if (CurrentProfileIsUrl())
         {
-            _validationLabel.Text = "Working directory is required.";
-            return;
+            var url = _argsBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                _validationLabel.Text = "URL is required.";
+                return;
+            }
+            if (!(Uri.TryCreate(url, UriKind.Absolute, out var u)
+                  && (u.Scheme == Uri.UriSchemeHttp || u.Scheme == Uri.UriSchemeHttps)))
+            {
+                _validationLabel.Text = "Enter a valid http(s) URL (e.g. https://localhost:5001).";
+                return;
+            }
         }
-        if (!Directory.Exists(_dirBox.Text.Trim()))
+        else
         {
-            _validationLabel.Text = "Working directory doesn't exist.";
-            return;
+            if (string.IsNullOrWhiteSpace(_dirBox.Text))
+            {
+                _validationLabel.Text = "Working directory is required.";
+                return;
+            }
+            if (!Directory.Exists(_dirBox.Text.Trim()))
+            {
+                _validationLabel.Text = "Working directory doesn't exist.";
+                return;
+            }
         }
         if (_desktopShortcutToggle.Checked
             && string.IsNullOrWhiteSpace(_desktopShortcutNameBox.Text))
@@ -1061,6 +1138,7 @@ class ShortcutEditForm : Form
             PostLaunchSendKeys = _sendKeysBox.Text,
             PostLaunchDelayMs = (int)_sendKeysDelayBox.Value,
             RequireAdmin = _adminToggle.Checked,
+            ExcludeFromStopAll = _keepRunningToggle.Checked,
             ShowInExplorerContextMenu = _explorerMenuToggle.Checked,
             AddToDesktop = _desktopShortcutToggle.Checked,
             DesktopShortcutName = _desktopShortcutNameBox.Text.Trim(),

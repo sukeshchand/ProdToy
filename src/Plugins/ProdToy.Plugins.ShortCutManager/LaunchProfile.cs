@@ -1,6 +1,19 @@
 namespace ProdToy.Plugins.ShortCutManager;
 
 /// <summary>
+/// How a profile launches:
+///   <see cref="Terminal"/> → run <see cref="LaunchProfile.Command"/> + args in a
+///   terminal / captured process (the historical behavior).
+///   <see cref="Url"/> → no command at all; the shortcut just opens a URL (the
+///   <see cref="Shortcut.Args"/> field holds the URL) in an in-app preview.
+/// </summary>
+enum LaunchKind
+{
+    Terminal,
+    Url,
+}
+
+/// <summary>
 /// A "kind" of shortcut — the binary to invoke, its default args, and the
 /// hint text shown in the edit form. Lets the feature be generic instead of
 /// tightly coupled to <c>claude</c>.
@@ -9,6 +22,9 @@ sealed record LaunchProfile
 {
     public required string Id { get; init; }
     public required string DisplayName { get; init; }
+
+    /// <summary>Terminal command (default) vs a URL-opening shortcut.</summary>
+    public LaunchKind Kind { get; init; } = LaunchKind.Terminal;
 
     /// <summary>
     /// Binary invoked by the launcher (e.g. "claude", "npm", "npx", "dotnet").
@@ -98,6 +114,15 @@ static class LaunchProfiles
             Command = "",
             DefaultArgs = "",
             ArgsHint = "Full command line (no fixed prefix) — e.g. `python -m http.server 8080`",
+        },
+        new LaunchProfile
+        {
+            Id = "url",
+            DisplayName = "Open URL (browser)",
+            Command = "",
+            Kind = LaunchKind.Url,
+            DefaultArgs = "",
+            ArgsHint = "The URL to open in the in-app preview — e.g. https://localhost:5001",
         },
     };
 

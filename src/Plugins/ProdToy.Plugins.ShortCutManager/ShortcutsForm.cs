@@ -1034,6 +1034,28 @@ class ShortcutsForm : Form
     {
         var cur = ShortcutStore.Get(id);
         if (cur == null) return;
+
+        // URL shortcut → open in the in-app WebView2 preview (not a terminal).
+        if (ShortcutLauncher.IsUrl(cur))
+        {
+            var url = (cur.Args ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                MessageBox.Show(this, "This shortcut has no URL set.", "Open URL",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            UrlPreviewForm.OpenOrFocus(_theme, cur.Id,
+                string.IsNullOrWhiteSpace(cur.Name) ? "Preview" : cur.Name, url);
+            ShortcutStore.RecordLaunch(cur.Id);
+            AutoLoginRunner.RunInBackground(cur);   // no-op unless enabled + HomeUrl set
+            var bumped = ShortcutStore.Get(id);
+            if (bumped != null)
+                foreach (Control c in _listPanel.Controls)
+                    if (c is ShortcutRow r && r.ShortcutId == id) r.UpdateEntry(bumped);
+            return;
+        }
+
         var result = ShortcutLauncher.Launch(cur);
         if (!result.Ok)
         {
