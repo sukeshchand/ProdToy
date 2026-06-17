@@ -23,7 +23,7 @@ sealed class ConsolidatedBrowserTabs : UserControl
     private readonly Label _emptyHint;
     private readonly Dictionary<string, TabPage> _tabsByKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<TabPage, string> _keyByTab = new();
-    private readonly Dictionary<string, ConsolidatedBrowserPane> _panesByKey = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SplitBrowserView> _viewsByKey = new(StringComparer.OrdinalIgnoreCase);
 
     public ConsolidatedBrowserTabs(PluginTheme theme)
     {
@@ -51,31 +51,54 @@ sealed class ConsolidatedBrowserTabs : UserControl
             BackColor = theme.BgDark,
         };
 
-        // Top strip with a "+ New tab" button so the user can open a blank tab and
-        // browse any URL — not just shortcut Status/Home URLs.
+        // Top strip: "+ New tab" (open a blank tab to browse any URL) plus Split /
+        // Unsplit, which divide the current tab into up to 5 side-by-side panes.
         var topBar = new Panel { Dock = DockStyle.Top, Height = 30, BackColor = theme.BgHeader };
-        var newTabBtn = new Button
+        var tip = new ToolTip();
+        int bx = 6;
+        Button MakeBarButton(string text, int width, string tooltip, Action onClick)
         {
-            Text = "+ New tab",
-            FlatStyle = FlatStyle.Flat,
-            BackColor = theme.BgDark,
-            ForeColor = theme.TextPrimary,
-            Font = new Font("Segoe UI", 8.5F),
-            Size = new Size(86, 22),
-            Location = new Point(6, 4),
-            Cursor = Cursors.Hand,
-            TabStop = false,
-        };
-        newTabBtn.FlatAppearance.BorderColor = theme.Border;
-        newTabBtn.Click += (_, _) => OpenAdHocTab();
-        topBar.Controls.Add(newTabBtn);
-        var newTabTip = new ToolTip();
-        newTabTip.SetToolTip(newTabBtn, "Open a blank preview tab — type a URL in the address bar to browse.");
+            var b = new Button
+            {
+                Text = text,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = theme.BgDark,
+                ForeColor = theme.TextPrimary,
+                Font = new Font("Segoe UI", 8.5F),
+                Size = new Size(width, 22),
+                Location = new Point(bx, 4),
+                Cursor = Cursors.Hand,
+                TabStop = false,
+            };
+            b.FlatAppearance.BorderColor = theme.Border;
+            b.Click += (_, _) => onClick();
+            tip.SetToolTip(b, tooltip);
+            topBar.Controls.Add(b);
+            bx += width + 6;
+            return b;
+        }
+
+        MakeBarButton("+ New tab", 86, "Open a blank preview tab — type a URL in the address bar to browse.", OpenAdHocTab);
+        MakeBarButton("⊞ Split", 70, "Split the current tab into another pane (up to 5), each with its own address bar. Close a split with the ✕ on its toolbar.", SplitCurrent);
 
         // Fill controls first (low z), then the docked top bar so it reserves the top.
         Controls.Add(_tabs);
         Controls.Add(_emptyHint);
         Controls.Add(topBar);
+    }
+
+    private SplitBrowserView? CurrentView() =>
+        _tabs.SelectedTab != null
+        && _keyByTab.TryGetValue(_tabs.SelectedTab, out var key)
+        && _viewsByKey.TryGetValue(key, out var v) ? v : null;
+
+    /// <summary>Split the current tab into one more pane (opening a new tab first if
+    /// none is open). Caps at <see cref="SplitBrowserView.MaxPanes"/>.</summary>
+    private void SplitCurrent()
+    {
+        var view = CurrentView();
+        if (view == null) { OpenAdHocTab(); view = CurrentView(); }
+        view?.AddPane("about:blank");
     }
 
     private int _adhocCounter;
@@ -103,12 +126,14 @@ sealed class ConsolidatedBrowserTabs : UserControl
         }
 
         var page = new TabPage(displayName) { BackColor = _theme.BgDark };
-        var pane = new ConsolidatedBrowserPane(_theme) { Dock = DockStyle.Fill };
-        page.Controls.Add(pane);
+        // A SplitBrowserView starts as one pane (navigated to url) and can split
+        // into up to 5 side-by-side panes via the toolbar.
+        var view = new SplitBrowserView(_theme, url) { Dock = DockStyle.Fill };
+        page.Controls.Add(view);
         _tabs.TabPages.Add(page);
         _tabsByKey[key] = page;
         _keyByTab[page] = key;
-        _panesByKey[key] = pane;
+        _viewsByKey[key] = view;
 
         if (!_tabs.Visible)
         {
@@ -117,9 +142,6 @@ sealed class ConsolidatedBrowserTabs : UserControl
         }
 
         _tabs.SelectedTab = page;
-        // Empty URL → open the pane on a blank page so the user can type a URL
-        // in the address bar (used when a shortcut has no Status URL configured).
-        _ = pane.NavigateAsync(string.IsNullOrWhiteSpace(url) ? "about:blank" : url);
     }
 
     /// <summary>Close a shortcut's browser tab.</summary>
@@ -127,10 +149,10 @@ sealed class ConsolidatedBrowserTabs : UserControl
     {
         if (!_tabsByKey.TryGetValue(key, out var page)) return;
 
-        if (_panesByKey.TryGetValue(key, out var pane))
+        if (_viewsByKey.TryGetValue(key, out var view))
         {
-            try { pane.Dispose(); } catch { }
-            _panesByKey.Remove(key);
+            try { view.Dispose(); } catch { }
+            _viewsByKey.Remove(key);
         }
         _tabs.TabPages.Remove(page);
         _tabsByKey.Remove(key);
@@ -215,6 +237,7 @@ sealed class ConsolidatedBrowserPane : UserControl
     private static CoreWebView2Environment? s_sharedEnvironment;
     private static readonly SemaphoreSlim s_envInitLock = new(1, 1);
 
+    private readonly Panel _toolbar;
     private readonly WebView2 _webView;
     private readonly Button _backBtn;
     private readonly Button _forwardBtn;
@@ -222,10 +245,14 @@ sealed class ConsolidatedBrowserPane : UserControl
     private readonly TextBox _urlBox;
     private readonly LinkLabel _openExternalLink;
     private readonly Button _devToolsBtn;
+    private readonly Button _closeBtn;
     private readonly Label _statusLabel;
 
     private string? _currentUrl;
     private bool _ready;
+
+    /// <summary>Raised when the pane's ✕ (close split) button is clicked.</summary>
+    public event Action? CloseRequested;
 
     public ConsolidatedBrowserPane(PluginTheme theme)
     {
@@ -235,7 +262,7 @@ sealed class ConsolidatedBrowserPane : UserControl
 
         _webView = new WebView2 { Dock = DockStyle.Fill };
 
-        var toolbar = new Panel { Dock = DockStyle.Top, Height = toolbarHeight, BackColor = theme.BgHeader };
+        _toolbar = new Panel { Dock = DockStyle.Top, Height = toolbarHeight, BackColor = theme.BgHeader };
 
         _backBtn = MakeNavButton("←", "Back", theme);
         _backBtn.Location = new Point(4, 4);
@@ -301,20 +328,34 @@ sealed class ConsolidatedBrowserPane : UserControl
             catch { }
         };
 
-        toolbar.Resize += (_, _) =>
+        // ✕ Close-split button (hidden until this pane is one of several splits).
+        _closeBtn = new Button
         {
-            _openExternalLink.Location = new Point(toolbar.Width - _openExternalLink.PreferredWidth - 8, 8);
-            _devToolsBtn.Location = new Point(_openExternalLink.Left - _devToolsBtn.Width - 10, 5);
-            var urlRight = _devToolsBtn.Left - 8;
-            _urlBox.Width = Math.Max(50, urlRight - _urlBox.Left);
+            Text = "✕",
+            Size = new Size(24, 22),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.BgHeader,
+            ForeColor = theme.TextSecondary,
+            Font = new Font("Segoe UI", 8.5F),
+            Cursor = Cursors.Hand,
+            TabStop = false,
+            Visible = false,
         };
+        _closeBtn.FlatAppearance.BorderSize = 0;
+        _closeBtn.FlatAppearance.MouseOverBackColor = theme.ErrorBg;
+        _closeBtn.Click += (_, _) => CloseRequested?.Invoke();
+        var closeTip = new ToolTip();
+        closeTip.SetToolTip(_closeBtn, "Close this split");
 
-        toolbar.Controls.Add(_backBtn);
-        toolbar.Controls.Add(_forwardBtn);
-        toolbar.Controls.Add(_reloadBtn);
-        toolbar.Controls.Add(_urlBox);
-        toolbar.Controls.Add(_devToolsBtn);
-        toolbar.Controls.Add(_openExternalLink);
+        _toolbar.Resize += (_, _) => LayoutToolbar();
+
+        _toolbar.Controls.Add(_backBtn);
+        _toolbar.Controls.Add(_forwardBtn);
+        _toolbar.Controls.Add(_reloadBtn);
+        _toolbar.Controls.Add(_urlBox);
+        _toolbar.Controls.Add(_devToolsBtn);
+        _toolbar.Controls.Add(_openExternalLink);
+        _toolbar.Controls.Add(_closeBtn);
 
         _statusLabel = new Label
         {
@@ -330,9 +371,34 @@ sealed class ConsolidatedBrowserPane : UserControl
         // Stack order: Fill child added first so the Top toolbar sits above.
         Controls.Add(_webView);
         Controls.Add(_statusLabel);
-        Controls.Add(toolbar);
+        Controls.Add(_toolbar);
 
         UpdateNavButtonsEnabled(false, false);
+    }
+
+    /// <summary>Position the right-aligned toolbar controls, leaving room for the
+    /// ✕ close button when it's shown.</summary>
+    private void LayoutToolbar()
+    {
+        int right = _toolbar.Width - 6;
+        if (_closeBtn.Visible)
+        {
+            _closeBtn.Location = new Point(right - _closeBtn.Width, 5);
+            right = _closeBtn.Left - 6;
+        }
+        _openExternalLink.Location = new Point(right - _openExternalLink.PreferredWidth - 2, 8);
+        _devToolsBtn.Location = new Point(_openExternalLink.Left - _devToolsBtn.Width - 10, 5);
+        int urlRight = _devToolsBtn.Left - 8;
+        _urlBox.Width = Math.Max(50, urlRight - _urlBox.Left);
+    }
+
+    /// <summary>Show/hide the ✕ close-split button (only meaningful when this pane
+    /// is one of several splits).</summary>
+    public void SetCloseButtonVisible(bool visible)
+    {
+        if (_closeBtn.Visible == visible) return;
+        _closeBtn.Visible = visible;
+        LayoutToolbar();
     }
 
     public string? CurrentUrl => _currentUrl;
