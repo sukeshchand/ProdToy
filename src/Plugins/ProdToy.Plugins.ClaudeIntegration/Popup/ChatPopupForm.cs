@@ -54,6 +54,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
     private readonly Label _copyMdLink;
     private readonly Label _copyPreviewLink;
     private readonly Label _copyHtmlLink;
+    private readonly Label _openHtmlLink;
 
     // Content area.
     private readonly Panel _webViewContainer;
@@ -292,11 +293,14 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _copyPreviewLink.Click += (_, _) => CopyAs("preview");
         _copyHtmlLink = CreateCopyLink("Copy HTML");
         _copyHtmlLink.Click += (_, _) => CopyAs("html");
+        _openHtmlLink = CreateCopyLink("Open as HTML page");
+        _openHtmlLink.Click += (_, _) => OpenAsHtmlPage();
 
         _footerPanel.Controls.Add(_separator);
         _footerPanel.Controls.Add(_copyMdLink);
         _footerPanel.Controls.Add(_copyPreviewLink);
         _footerPanel.Controls.Add(_copyHtmlLink);
+        _footerPanel.Controls.Add(_openHtmlLink);
         _footerPanel.Controls.Add(_okButton);
         _footerPanel.Controls.Add(_snoozeCheckBox);
 
@@ -893,6 +897,50 @@ sealed class ChatPopupForm : Form, IPluginPopup
         }
     }
 
+    /// <summary>Render the current response to a full themed HTML document, save it
+    /// to a temp file under %TEMP%\ProdToy, and open it in the default browser.</summary>
+    private void OpenAsHtmlPage()
+    {
+        if (string.IsNullOrEmpty(_lastMessage)) return;
+        string originalText = _openHtmlLink.Text;
+        try
+        {
+            string html = RenderHtml(_lastMessage);
+            string dir = Path.Combine(Path.GetTempPath(), "ProdToy");
+            Directory.CreateDirectory(dir);
+            string file = Path.Combine(dir, $"claude-{DateTime.Now:yyyyMMdd-HHmmss-fff}.html");
+            File.WriteAllText(file, html, System.Text.Encoding.UTF8);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(file) { UseShellExecute = true });
+
+            _openHtmlLink.Text = "✓ Opened";
+            _openHtmlLink.ForeColor = _theme.SuccessColor;
+            var resetTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+            resetTimer.Tick += (_, _) =>
+            {
+                _openHtmlLink.Text = originalText;
+                _openHtmlLink.ForeColor = _theme.TextSecondary;
+                resetTimer.Stop();
+                resetTimer.Dispose();
+            };
+            resetTimer.Start();
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"ChatPopup OpenAsHtmlPage failed: {ex.Message}");
+            _openHtmlLink.Text = "Failed";
+            _openHtmlLink.ForeColor = _theme.ErrorColor;
+            var resetTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+            resetTimer.Tick += (_, _) =>
+            {
+                _openHtmlLink.Text = originalText;
+                _openHtmlLink.ForeColor = _theme.TextSecondary;
+                resetTimer.Stop();
+                resetTimer.Dispose();
+            };
+            resetTimer.Start();
+        }
+    }
+
     private static string CreateHtmlClipboardFormat(string htmlBody)
     {
         string startFrag = "<!--StartFragment-->";
@@ -1030,12 +1078,14 @@ sealed class ChatPopupForm : Form, IPluginPopup
 
         // Row 1: Copy links, centered above the OK button.
         int linkSpacing = 16;
-        int totalLinkWidth = _copyMdLink.PreferredWidth + _copyPreviewLink.PreferredWidth + _copyHtmlLink.PreferredWidth + linkSpacing * 2;
+        int totalLinkWidth = _copyMdLink.PreferredWidth + _copyPreviewLink.PreferredWidth
+            + _copyHtmlLink.PreferredWidth + _openHtmlLink.PreferredWidth + linkSpacing * 3;
         int linkStartX = (footerW - totalLinkWidth) / 2;
         int linkY = 8;
         _copyMdLink.Location = new Point(linkStartX, linkY);
         _copyPreviewLink.Location = new Point(_copyMdLink.Right + linkSpacing, linkY);
         _copyHtmlLink.Location = new Point(_copyPreviewLink.Right + linkSpacing, linkY);
+        _openHtmlLink.Location = new Point(_copyHtmlLink.Right + linkSpacing, linkY);
 
         // Row 2: OK button, centered.
         _okButton.Location = new Point((footerW - _okButton.Width) / 2, linkY + _copyMdLink.Height + 6);
@@ -1207,7 +1257,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
 
         _snoozeCheckBox.ForeColor = theme.TextSecondary;
 
-        foreach (var copyLink in new[] { _copyMdLink, _copyPreviewLink, _copyHtmlLink })
+        foreach (var copyLink in new[] { _copyMdLink, _copyPreviewLink, _copyHtmlLink, _openHtmlLink })
             copyLink.ForeColor = theme.TextSecondary;
 
         _prevButton.BackColor = theme.PrimaryDim;
