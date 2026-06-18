@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using ProdToy.Sdk;
@@ -215,7 +216,14 @@ sealed class ConsolidatedBrowserTabs : UserControl
             if (GetCloseRect(bounds).Contains(e.Location))
             {
                 var page = _tabs.TabPages[i];
-                if (_keyByTab.TryGetValue(page, out var key)) CloseTab(key);
+                if (_keyByTab.TryGetValue(page, out var key))
+                {
+                    var res = MessageBox.Show(FindForm() ?? (IWin32Window)this,
+                        $"Close the preview tab “{page.Text}”?",
+                        "Close tab", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                        MessageBoxDefaultButton.Button2);
+                    if (res == DialogResult.Yes) CloseTab(key);
+                }
                 return;
             }
         }
@@ -247,15 +255,35 @@ sealed class ConsolidatedBrowserPane : UserControl
     private readonly Button _devToolsBtn;
     private readonly Button _closeBtn;
     private readonly Label _statusLabel;
+    private readonly Panel _netBar;
+    private readonly Label _netLabel;
+    private readonly Panel _progressTrack;
+    private readonly Panel _progressFill;
+    private readonly Button _detailsBtn;
+    private readonly PluginTheme _theme;
 
     private string? _currentUrl;
     private bool _ready;
+
+    // Live network telemetry for the current navigation (via DevTools Protocol).
+    private bool _cdpEnabled;
+    private bool _loading;
+    private int _reqStarted, _finished, _failed, _cachedCount, _mainStatus;
+    private long _downloadedBytes;
+    private double _navStartTs;
+    private readonly HashSet<string> _cachedIds = new();
+    private readonly Stopwatch _navWatch = new();
+    // Per-request log for the current navigation (drives the Details window).
+    private readonly List<NetworkResource> _resources = new();
+    private readonly Dictionary<string, NetworkResource> _resById = new();
+    private NetworkDetailsForm? _detailsForm;
 
     /// <summary>Raised when the pane's ✕ (close split) button is clicked.</summary>
     public event Action? CloseRequested;
 
     public ConsolidatedBrowserPane(PluginTheme theme)
     {
+        _theme = theme;
         BackColor = theme.BgDark;
 
         const int toolbarHeight = 32;
@@ -368,12 +396,70 @@ sealed class ConsolidatedBrowserPane : UserControl
             Visible = true,
         };
 
-        // Stack order: Fill child added first so the Top toolbar sits above.
+        // Status bar (just under the address bar): live loading/network telemetry
+        // — files, bytes, cache — plus a progress bar and a "Details" button.
+        _netBar = new Panel { Dock = DockStyle.Top, Height = 24, BackColor = theme.BgHeader };
+        _netLabel = new Label
+        {
+            Text = "",
+            ForeColor = theme.TextSecondary,
+            BackColor = theme.BgHeader,
+            Font = new Font("Segoe UI", 8F),
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+        };
+        _progressTrack = new Panel { BackColor = theme.BgDark, Visible = false };
+        _progressFill = new Panel { BackColor = theme.Primary, Location = new Point(0, 0) };
+        _progressTrack.Controls.Add(_progressFill);
+        _detailsBtn = new Button
+        {
+            Text = "Details ▸",
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.BgDark,
+            ForeColor = theme.TextPrimary,
+            Font = new Font("Segoe UI", 7.5F),
+            Size = new Size(72, 18),
+            Cursor = Cursors.Hand,
+            TabStop = false,
+        };
+        _detailsBtn.FlatAppearance.BorderColor = theme.Border;
+        _detailsBtn.Click += (_, _) => OpenNetworkDetails();
+        var detailsTip = new ToolTip();
+        detailsTip.SetToolTip(_detailsBtn, "Show every request that loaded — status, type, size, time (updates live).");
+        _netBar.Controls.Add(_netLabel);
+        _netBar.Controls.Add(_progressTrack);
+        _netBar.Controls.Add(_detailsBtn);
+        _netBar.Resize += (_, _) => LayoutNetBar();
+
+        // Stack order: Fill children first (lowest z), then the status bar (Top),
+        // then the toolbar (Top) last so it docks at the very top, status bar below it.
         Controls.Add(_webView);
         Controls.Add(_statusLabel);
+        Controls.Add(_netBar);
         Controls.Add(_toolbar);
 
         UpdateNavButtonsEnabled(false, false);
+    }
+
+    private void LayoutNetBar()
+    {
+        int h = _netBar.ClientSize.Height;
+        _detailsBtn.Location = new Point(_netBar.ClientSize.Width - _detailsBtn.Width - 6, (h - _detailsBtn.Height) / 2);
+        const int trackW = 110, trackH = 6;
+        _progressTrack.Size = new Size(trackW, trackH);
+        _progressTrack.Location = new Point(_detailsBtn.Left - trackW - 8, (h - trackH) / 2);
+        _netLabel.Location = new Point(8, 0);
+        _netLabel.Size = new Size(Math.Max(20, _progressTrack.Left - 14), h);
+        UpdateProgressFill();
+    }
+
+    private void UpdateProgressFill()
+    {
+        _progressTrack.Visible = _loading;
+        if (!_loading) return;
+        double pct = _reqStarted > 0 ? Math.Min(1.0, _finished / (double)_reqStarted) : 0.05;
+        int w = (int)(_progressTrack.ClientSize.Width * pct);
+        _progressFill.Bounds = new Rectangle(0, 0, w, _progressTrack.ClientSize.Height);
     }
 
     /// <summary>Position the right-aligned toolbar controls, leaving room for the
@@ -428,6 +514,22 @@ sealed class ConsolidatedBrowserPane : UserControl
                     _currentUrl = _webView.CoreWebView2.Source;
                     if (!_urlBox.Focused) _urlBox.Text = _currentUrl ?? string.Empty;
                 };
+                _webView.CoreWebView2.NavigationStarting += (_, e) =>
+                {
+                    if (e.IsRedirected) return;   // same navigation continuing — keep counters
+                    ResetNetStats();
+                    _loading = true;
+                    _navWatch.Restart();
+                    UpdateNetLabel();
+                };
+                _webView.CoreWebView2.NavigationCompleted += (_, e) =>
+                {
+                    _loading = false;
+                    _navWatch.Stop();
+                    try { if (_mainStatus == 0 && e.HttpStatusCode > 0) _mainStatus = e.HttpStatusCode; } catch { }
+                    UpdateNetLabel();
+                };
+                await EnableNetworkTelemetryAsync();
             }
 
             if (IsDisposed || _webView.IsDisposed || _webView.CoreWebView2 is null) return;
@@ -459,6 +561,175 @@ sealed class ConsolidatedBrowserPane : UserControl
                   || u.StartsWith("0.0.0.0")
                   || u.StartsWith("[::1]");
         return (local ? "http://" : "https://") + u;
+    }
+
+    // ─────────────────────── network telemetry (CDP) ───────────────────────
+
+    /// <summary>Subscribe to DevTools-Protocol Network events and enable the Network
+    /// domain so the status bar can show live request count, bytes downloaded, and
+    /// how many resources were served from cache.</summary>
+    private async Task EnableNetworkTelemetryAsync()
+    {
+        if (_cdpEnabled || _webView.CoreWebView2 is null) return;
+        try
+        {
+            WireCdp("Network.requestWillBeSent", OnRequestWillBeSent);
+            WireCdp("Network.responseReceived", OnResponseReceived);
+            WireCdp("Network.loadingFinished", OnLoadingFinished);
+            WireCdp("Network.loadingFailed", OnLoadingFailed);
+            WireCdp("Network.requestServedFromCache", MarkCached);
+            await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Network.enable", "{}");
+            _cdpEnabled = true;
+        }
+        catch (Exception ex) { PluginLog.Warn($"Browser network telemetry init failed: {ex.Message}"); }
+    }
+
+    private void WireCdp(string eventName, Action<JsonElement> handler)
+    {
+        var receiver = _webView.CoreWebView2!.GetDevToolsProtocolEventReceiver(eventName);
+        receiver.DevToolsProtocolEventReceived += (_, e) =>
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(e.ParameterObjectAsJson);
+                handler(doc.RootElement);
+            }
+            catch { /* malformed/partial event — ignore */ }
+        };
+    }
+
+    private static string? Str(JsonElement e, string prop) =>
+        e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static double Ts(JsonElement p) =>
+        p.TryGetProperty("timestamp", out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : 0;
+
+    private NetworkResource? Res(JsonElement p) =>
+        Str(p, "requestId") is string id && _resById.TryGetValue(id, out var r) ? r : null;
+
+    private void OnRequestWillBeSent(JsonElement p)
+    {
+        _reqStarted++;
+        if (Str(p, "requestId") is not string id) return;
+        if (_resById.TryGetValue(id, out var existing))
+        {
+            if (p.TryGetProperty("request", out var rq0)) existing.Url = Str(rq0, "url") ?? existing.Url;
+            return;   // redirect re-uses the id — keep one row
+        }
+        double ts = Ts(p);
+        if (_resources.Count == 0) _navStartTs = ts;
+        var res = new NetworkResource { Id = id, StartTs = ts, State = NetState.Pending, Type = Str(p, "type") ?? "" };
+        if (p.TryGetProperty("request", out var rq))
+        {
+            res.Url = Str(rq, "url") ?? "";
+            res.Method = Str(rq, "method") ?? "";
+        }
+        _resById[id] = res;
+        _resources.Add(res);
+    }
+
+    private void OnResponseReceived(JsonElement p)
+    {
+        if (!p.TryGetProperty("response", out var r)) return;
+        bool cache = r.TryGetProperty("fromDiskCache", out var fc) && fc.ValueKind == JsonValueKind.True;
+        if (cache) MarkCached(p);
+        int status = r.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.Number ? st.GetInt32() : 0;
+        if (_mainStatus == 0 && p.TryGetProperty("type", out var t0) && t0.GetString() == "Document" && status > 0)
+            _mainStatus = status;
+        if (Res(p) is NetworkResource res)
+        {
+            res.Status = status;
+            res.Mime = Str(r, "mimeType") ?? res.Mime;
+            res.Type = Str(p, "type") ?? res.Type;
+            if (cache) res.FromCache = true;
+        }
+    }
+
+    private void OnLoadingFinished(JsonElement p)
+    {
+        _finished++;
+        long len = 0;
+        if (p.TryGetProperty("encodedDataLength", out var el) && el.ValueKind == JsonValueKind.Number)
+            len = (long)el.GetDouble();
+        _downloadedBytes += len;
+        if (Res(p) is NetworkResource res) { res.Bytes = len; res.EndTs = Ts(p); res.State = NetState.Done; }
+        UpdateNetLabel();
+    }
+
+    private void OnLoadingFailed(JsonElement p)
+    {
+        _failed++;
+        if (Res(p) is NetworkResource res) { res.EndTs = Ts(p); res.State = NetState.Failed; }
+        UpdateNetLabel();
+    }
+
+    private void MarkCached(JsonElement p)
+    {
+        if (Str(p, "requestId") is string rid && _cachedIds.Add(rid))
+        {
+            _cachedCount++;
+            if (_resById.TryGetValue(rid, out var res)) res.FromCache = true;
+            UpdateNetLabel();
+        }
+    }
+
+    private void ResetNetStats()
+    {
+        _reqStarted = _finished = _failed = _cachedCount = _mainStatus = 0;
+        _downloadedBytes = 0;
+        _navStartTs = 0;
+        _cachedIds.Clear();
+        _resources.Clear();
+        _resById.Clear();
+    }
+
+    private void UpdateNetLabel()
+    {
+        if (_netLabel.IsDisposed) return;
+        _netLabel.Text = SummaryText();
+        UpdateProgressFill();
+    }
+
+    /// <summary>One-line summary of the current navigation's network activity.</summary>
+    public string SummaryText()
+    {
+        string state = _loading ? "⟳ Loading…" : (_failed > 0 ? "⚠ Done" : "✓ Done");
+        string status = _mainStatus > 0 ? $"  ·  HTTP {_mainStatus}" : "";
+        string files = $"  ·  {_reqStarted} file{(_reqStarted == 1 ? "" : "s")}";
+        string size = $"  ·  {FormatBytes(_downloadedBytes)} downloaded";
+        string cache = _cachedCount > 0 ? $"  ·  {_cachedCount} from cache" : "";
+        string fail = _failed > 0 ? $"  ·  {_failed} failed" : "";
+        string time = (!_loading && _navWatch.ElapsedMilliseconds > 0) ? $"  ·  {_navWatch.Elapsed.TotalSeconds:0.0}s" : "";
+        return $"{state}{status}{files}{size}{cache}{fail}{time}";
+    }
+
+    // ── public surface for the Details window (read on the UI thread) ──
+    public IReadOnlyList<NetworkResource> NetworkSnapshot() => _resources.ToArray();
+    public double NavStartTs => _navStartTs;
+    public bool IsLoading => _loading;
+    public TimeSpan NavElapsed => _navWatch.Elapsed;
+
+    private void OpenNetworkDetails()
+    {
+        if (_detailsForm != null && !_detailsForm.IsDisposed)
+        {
+            if (_detailsForm.WindowState == FormWindowState.Minimized) _detailsForm.WindowState = FormWindowState.Normal;
+            _detailsForm.BringToFront();
+            _detailsForm.Activate();
+            return;
+        }
+        _detailsForm = new NetworkDetailsForm(_theme, this);
+        _detailsForm.Show();
+    }
+
+    internal static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return bytes + " B";
+        double kb = bytes / 1024.0;
+        if (kb < 1024) return kb.ToString("0.0") + " KB";
+        double mb = kb / 1024.0;
+        if (mb < 1024) return mb.ToString("0.00") + " MB";
+        return (mb / 1024.0).ToString("0.00") + " GB";
     }
 
     // ─────────────────────────── DevTools ───────────────────────────
@@ -537,6 +808,7 @@ sealed class ConsolidatedBrowserPane : UserControl
     {
         if (disposing)
         {
+            try { if (_detailsForm is { IsDisposed: false }) _detailsForm.Close(); } catch { }
             try { _webView.Dispose(); } catch { }
         }
         base.Dispose(disposing);

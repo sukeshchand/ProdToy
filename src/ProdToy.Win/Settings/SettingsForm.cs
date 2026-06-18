@@ -784,7 +784,7 @@ class SettingsForm : Form
 
         var logsSizeLabel = new Label
         {
-            Text = $"Logs folder:  {FormatDirectorySize(AppPaths.LogsDir)}",
+            Text = "Logs folder:  calculating…",
             Font = new Font("Segoe UI", 8.5f),
             ForeColor = currentTheme.TextSecondary,
             AutoSize = true,
@@ -796,7 +796,7 @@ class SettingsForm : Form
 
         var dataSizeLabel = new Label
         {
-            Text = $"Data folder:  {FormatDirectorySize(AppPaths.DataDir)}",
+            Text = "Data folder:  calculating…",
             Font = new Font("Segoe UI", 8.5f),
             ForeColor = currentTheme.TextSecondary,
             AutoSize = true,
@@ -805,6 +805,15 @@ class SettingsForm : Form
         };
         _aboutPage.Controls.Add(dataSizeLabel);
         ab += 24;
+
+        // Folder sizes recurse the whole data tree (screenshots, history, 30d logs)
+        // — far too slow to do on the UI thread at construction, so compute off-thread
+        // and fill the labels in when ready (otherwise opening Settings hangs).
+        Shown += (_, _) =>
+        {
+            FillDirectorySizeAsync(logsSizeLabel, "Logs folder:", AppPaths.LogsDir);
+            FillDirectorySizeAsync(dataSizeLabel, "Data folder:", AppPaths.DataDir);
+        };
 
         // --- DOCTOR section ---
         _aboutPage.Controls.Add(CreateSeparator(tp, ab, aboutInner));
@@ -1636,6 +1645,27 @@ class SettingsForm : Form
             Location = new Point(x, y),
             Size = new Size(width, 1),
         };
+    }
+
+    /// <summary>Compute a folder's size off the UI thread (it recurses the whole
+    /// tree) and set the label when done — keeps Settings from hanging on open.</summary>
+    private void FillDirectorySizeAsync(Label label, string prefix, string path)
+    {
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            string size;
+            try { size = FormatDirectorySize(path); }
+            catch { size = "unavailable"; }
+            void Apply() { if (!label.IsDisposed) label.Text = $"{prefix}  {size}"; }
+            try
+            {
+                if (label.IsDisposed) return;
+                if (label.InvokeRequired) label.BeginInvoke((Action)Apply);
+                else Apply();
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        });
     }
 
     private static string FormatDirectorySize(string path)
