@@ -110,7 +110,11 @@ sealed class ConsolidatedLauncherForm : Form
         _folderPath = folderPath;
         _shortcuts = shortcuts;
 
-        Text = $"Consolidated Launcher — {folderPath}";
+        // Folder name first (so it's visible in the truncated taskbar title), and
+        // use just the folder's leaf rather than the full path to keep it short.
+        string folderLeaf = folderPath.TrimEnd('/', '\\').Split('/', '\\').LastOrDefault() ?? folderPath;
+        if (string.IsNullOrWhiteSpace(folderLeaf)) folderLeaf = "Shortcuts";
+        Text = $"{folderLeaf} — Launcher";
         try { Icon = IconHelper.CreateAppIcon(theme.Primary); } catch { /* keep default */ }
         FormBorderStyle = FormBorderStyle.Sizable;
         StartPosition = FormStartPosition.CenterScreen;

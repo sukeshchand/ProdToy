@@ -371,7 +371,14 @@ sealed class ConsolidatedBrowserPane : UserControl
         };
         _closeBtn.FlatAppearance.BorderSize = 0;
         _closeBtn.FlatAppearance.MouseOverBackColor = theme.ErrorBg;
-        _closeBtn.Click += (_, _) => CloseRequested?.Invoke();
+        _closeBtn.Click += (_, _) =>
+        {
+            var res = MessageBox.Show(FindForm() ?? (IWin32Window)this,
+                "Close this split pane?",
+                "Close split", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2);
+            if (res == DialogResult.Yes) CloseRequested?.Invoke();
+        };
         var closeTip = new ToolTip();
         closeTip.SetToolTip(_closeBtn, "Close this split");
 
