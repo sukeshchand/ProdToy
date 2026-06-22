@@ -283,6 +283,8 @@ class ShortcutEditForm : Form
         };
         _host.Controls.Add(chipPanel);
         RebuildArgsChips(chipPanel, initialProfile, theme);
+        // Keep the chip highlight/tick in sync when the args are edited directly.
+        _argsBox.TextChanged += (_, _) => RefreshArgsChipStates(chipPanel);
         y += 68;
 
         // When the profile changes, update the label + hint immediately. The
@@ -1271,6 +1273,7 @@ class ShortcutEditForm : Form
             var chip = new RoundedButton
             {
                 Text = token,
+                Tag = token,
                 Font = new Font("Consolas", 9f),
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
@@ -1286,22 +1289,46 @@ class ShortcutEditForm : Form
             string captured = token;
             chip.Click += (_, _) =>
             {
-                var current = _argsBox.Text ?? "";
-                if (string.IsNullOrWhiteSpace(current))
-                {
-                    _argsBox.Text = captured;
-                }
-                else
-                {
-                    var existingTokens = current.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    if (Array.IndexOf(existingTokens, captured) >= 0) return;
-                    _argsBox.Text = current.TrimEnd() + " " + captured;
-                }
+                // Toggle: add the token if missing, remove it if already present.
+                _argsBox.Text = ToggleArgsToken(_argsBox.Text, captured);
                 _argsBox.Focus();
                 _argsBox.SelectionStart = _argsBox.Text.Length;
+                RefreshArgsChipStates(panel);
             };
             panel.Controls.Add(chip);
         }
+        RefreshArgsChipStates(panel);
+    }
+
+    /// <summary>Highlight (with a ✓) the suggestion chips whose token is already in
+    /// the args, so the user can see at a glance what's applied.</summary>
+    private void RefreshArgsChipStates(FlowLayoutPanel panel)
+    {
+        foreach (Control c in panel.Controls)
+        {
+            if (c is not RoundedButton chip || chip.Tag is not string token) continue;
+            bool active = ArgsHasToken(_argsBox.Text, token);
+            chip.Text = active ? "✓ " + token : token;
+            chip.BackColor = active ? _theme.Primary : _theme.PrimaryDim;
+            chip.ForeColor = active ? Color.White : _theme.TextPrimary;
+        }
+    }
+
+    private static bool ArgsHasToken(string? args, string token)
+    {
+        string norm = " " + string.Join(" ", (args ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)) + " ";
+        return norm.Contains(" " + token.Trim() + " ");
+    }
+
+    /// <summary>Add the token if absent, remove its (possibly multi-word) run if present.</summary>
+    private static string ToggleArgsToken(string? args, string token)
+    {
+        string norm = string.Join(" ", (args ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        string t = token.Trim();
+        string padded = " " + norm + " ";
+        if (padded.Contains(" " + t + " "))
+            return string.Join(" ", padded.Replace(" " + t + " ", " ").Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return norm.Length == 0 ? t : norm + " " + t;
     }
 
     private LaunchShell CurrentShell() =>
