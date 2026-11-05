@@ -32,7 +32,11 @@ record HistoryIndex(
     string SessionId = "",
     string Cwd = "",
     string EnvId = "",
-    string MachineName = "");
+    string MachineName = "",
+    string Preview = "");
+
+/// <summary>What <see cref="ChatHistory.SaveResponse"/> stored, and where.</summary>
+record SavedResponse(HistoryIndex Index, HistoryEntry Entry);
 
 /// <summary>
 /// Claude chat history owned by the ClaudeIntegration plugin.
@@ -53,6 +57,10 @@ sealed class ChatHistory
     private readonly string _machineName;
     private readonly object _lock = new();
     private List<HistoryIndex>? _cachedIndex;
+    private readonly Dictionary<string, DateTime> _seenFiles = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>How much of a question a tree row keeps.</summary>
+    private const int PreviewLength = 80;
 
     public ChatHistory(string pluginDataDirectory, Func<bool> isEnabledGetter, string envId, string machineName)
     {
@@ -100,12 +108,13 @@ sealed class ChatHistory
                 "ProdToy", "", question.Trim(), NotificationType.Pending,
                 now, sessionId, cwd, now, _envId, _machineName));
             WriteDay(DateTime.Now, entries);
+            PatchCache(ToIndex(entries[^1], entries.Count - 1));
         }
     }
 
-    public void SaveResponse(string title, string message, string type, string sessionId = "", string cwd = "")
+    public SavedResponse? SaveResponse(string title, string message, string type, string sessionId = "", string cwd = "")
     {
-        if (!IsEnabled) return;
+        if (!IsEnabled) return null;
 
         lock (_lock)
         {
@@ -149,15 +158,45 @@ sealed class ChatHistory
             {
                 entries.Add(new HistoryEntry(
                     title, message, "", type, DateTime.Now, sessionId, cwd, default, _envId, _machineName));
+                pendingIdx = entries.Count - 1;
             }
 
             WriteDay(DateTime.Now, entries);
+            var index = ToIndex(entries[pendingIdx], pendingIdx);
+            PatchCache(index);
+            return new SavedResponse(index, entries[pendingIdx]);
         }
+    }
+
+    private HistoryIndex ToIndex(HistoryEntry e, int position) => new(
+        e.Title, e.Type, e.Timestamp, GetDayFile(e.Timestamp), position, e.SessionId, e.Cwd, _envId, _machineName, PreviewOf(e));
+
+    /// <summary>A row's one line: the first words of the question, else of the reply, else the title.</summary>
+    private static string PreviewOf(HistoryEntry e)
+    {
+        string text = !string.IsNullOrWhiteSpace(e.Question) ? e.Question
+            : !string.IsNullOrWhiteSpace(e.Message) ? e.Message
+            : e.Title;
+        var line = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return line.Length > PreviewLength ? line[..PreviewLength] : line;
+    }
+
+    /// <summary>Keeps the cached index right after a write, so a write never costs a read of every day file.</summary>
+    private void PatchCache(HistoryIndex item)
+    {
+        if (_cachedIndex == null) return;
+
+        int at = _cachedIndex.FindIndex(i => i.Index == item.Index
+            && string.Equals(i.DayFile, item.DayFile, StringComparison.OrdinalIgnoreCase));
+        if (at >= 0) _cachedIndex.RemoveAt(at);
+
+        int place = _cachedIndex.FindLastIndex(i => i.Timestamp <= item.Timestamp) + 1;
+        _cachedIndex.Insert(place, item);
     }
 
     public HistoryEntry? GetLatest()
     {
-        var index = LoadIndex();
+        var index = SnapshotIndex();
         for (int i = index.Count - 1; i >= 0; i--)
         {
             if (index[i].Type == NotificationType.Pending) continue;
@@ -207,6 +246,46 @@ sealed class ChatHistory
         return results;
     }
 
+    /// <summary>A copy of the whole index, safe to read while a write goes on.</summary>
+    public List<HistoryIndex> SnapshotIndex()
+    {
+        lock (_lock) return LoadIndex().ToList();
+    }
+
+    /// <summary>
+    /// The entries of every day file written since the last look: a second machine's synced files.
+    /// One directory listing, and only changed files are read.
+    /// </summary>
+    public List<HistoryIndex> LoadChangedFiles()
+    {
+        var found = new List<HistoryIndex>();
+        try
+        {
+            if (!Directory.Exists(_historyDir)) return found;
+
+            lock (_lock)
+            {
+                LoadIndex();
+                foreach (var file in Directory.GetFiles(_historyDir, "*.json"))
+                {
+                    var written = File.GetLastWriteTimeUtc(file);
+                    if (_seenFiles.TryGetValue(file, out var seen) && seen == written) continue;
+
+                    _seenFiles[file] = written;
+                    AppendIndexForFile(file, found);
+                }
+
+                foreach (var item in found) PatchCache(item);
+            }
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"Failed to look for changed history files: {ex.Message}");
+        }
+
+        return found;
+    }
+
     public List<HistoryIndex> LoadIndex()
     {
         lock (_lock)
@@ -220,6 +299,7 @@ sealed class ChatHistory
 
                 foreach (var file in Directory.GetFiles(_historyDir, "*.json").OrderBy(f => f))
                 {
+                    _seenFiles[file] = File.GetLastWriteTimeUtc(file);
                     AppendIndexForFile(file, index);
                 }
             }
@@ -253,7 +333,7 @@ sealed class ChatHistory
                 string envId = !string.IsNullOrEmpty(e.EnvId) ? e.EnvId : fileEnvId;
                 target.Add(new HistoryIndex(
                     e.Title, e.Type, e.Timestamp, file, i, e.SessionId, e.Cwd,
-                    envId, e.MachineName));
+                    envId, e.MachineName, PreviewOf(e)));
             }
         }
         catch (Exception ex)
@@ -294,49 +374,13 @@ sealed class ChatHistory
             Directory.CreateDirectory(_historyDir);
             string json = JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(GetDayFile(date), json);
-            _cachedIndex = null;
         }
         catch (Exception ex)
         {
+            _cachedIndex = null;
             PluginLog.Error("Failed to write history", ex);
         }
     }
-
-    public List<HistoryIndex> LoadTodayIndex() => LoadDayIndex(DateTime.Now);
-
-    public List<HistoryIndex> LoadDayIndex(DateTime date)
-    {
-        var index = new List<HistoryIndex>();
-        foreach (var file in EnumerateDayFiles(date))
-            AppendIndexForFile(file, index);
-        return index.OrderBy(i => i.Timestamp).ToList();
-    }
-
-    public List<string> GetTodayDistinctCwd() => GetDistinctCwd(DateTime.Now);
-
-    public List<string> GetDistinctCwd(DateTime date)
-        => LoadDayIndex(date).Where(i => !string.IsNullOrEmpty(i.Cwd))
-            .Select(i => i.Cwd).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-
-    public List<(string SessionId, string Cwd)> GetTodayDistinctSessions()
-        => GetDistinctSessions(DateTime.Now);
-
-    public List<(string SessionId, string Cwd)> GetDistinctSessions(DateTime date)
-        => LoadDayIndex(date).Where(i => !string.IsNullOrEmpty(i.SessionId))
-            .GroupBy(i => i.SessionId)
-            .Select(g => (g.Key, g.First().Cwd))
-            .ToList();
-
-    public List<HistoryIndex> FilterTodayByCwd(string cwd) => FilterByCwd(DateTime.Now, cwd);
-
-    public List<HistoryIndex> FilterByCwd(DateTime date, string cwd)
-        => LoadDayIndex(date).Where(i => string.Equals(i.Cwd, cwd, StringComparison.OrdinalIgnoreCase)).ToList();
-
-    public List<HistoryIndex> FilterTodayBySession(string sessionId)
-        => FilterBySession(DateTime.Now, sessionId);
-
-    public List<HistoryIndex> FilterBySession(DateTime date, string sessionId)
-        => LoadDayIndex(date).Where(i => string.Equals(i.SessionId, sessionId, StringComparison.Ordinal)).ToList();
 
     public List<DateTime> GetAvailableDates()
     {
@@ -361,6 +405,4 @@ sealed class ChatHistory
         }
         return dates.OrderBy(d => d).ToList();
     }
-
-    public void Invalidate() { lock (_lock) { _cachedIndex = null; } }
 }

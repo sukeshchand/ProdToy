@@ -44,7 +44,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
     private readonly RoundedButton _prevButton;
     private readonly RoundedButton _nextButton;
     private readonly Label _navLabel;
-    private readonly RoundedButton _filterButton;
+    private readonly Label _scopeChip;
 
     // Footer: OK + snooze checkbox.
     private readonly Panel _footerPanel;
@@ -59,6 +59,14 @@ sealed class ChatPopupForm : Form, IPluginPopup
     // Content area.
     private readonly Panel _webViewContainer;
     private readonly WebView2 _webView;
+    private readonly Label _loadingLabel;
+
+    // History tree: strip + panel on the left, the rest in the right pane.
+    private readonly Panel _strip;
+    private readonly RoundedButton _treeButton;
+    private readonly HistoryTreePanel _treePanel;
+    private readonly Panel _rightPane;
+    private readonly System.Windows.Forms.Timer _loadingTimer;
 
     private bool _webViewReady;
     private bool _webViewFailed;
@@ -80,28 +88,35 @@ sealed class ChatPopupForm : Form, IPluginPopup
     private Color _accentColor;
     private Color _iconBadgeBg;
 
-    // History navigation state.
-    private int _historyIndex = -1;   // -1 = live/current message
-    private bool _viewingHistory;
-    private string _currentSessionId = "";
-    private FilterMode _filterMode = FilterMode.Cwd;
-    private string _filterValue = "";
-    private List<HistoryIndex>? _filteredIndex;
-    private DateTime _selectedDate = DateTime.Today;
+    // History navigation: the scope is a tree node, its whole subtree the list.
+    private readonly HistoryTree _tree;
+    private HistoryNode? _scope;
+    private string? _itemKey;
+    private int _loadVersion;
+    private bool _treeOpen;
+    private int _treeWidth;
+
+    public const int MinTreeWidth = 220;
+    public const int MaxTreeWidth = 600;
+    private const int StripWidth = 48;
 
     private const int HeaderHeight = 58;
     private const int InfoBarHeight = 72;
     private const int FooterHeight = 112;
 
-    public ChatPopupForm(IPluginContext context, ChatHistory history)
+    public ChatPopupForm(IPluginContext context, ChatHistory history, HistoryTree tree)
     {
         _context = context;
         _host = context.Host;
         _history = history;
+        _tree = tree;
         _theme = _host.CurrentTheme;
         _accentColor = _theme.Primary;
         _iconBadgeBg = _theme.PrimaryDim;
-        _showQuotes = context.LoadSettings<ClaudePluginSettings>().ShowQuotes;
+        var startSettings = context.LoadSettings<ClaudePluginSettings>();
+        _showQuotes = startSettings.ShowQuotes;
+        _treeOpen = startSettings.HistoryTreeOpen;
+        _treeWidth = Math.Clamp(startSettings.HistoryTreeWidth, MinTreeWidth, MaxTreeWidth);
 
         Text = "ProdToy — Claude";
         Icon = IconHelper.CreateAppIcon(_theme.Primary);
@@ -224,25 +239,20 @@ sealed class ChatPopupForm : Form, IPluginPopup
             Visible = false,
         };
 
-        _filterButton = new RoundedButton
+        _scopeChip = new Label
         {
-            Text = "\uE14C",
-            Font = new Font("Segoe MDL2 Assets", 10f),
-            Size = new Size(28, 26),
-            FlatStyle = FlatStyle.Flat,
+            AutoSize = true,
+            Font = new Font("Segoe UI", 8.5f),
             BackColor = _theme.PrimaryDim,
-            ForeColor = _theme.TextSecondary,
-            Cursor = Cursors.Hand,
+            ForeColor = _theme.TextPrimary,
+            Padding = new Padding(8, 3, 8, 3),
             Visible = false,
         };
-        _filterButton.FlatAppearance.BorderSize = 0;
-        _filterButton.FlatAppearance.MouseOverBackColor = _theme.Primary;
-        _filterButton.Click += (_, _) => ShowFilterDialog();
 
         _infoPanel.Controls.AddRange(new Control[]
         {
             _iconLabel, _titleLabel, _subtitleLabel,
-            _prevButton, _navLabel, _nextButton, _filterButton,
+            _prevButton, _navLabel, _nextButton, _scopeChip,
         });
 
         // --- Footer ---
@@ -330,14 +340,60 @@ sealed class ChatPopupForm : Form, IPluginPopup
         };
         _webViewContainer.Controls.Add(_webView);
 
-        ClientSize = new Size(800, 520);
+        _loadingLabel = new Label
+        {
+            Text = "Loading…",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 10f),
+            ForeColor = _theme.TextSecondary,
+            BackColor = _theme.BgDark,
+            Location = new Point(24, 16),
+            Visible = false,
+        };
+        _webViewContainer.Controls.Add(_loadingLabel);
+        _loadingLabel.BringToFront();
+        _loadingTimer = new System.Windows.Forms.Timer { Interval = 120 };
+        _loadingTimer.Tick += (_, _) =>
+        {
+            _loadingTimer.Stop();
+            _loadingLabel.Visible = true;
+        };
+
+        // --- History tree: a strip with its button, then the panel ---
+        _strip = new Panel { Dock = DockStyle.Left, Width = StripWidth, BackColor = _theme.BgHeader };
+        _treeButton = new RoundedButton
+        {
+            Text = "\uE8B7",
+            Font = new Font("Segoe MDL2 Assets", 12f),
+            Size = new Size(36, 36),
+            Location = new Point(6, 12),
+            FlatStyle = FlatStyle.Flat,
+            Cursor = Cursors.Hand,
+            TabStop = false,
+        };
+        _treeButton.FlatAppearance.BorderSize = 0;
+        _treeButton.Click += (_, _) => ToggleTree();
+        _strip.Controls.Add(_treeButton);
+
+        _treePanel = new HistoryTreePanel(_theme) { Width = _treeWidth, Visible = _treeOpen };
+        _treePanel.SetTree(_tree);
+        _treePanel.NodePicked += OnNodePicked;
+
+        _rightPane = new Panel { Dock = DockStyle.Fill, BackColor = _theme.BgDark };
+        _rightPane.Controls.Add(_webViewContainer);
+        _rightPane.Controls.Add(_footerPanel);
+        _rightPane.Controls.Add(_infoPanel);
+
+        ApplyMinimumWidth();
+        ClientSize = new Size(800 + StripWidth + (_treeOpen ? _treeWidth : 0), 520);
+        ApplyTreeButtonColors();
         AcceptButton = _okButton;
 
         // WinForms docks the last-added control first. Fill goes in last visually
         // but first in the Controls collection.
-        Controls.Add(_webViewContainer);
-        Controls.Add(_footerPanel);
-        Controls.Add(_infoPanel);
+        Controls.Add(_rightPane);
+        Controls.Add(_treePanel);
+        Controls.Add(_strip);
         Controls.Add(_headerLine);
         Controls.Add(_headerPanel);
 
@@ -427,14 +483,16 @@ sealed class ChatPopupForm : Form, IPluginPopup
     /// notifications are disabled, snoozed, or the user chose tray-balloon mode.
     /// The Claude plugin's handler calls this directly; there is no generic
     /// notification facility any more.</summary>
-    public void ShowPopup(string title, string message, string type, string sessionId = "", string cwd = "", string machineName = "", bool bypassFilter = false)
+    public void ShowPopup(string title, string message, string type, string sessionId = "", string cwd = "", string machineName = "", bool bypassFilter = false, SavedResponse? saved = null)
     {
-        _lastMessage = message;
-        _lastType = type;
-        _viewingHistory = false;
-        _historyIndex = -1;
-        _filteredIndex = null;
-        _selectedDate = DateTime.Today;
+        // The tree takes every saved item, also one the window stays closed for.
+        string? newItem = null;
+        if (saved != null)
+        {
+            _tree.Add(saved.Index);
+            newItem = HistoryTree.ItemKey(saved.Index);
+            _treePanel.RefreshRows();
+        }
 
         var settings = _context.LoadSettings<ClaudePluginSettings>();
         if (!settings.NotificationsEnabled) return;
@@ -456,59 +514,24 @@ sealed class ChatPopupForm : Form, IPluginPopup
 
         if (!wantPopup) return;
 
-        // Look up the question from plugin history for this session.
-        _history.Invalidate();
-        string question = "";
-        DateTime questionTime = default;
-        if (!string.IsNullOrEmpty(sessionId))
+        _loadVersion++;
+        HideLoading();
+        _lastMessage = message;
+        _lastType = type;
+
+        // A new notification wins: the scope stays if it holds the item, else
+        // the scope moves to the item's own group.
+        if (newItem != null && _tree.IsReady)
         {
-            var sessionEntries = _history.FilterBySession(DateTime.Today, sessionId);
-            if (sessionEntries.Count > 0)
-            {
-                var latest = _history.LoadEntry(sessionEntries[^1]);
-                question = latest?.Question ?? "";
-                questionTime = (latest?.QuestionTimestamp ?? default) == default
-                    ? (latest?.Timestamp ?? default)
-                    : latest!.QuestionTimestamp;
-                if (string.IsNullOrEmpty(cwd)) cwd = latest?.Cwd ?? "";
-            }
-        }
-        else
-        {
-            var latest = _history.GetLatest();
-            question = latest?.Question ?? "";
-            questionTime = (latest?.QuestionTimestamp ?? default) == default
-                ? (latest?.Timestamp ?? default)
-                : latest!.QuestionTimestamp;
-            if (string.IsNullOrEmpty(sessionId)) sessionId = latest?.SessionId ?? "";
-            if (string.IsNullOrEmpty(cwd)) cwd = latest?.Cwd ?? "";
+            EnsureScope();
+            SetScope(_tree.ScopeFor(newItem, _scope), newItem);
+            if (_tree.ItemNode(newItem, _scope) is { } node) _treePanel.Reveal(node);
         }
 
-        // Default grouping is by working folder — a user typically works across
-        // several short-lived sessions inside the same repo, so "folder" groups
-        // their recent notifications more usefully than "session". Session is
-        // the fallback only when no cwd is available on the incoming event.
-        if (!string.IsNullOrEmpty(sessionId)) _currentSessionId = sessionId;
-
-        if (!string.IsNullOrEmpty(cwd))
-        {
-            _filterMode = FilterMode.Cwd;
-            _filterValue = cwd;
-            _filteredIndex = _history.FilterByCwd(_selectedDate, cwd);
-        }
-        else if (!string.IsNullOrEmpty(sessionId))
-        {
-            _filterMode = FilterMode.Session;
-            _filterValue = sessionId;
-            _filteredIndex = _history.FilterBySession(_selectedDate, sessionId);
-        }
-        else
-        {
-            _filterMode = FilterMode.None;
-            _filterValue = "";
-        }
-
-        DisplayMessage(title, message, type, question, sessionId, cwd, questionTime, DateTime.Now, machineName);
+        var entry = saved?.Entry;
+        DateTime questionTime = entry == null ? default
+            : entry.QuestionTimestamp == default ? entry.Timestamp : entry.QuestionTimestamp;
+        DisplayMessage(title, message, type, entry?.Question ?? "", sessionId, cwd, questionTime, DateTime.Now, machineName);
 
         // Fresh funny quote + typewriter animation.
         if (_showQuotes)
@@ -523,6 +546,189 @@ sealed class ChatPopupForm : Form, IPluginPopup
         Show();
         WindowState = FormWindowState.Normal;
         BringToForeground();
+    }
+
+    /// <summary>A manual open (tray, hotkey): the remembered scope and the last viewed item. Nothing is rebuilt.</summary>
+    public void ShowManual()
+    {
+        if (_tree.IsReady)
+        {
+            EnsureScope();
+            if (_itemKey == null || !_tree.Contains(_scope!, _itemKey))
+            {
+                var settings = _context.LoadSettings<ClaudePluginSettings>();
+                var items = _tree.Items(_scope!);
+                var remembered = items.FirstOrDefault(i => HistoryTree.ItemKey(i) == settings.HistoryItemKey);
+                var item = remembered ?? items.FirstOrDefault();
+                if (item != null) LoadItem(item);
+            }
+
+            SyncTree();
+            MergeChangedFiles();
+        }
+
+        Show();
+        WindowState = WindowState == FormWindowState.Minimized ? FormWindowState.Normal : WindowState;
+        BringToForeground();
+    }
+
+    /// <summary>The first build finished: show the rows, and the remembered scope when the window is already up.</summary>
+    public void OnTreeReady()
+    {
+        EnsureScope();
+        _treePanel.RefreshRows();
+        SyncTree();
+    }
+
+    /// <summary>The scope once, from the settings; a saved key that is gone falls back to the root.</summary>
+    private void EnsureScope()
+    {
+        if (_scope != null) return;
+        _scope = _tree.Find(_context.LoadSettings<ClaudePluginSettings>().HistoryScopeKey) ?? _tree.Root;
+    }
+
+    private void SetScope(HistoryNode scope, string itemKey)
+    {
+        _scope = scope;
+        _itemKey = itemKey;
+        RememberScope();
+        SyncTree();
+    }
+
+    private void RememberScope()
+    {
+        var s = _context.LoadSettings<ClaudePluginSettings>();
+        _context.SaveSettings(s with { HistoryScopeKey = _scope?.Key ?? "", HistoryItemKey = _itemKey ?? "" });
+    }
+
+    private void SyncTree()
+    {
+        _treePanel.SetState(_scope, _itemKey);
+        UpdateHistoryNav();
+        PositionControls();
+    }
+
+    /// <summary>A second machine's items: read off the UI thread, added in place.</summary>
+    private async void MergeChangedFiles()
+    {
+        try
+        {
+            var found = await Task.Run(_history.LoadChangedFiles);
+            bool added = false;
+            foreach (var item in found) added |= _tree.Add(item);
+            if (added) SyncTree();
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"Could not merge changed history files: {ex.Message}");
+        }
+    }
+
+    private void OnNodePicked(HistoryNode node)
+    {
+        if (node.IsItem)
+        {
+            _itemKey = HistoryTree.ItemKey(node.Item!);
+            RememberScope();
+            SyncTree();
+            LoadItem(node.Item!);
+            return;
+        }
+
+        _scope = node;
+        var items = _tree.Items(node);
+        bool stays = _itemKey != null && _tree.Contains(node, _itemKey);
+        if (!stays && items.Count > 0)
+        {
+            _itemKey = HistoryTree.ItemKey(items[0]);
+            LoadItem(items[0]);
+        }
+
+        RememberScope();
+        SyncTree();
+    }
+
+    /// <summary>Loads one item off the UI thread; a newer load drops an older one.</summary>
+    private async void LoadItem(HistoryIndex item)
+    {
+        int version = ++_loadVersion;
+        _itemKey = HistoryTree.ItemKey(item);
+        _loadingTimer.Start();
+        try
+        {
+            var (entry, html) = await Task.Run(() =>
+            {
+                var e = _history.LoadEntry(item);
+                return (e, e == null ? "" : RenderHtml(e.Message));
+            });
+            if (version != _loadVersion) return;
+
+            HideLoading();
+            if (entry == null) return;
+
+            var qts = entry.QuestionTimestamp == default ? entry.Timestamp : entry.QuestionTimestamp;
+            DisplayMessage(entry.Title, entry.Message, entry.Type, entry.Question, entry.SessionId, entry.Cwd, qts,
+                entry.Timestamp, entry.MachineName, html);
+        }
+        catch (Exception ex)
+        {
+            if (version == _loadVersion) HideLoading();
+            PluginLog.Warn($"Could not load a history item: {ex.Message}");
+        }
+    }
+
+    private void HideLoading()
+    {
+        _loadingTimer.Stop();
+        _loadingLabel.Visible = false;
+    }
+
+    private void ToggleTree()
+    {
+        SetTreeOpen(!_treeOpen);
+        var s = _context.LoadSettings<ClaudePluginSettings>();
+        _context.SaveSettings(s with { HistoryTreeOpen = _treeOpen });
+    }
+
+    public void SetTreeOpen(bool open)
+    {
+        if (open == _treeOpen) return;
+
+        _treeOpen = open;
+        _treePanel.Visible = open;
+        ApplyTreeButtonColors();
+
+        // The panel takes its room from outside, so the message keeps its width.
+        int width = Width + (open ? _treeWidth : -_treeWidth);
+        ApplyMinimumWidth();
+        if (WindowState == FormWindowState.Normal) Width = width;
+        SyncTree();
+    }
+
+    public void SetTreeWidth(int width)
+    {
+        int next = Math.Clamp(width, MinTreeWidth, MaxTreeWidth);
+        if (_treeOpen && WindowState == FormWindowState.Normal) Width += next - _treeWidth;
+        _treeWidth = next;
+        _treePanel.Width = next;
+        ApplyMinimumWidth();
+    }
+
+    private void ApplyMinimumWidth()
+        => MinimumSize = new Size(480 + StripWidth + (_treeOpen ? _treeWidth : 0), 360);
+
+    private void ApplyTreeButtonColors()
+    {
+        _treeButton.BackColor = _treeOpen ? _theme.Primary : _theme.PrimaryDim;
+        _treeButton.ForeColor = _treeOpen ? Color.White : _theme.TextSecondary;
+        _treeButton.FlatAppearance.MouseOverBackColor = _theme.Primary;
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == (Keys.Alt | Keys.Left)) { NavigateHistory(-1); return true; }
+        if (keyData == (Keys.Alt | Keys.Right)) { NavigateHistory(+1); return true; }
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     private void ShowTrayBalloon(string title, string message, string type)
@@ -695,7 +901,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
     private void DisplayMessage(string title, string message, string type,
         string question = "", string sessionId = "", string cwd = "",
         DateTime questionTime = default, DateTime responseTime = default,
-        string machineName = "")
+        string machineName = "", string? renderedHtml = null)
     {
         _lastMessage = message;
         _lastType = type;
@@ -726,7 +932,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
         string secondLine = $"{dateText} \u00B7 {relative}";
         _subtitleLabel.Text = firstLine + "\n" + secondLine;
 
-        string renderedMessage = RenderHtml(message);
+        string renderedMessage = renderedHtml ?? RenderHtml(message);
         string firstName = GetFirstName();
         string questionTimeHtml = FormatTimeBadge(questionTime);
         string responseTimeHtml = FormatTimeBadge(responseTime);
@@ -765,8 +971,13 @@ sealed class ChatPopupForm : Form, IPluginPopup
             var screen = Visible ? Screen.FromControl(this) : (Screen.PrimaryScreen ?? Screen.AllScreens[0]);
             var workingArea = screen.WorkingArea;
             int maxHeight = (int)(workingArea.Height * 0.9);
-            int newClientW = Math.Max(ClientSize.Width, 600);
-            int newClientH = Math.Min(maxHeight, HeaderHeight + InfoBarHeight + estimatedContentHeight + FooterHeight);
+            int leftWidth = StripWidth + (_treeOpen ? _treeWidth : 0);
+            int newClientW = Math.Max(ClientSize.Width, 600 + leftWidth);
+
+            // With the tree open the window keeps its height: a jumping list is hard to click.
+            int newClientH = _treeOpen
+                ? ClientSize.Height
+                : Math.Min(maxHeight, HeaderHeight + InfoBarHeight + estimatedContentHeight + FooterHeight);
             ClientSize = new Size(newClientW, newClientH);
 
             // Keep window within screen bounds
@@ -985,116 +1196,47 @@ sealed class ChatPopupForm : Form, IPluginPopup
             + htmlPrefix + htmlBody + htmlSuffix;
     }
 
-    private List<HistoryIndex> GetActiveIndex()
-        => _filteredIndex ?? _history.LoadTodayIndex();
+    private IReadOnlyList<HistoryIndex> ScopeItems()
+        => _scope != null && _tree.IsReady ? _tree.Items(_scope) : Array.Empty<HistoryIndex>();
+
+    private int CurrentPosition(IReadOnlyList<HistoryIndex> items)
+    {
+        if (_itemKey == null) return -1;
+        for (int i = 0; i < items.Count; i++)
+            if (HistoryTree.ItemKey(items[i]) == _itemKey) return i;
+        return -1;
+    }
 
     private void UpdateHistoryNav()
     {
-        var index = GetActiveIndex();
-        bool hasMultiple = index.Count > 1;
+        var items = ScopeItems();
+        bool hasMultiple = items.Count > 1;
         _prevButton.Visible = hasMultiple;
         _nextButton.Visible = hasMultiple;
         _navLabel.Visible = hasMultiple;
-        _filterButton.Visible = index.Count > 0;
+        _scopeChip.Visible = _scope != null && _tree.IsReady;
+        if (_scope != null) _scopeChip.Text = _tree.ScopeLabel(_scope);
 
         if (hasMultiple)
         {
-            int displayIdx = _viewingHistory ? _historyIndex + 1 : index.Count;
-            _navLabel.Text = $"{displayIdx} / {index.Count}";
-            _prevButton.Enabled = _historyIndex != 0;
-            _nextButton.Enabled = _viewingHistory && _historyIndex < index.Count - 1;
-        }
-
-        if (_filterMode != FilterMode.None)
-        {
-            _filterButton.BackColor = _theme.Primary;
-            _filterButton.ForeColor = Color.White;
-        }
-        else
-        {
-            _filterButton.BackColor = _theme.PrimaryDim;
-            _filterButton.ForeColor = _theme.TextSecondary;
+            int at = CurrentPosition(items);
+            _navLabel.Text = $"{at + 1} / {items.Count}";
+            _prevButton.Enabled = at > 0;
+            _nextButton.Enabled = at < items.Count - 1;
         }
     }
 
+    /// <summary>Moves in the scope, latest first: the first item is the newest.</summary>
     private void NavigateHistory(int direction)
     {
-        _history.Invalidate();
-        if (_filterMode != FilterMode.None)
-        {
-            _filteredIndex = _filterMode == FilterMode.Cwd
-                ? _history.FilterByCwd(_selectedDate, _filterValue)
-                : _history.FilterBySession(_selectedDate, _filterValue);
-        }
+        var items = ScopeItems();
+        if (items.Count == 0) return;
 
-        var index = GetActiveIndex();
-        if (index.Count == 0) return;
-
-        if (!_viewingHistory)
-        {
-            _historyIndex = index.Count - 1;
-            _viewingHistory = true;
-        }
-
-        _historyIndex += direction;
-        _historyIndex = Math.Clamp(_historyIndex, 0, index.Count - 1);
-
-        var entry = _history.LoadEntry(index[_historyIndex]);
-        if (entry != null)
-        {
-            var qts = entry.QuestionTimestamp == default ? entry.Timestamp : entry.QuestionTimestamp;
-            DisplayMessage(entry.Title, entry.Message, entry.Type, entry.Question, entry.SessionId, entry.Cwd, qts, entry.Timestamp, entry.MachineName);
-        }
+        int at = Math.Clamp(CurrentPosition(items) + direction, 0, items.Count - 1);
+        LoadItem(items[at]);
+        RememberScope();
+        SyncTree();
     }
-
-    private void ShowFilterDialog()
-    {
-        using var dlg = new FilterDialog(_theme, _history, _filterMode, _filterValue, _selectedDate);
-        if (dlg.ShowDialog(this) == DialogResult.OK)
-        {
-            _filterMode = dlg.SelectedMode;
-            _filterValue = dlg.SelectedValue;
-            _selectedDate = dlg.SelectedDate;
-            _filteredIndex = null;
-
-            if (_filterMode != FilterMode.None)
-            {
-                _history.Invalidate();
-                _filteredIndex = _filterMode == FilterMode.Cwd
-                    ? _history.FilterByCwd(_selectedDate, _filterValue)
-                    : _history.FilterBySession(_selectedDate, _filterValue);
-
-                if (_filteredIndex.Count > 0)
-                {
-                    _viewingHistory = true;
-                    _historyIndex = _filteredIndex.Count - 1;
-                    var entry = _history.LoadEntry(_filteredIndex[_historyIndex]);
-                    if (entry != null)
-                    {
-                        var qts = entry.QuestionTimestamp == default ? entry.Timestamp : entry.QuestionTimestamp;
-                        DisplayMessage(entry.Title, entry.Message, entry.Type, entry.Question, entry.SessionId, entry.Cwd, qts, entry.Timestamp, entry.MachineName);
-                    }
-                }
-                else
-                {
-                    _viewingHistory = false;
-                    _historyIndex = -1;
-                    UpdateHistoryNav();
-                    PositionControls();
-                }
-            }
-            else
-            {
-                _viewingHistory = false;
-                _historyIndex = -1;
-                _selectedDate = DateTime.Today;
-                UpdateHistoryNav();
-                PositionControls();
-            }
-        }
-    }
-
-    // ---------- Layout ----------
 
     private void PositionControls()
     {
@@ -1120,29 +1262,26 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _snoozeCheckBox.Location = new Point((footerW - _snoozeCheckBox.PreferredSize.Width) / 2, _okButton.Bottom + 6);
 
         int ipw = _infoPanel.ClientSize.Width;
+        int navX = ipw - 12;
         if (_prevButton.Visible)
         {
             int navY = (InfoBarHeight - _prevButton.Height) / 2;
-            int navX = ipw - 12;
-
-            if (_filterButton.Visible)
-            {
-                navX -= _filterButton.Width;
-                _filterButton.Location = new Point(navX, navY);
-                navX -= 6;
-            }
-
             navX -= _nextButton.Width;
             _nextButton.Location = new Point(navX, navY);
             navX -= (8 + _navLabel.PreferredWidth);
             _navLabel.Location = new Point(navX, navY + (_prevButton.Height - _navLabel.Height) / 2);
             navX -= (8 + _prevButton.Width);
             _prevButton.Location = new Point(navX, navY);
+            navX -= 10;
         }
-        else if (_filterButton.Visible)
+
+        if (_scope != null && _tree.IsReady)
         {
-            int navY = (InfoBarHeight - _filterButton.Height) / 2;
-            _filterButton.Location = new Point(ipw - 12 - _filterButton.Width, navY);
+            // The chip gives way before it can cover the heading.
+            int chipWidth = _scopeChip.PreferredWidth;
+            int left = navX - chipWidth;
+            _scopeChip.Visible = left > _subtitleLabel.Left + Math.Max(_titleLabel.PreferredWidth, _subtitleLabel.PreferredWidth) + 12;
+            _scopeChip.Location = new Point(left, (InfoBarHeight - _scopeChip.PreferredHeight) / 2);
         }
     }
 
@@ -1294,6 +1433,16 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _nextButton.FlatAppearance.MouseOverBackColor = theme.Primary;
         _navLabel.ForeColor = theme.TextSecondary;
 
+        _strip.BackColor = theme.BgHeader;
+        _rightPane.BackColor = theme.BgDark;
+        _loadingLabel.BackColor = theme.BgDark;
+        _loadingLabel.ForeColor = theme.TextSecondary;
+        _scopeChip.BackColor = theme.PrimaryDim;
+        _scopeChip.ForeColor = theme.TextPrimary;
+        _treePanel.ApplyTheme(theme);
+        _treePanel.Invalidate(true);
+        ApplyTreeButtonColors();
+
         ApplyTypeColors(_lastType);
         if (_webViewReady && !string.IsNullOrEmpty(_lastMessage))
             _webView.NavigateToString(RenderHtml(_lastMessage));
@@ -1318,6 +1467,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
         {
             try { _host.ThemeChanged -= OnThemeChanged; } catch { }
             try { _typeTimer?.Dispose(); } catch { }
+            try { _loadingTimer?.Dispose(); } catch { }
             try { _sparkleTimer?.Dispose(); } catch { }
             try { _webView?.Dispose(); } catch { }
         }

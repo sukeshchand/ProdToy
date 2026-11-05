@@ -35,6 +35,12 @@ record ClaudePluginSettings
     // Chat history (plugin-owned)
     [JsonPropertyName("historyEnabled")] public bool HistoryEnabled { get; init; } = true;
 
+    // History tree in the notification window
+    [JsonPropertyName("historyTreeOpen")] public bool HistoryTreeOpen { get; init; } = true;
+    [JsonPropertyName("historyTreeWidth")] public int HistoryTreeWidth { get; init; } = 340;
+    [JsonPropertyName("historyScopeKey")] public string HistoryScopeKey { get; init; } = "";
+    [JsonPropertyName("historyItemKey")] public string HistoryItemKey { get; init; } = "";
+
     /// <summary>
     /// LEGACY single-machine list. Kept only so older JSON files still load —
     /// at runtime, <see cref="LocalConfigDirs"/> and <see cref="WithLocalConfigDirs"/>

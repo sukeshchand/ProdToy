@@ -3,7 +3,7 @@ using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
 
-[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.421",
+[Plugin("ProdToy.Plugin.ClaudeIntegration", "Claude Integration", "1.0.422",
     Description = "Claude Code hooks, status line, and auto-title integration",
     Author = "ProdToy",
     MenuPriority = 300)]
@@ -15,6 +15,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
     private IDisposable? _popupReg;
     private ChatHistory _chatHistory = null!;
     private ChatPopupForm? _chatPopup;
+    private HistoryTree _historyTree = null!;
     private TelegramNotifier _telegram = null!;
     private readonly List<IDisposable> _mcpToolRegs = new();
 
@@ -94,6 +95,26 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
             envId: ClaudePaths.EnvId,
             machineName: Environment.MachineName);
 
+        // Built once, off the UI thread; kept in memory for the whole run, so
+        // a rebuilt popup keeps it too.
+        _historyTree = new HistoryTree();
+        var tree = _historyTree;
+        var history = _chatHistory;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                tree.Load(history.SnapshotIndex());
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Error("Failed to build the history tree", ex);
+                tree.Load([]);
+            }
+
+            context.Host.BeginInvokeOnUI(() => _chatPopup?.OnTreeReady());
+        });
+
         _telegram = new TelegramNotifier(context);
 
         // Phase 2+3: routed pipe handlers. claude.notify → write to plugin
@@ -124,7 +145,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
             string hookEvent = payload.hookEvent ?? "";
 
             // Phase 3: write the response into plugin-owned history.
-            _chatHistory.SaveResponse(title, message, type, sessionId, cwd);
+            var saved = _chatHistory.SaveResponse(title, message, type, sessionId, cwd);
 
             // Phase 8: PipeRouter dispatches on the UI thread via
             // _popupForm.Invoke() — a synchronous SendMessage. WebView2's
@@ -142,7 +163,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
                 // first notification (same bug class that broke alarms).
                 _context.Host.BeginInvokeOnUI(() =>
                 {
-                    popup.ShowPopup(title, message, type, sessionId, cwd, Environment.MachineName);
+                    popup.ShowPopup(title, message, type, sessionId, cwd, Environment.MachineName, saved: saved);
                 });
             }
 
@@ -175,7 +196,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
 
         if (_chatPopup != null) return;
 
-        _chatPopup = new ChatPopupForm(_context, _chatHistory);
+        _chatPopup = new ChatPopupForm(_context, _chatHistory, _historyTree);
         _chatPopup.WebViewInitFailed += () =>
         {
             // Nothing to do synchronously — the IsWebViewFailed flag is already
@@ -361,15 +382,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         _context.Host.InvokeOnUI(() =>
         {
             EnsureChatPopup();
-            var latest = _chatHistory.GetLatest();
-            if (latest != null)
-            {
-                _chatPopup!.ShowPopup(latest.Title, latest.Message, latest.Type, latest.SessionId, latest.Cwd, latest.MachineName, bypassFilter: true);
-            }
-            else
-            {
-                _chatPopup!.BringToForeground();
-            }
+            _chatPopup!.ShowManual();
         });
     }
 
@@ -926,6 +939,54 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         y = AddSeparator(y);
 
         // --- CHATS section ---
+        var treeOpenCheck = new CheckBox
+        {
+            Text = "Open the history tree in the notification window",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            BackColor = Color.Transparent,
+            Checked = _context.LoadSettings<ClaudePluginSettings>().HistoryTreeOpen,
+            AutoSize = true,
+            Location = new Point(pad + 8, y),
+            Cursor = Cursors.Hand,
+        };
+        treeOpenCheck.CheckedChanged += (_, _) =>
+        {
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { HistoryTreeOpen = treeOpenCheck.Checked });
+            _chatPopup?.SetTreeOpen(treeOpenCheck.Checked);
+        };
+        panel.Controls.Add(treeOpenCheck);
+        y += 30;
+
+        panel.Controls.Add(new Label
+        {
+            Text = "History tree width",
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = theme.TextPrimary,
+            BackColor = Color.Transparent,
+            AutoSize = true,
+            Location = new Point(pad + 8, y + 3),
+        });
+        var treeWidth = new NumericUpDown
+        {
+            Minimum = ChatPopupForm.MinTreeWidth,
+            Maximum = ChatPopupForm.MaxTreeWidth,
+            Increment = 20,
+            Value = Math.Clamp(_context.LoadSettings<ClaudePluginSettings>().HistoryTreeWidth, ChatPopupForm.MinTreeWidth, ChatPopupForm.MaxTreeWidth),
+            Font = new Font("Segoe UI", 9.5f),
+            Width = 72,
+            Location = new Point(pad + 150, y),
+        };
+        treeWidth.ValueChanged += (_, _) =>
+        {
+            var s = _context.LoadSettings<ClaudePluginSettings>();
+            _context.SaveSettings(s with { HistoryTreeWidth = (int)treeWidth.Value });
+            _chatPopup?.SetTreeWidth((int)treeWidth.Value);
+        };
+        panel.Controls.Add(treeWidth);
+        y += 32;
+
         // Phase 5: HistoryEnabled is plugin-owned. ChatHistory reads this
         // flag as its gate; we no longer touch host settings.json for it.
         var historyCheck = new CheckBox
