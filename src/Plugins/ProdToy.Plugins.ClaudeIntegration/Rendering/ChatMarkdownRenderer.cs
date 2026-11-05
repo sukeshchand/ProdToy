@@ -291,6 +291,35 @@ static class ChatMarkdownRenderer
         white-space: pre-wrap;
         word-break: break-word;
     }}
+    .prompt-cards {{ margin: 0 0 10px 0; }}
+    .pc-by {{
+        color: {themePrimaryHex};
+        font-weight: 700;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 6px;
+        opacity: 0.85;
+    }}
+    .pc-card {{
+        background: {themePrimaryHex}10;
+        border: 1px solid {themePrimaryHex}25;
+        border-left: 4px solid {themePrimaryHex}55;
+        padding: 8px 12px;
+        margin: 0 0 6px 0;
+        border-radius: 0 8px 8px 0;
+    }}
+    .pc-head {{ color: {headingColorHex}; font-weight: 600; font-size: 13px; }}
+    .pc-mark {{ display: inline-block; width: 16px; font-weight: 700; }}
+    .pc-ok {{ color: #4caf50; }}
+    .pc-bad {{ color: #ef5350; }}
+    .pc-quiet {{ color: {textColorHex}; }}
+    .pc-text {{ color: {headingColorHex}; font-size: 13px; line-height: 1.45; margin-top: 4px; white-space: pre-wrap; word-break: break-word; }}
+    .pc-meta {{ color: {textColorHex}; font-size: 11px; margin-top: 4px; opacity: 0.75; word-break: break-all; }}
+    .pc-meta a {{ color: {themePrimaryHex}; }}
+    .pc-raw {{ margin-top: 4px; font-size: 11px; color: {textColorHex}; }}
+    .pc-raw summary {{ cursor: pointer; opacity: 0.75; }}
+    .pc-raw pre {{ white-space: pre-wrap; word-break: break-word; }}
     .claude-block {{
         background: transparent;
         border-left: 3px solid {themePrimaryHex}33;

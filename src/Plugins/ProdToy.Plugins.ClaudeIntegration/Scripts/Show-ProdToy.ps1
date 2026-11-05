@@ -70,6 +70,7 @@ $type      = "success"
 $sessionId = ""
 $cwd       = ""
 $eventName = ""
+$notificationType = ""
 
 if ($inputJson) {
     try {
@@ -105,6 +106,7 @@ if ($inputJson) {
             if (-not $hookNotificationEnabled) { exit 0 }
             if ($payload.title)   { $title = $payload.title }
             if ($payload.message) { $message = $payload.message }
+            if ($payload.notification_type) { $notificationType = [string]$payload.notification_type }
             $type = "info"
         }
         elseif ($eventName -eq "Stop") {
@@ -129,6 +131,7 @@ $notifyPayload = @{
     sessionId = $sessionId
     cwd       = $cwd
     hookEvent = [string]$eventName
+    notificationType = $notificationType
 } | ConvertTo-Json -Compress
 
 $nFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "prodtoy_notify.json")

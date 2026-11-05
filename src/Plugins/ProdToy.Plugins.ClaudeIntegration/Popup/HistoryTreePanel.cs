@@ -21,6 +21,9 @@ sealed class HistoryTreePanel : Panel
     /// <summary>A node was picked: a click, or Enter on the keyboard.</summary>
     public event Action<HistoryNode>? NodePicked;
 
+    /// <summary>A right-click on a row, with where to open the menu.</summary>
+    public event Action<HistoryNode, Point>? NodeMenu;
+
     public HistoryTreePanel(PluginTheme theme)
     {
         Dock = DockStyle.Left;
@@ -50,6 +53,7 @@ sealed class HistoryTreePanel : Panel
         };
         _rows = new HistoryRows { Location = new Point(1, 70), Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right };
         _rows.NodePicked += node => NodePicked?.Invoke(node);
+        _rows.NodeMenu += (node, at) => NodeMenu?.Invoke(node, at);
 
         _findTimer.Tick += (_, _) =>
         {
@@ -139,13 +143,17 @@ sealed class HistoryRows : Control
     private const int RowHeight = 26;
     private const int Indent = 16;
     private const int BarWidth = 8;
+    private const int MostChips = 2;
 
-    private readonly HashSet<string> _open = new(StringComparer.Ordinal) { HistoryTree.RootKey, HistoryTree.FoldersKey, HistoryTree.SessionsKey };
+    private readonly HashSet<string> _open = new(StringComparer.Ordinal) { HistoryTree.RootKey, HistoryTree.FoldersKey, HistoryTree.SessionsKey, HistoryTree.PinnedKey };
     private readonly List<(HistoryNode Node, int Depth)> _visible = new();
     private readonly Font _font = new("Segoe UI", 9f);
     private readonly Font _bold = new("Segoe UI Semibold", 9f);
     private readonly Font _time = new("Consolas", 8f);
     private readonly Font _glyph = new("Segoe MDL2 Assets", 9f);
+    private readonly Font _chip = new("Segoe UI", 7f);
+    private readonly System.Windows.Forms.Timer _dayTimer = new() { Interval = 60_000 };
+    private DateOnly _paintedDay = DateOnly.FromDateTime(DateTime.Now);
 
     private int _top;
     private int _focusRow = -1;
@@ -160,6 +168,7 @@ sealed class HistoryRows : Control
     public string? SelectedItem { get; set; }
 
     public event Action<HistoryNode>? NodePicked;
+    public event Action<HistoryNode, Point>? NodeMenu;
 
     public string Filter
     {
@@ -178,6 +187,16 @@ sealed class HistoryRows : Control
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint
             | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
         TabStop = true;
+
+        // The Today chip is decided at paint, so midnight only needs a repaint.
+        _dayTimer.Tick += (_, _) =>
+        {
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            if (today == _paintedDay) return;
+            _paintedDay = today;
+            Invalidate();
+        };
+        _dayTimer.Start();
     }
 
     private int ContentHeight => _visible.Count * RowHeight;
@@ -188,7 +207,8 @@ sealed class HistoryRows : Control
         _visible.Clear();
         if (Tree is { IsReady: true })
         {
-            _matches = _filter.Length > 0 ? FindMatches(Tree.Root) : null;
+            _matches = _filter.Length > 0 ? FindMatches(Tree) : null;
+            Flatten(Tree.Pinned, 0);
             Flatten(Tree.Root, 0);
         }
 
@@ -207,7 +227,7 @@ sealed class HistoryRows : Control
         ScrollTo(row);
     }
 
-    private HashSet<HistoryNode> FindMatches(HistoryNode root)
+    private HashSet<HistoryNode> FindMatches(HistoryTree tree)
     {
         var hits = new HashSet<HistoryNode>();
         void Walk(HistoryNode n)
@@ -217,7 +237,8 @@ sealed class HistoryRows : Control
             foreach (var c in n.Children) Walk(c);
         }
 
-        Walk(root);
+        Walk(tree.Pinned);
+        Walk(tree.Root);
         return hits;
     }
 
@@ -279,6 +300,10 @@ sealed class HistoryRows : Control
         {
             Toggle(node);
             NodePicked?.Invoke(node);
+        }
+        else if (e.Button == MouseButtons.Right)
+        {
+            NodeMenu?.Invoke(node, PointToScreen(e.Location));
         }
     }
 
@@ -386,6 +411,8 @@ sealed class HistoryRows : Control
         var (node, depth) = _visible[row];
         bool selected = node.IsItem && HistoryTree.ItemKey(node.Item!) == SelectedItem;
         bool scoped = ReferenceEquals(node, Scope);
+        var target = node.Kind == HistoryNodeKind.Pin ? Tree!.Find(node.Target) : node;
+        bool gone = target == null;
 
         Color back = selected ? theme.Primary : row == _hoverRow ? theme.PrimaryDim : theme.BgDark;
         using (var brush = new SolidBrush(back)) g.FillRectangle(brush, r);
@@ -395,7 +422,7 @@ sealed class HistoryRows : Control
             g.DrawRectangle(pen, r.X, r.Y, r.Width - 1, r.Height - 1);
         }
 
-        Color text = selected ? Color.White : scoped ? theme.PrimaryLight : theme.TextPrimary;
+        Color text = selected ? Color.White : gone ? theme.TextSecondary : scoped ? theme.PrimaryLight : theme.TextPrimary;
         Color quiet = selected ? Color.White : theme.TextSecondary;
         int x = r.X + 4 + depth * Indent;
 
@@ -407,7 +434,16 @@ sealed class HistoryRows : Control
 
         x += 16;
 
-        if (GlyphOf(node) is { } glyph)
+        if (node.Kind == HistoryNodeKind.Tag && Tree!.TagStore?.All.FirstOrDefault(t => node.Key.EndsWith(t.Id, StringComparison.Ordinal)) is { } own)
+        {
+            using var dot = new SolidBrush(TagChip.ColorOf(own));
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.FillEllipse(dot, x + 2, r.Y + 8, 10, 10);
+            g.SmoothingMode = SmoothingMode.Default;
+            text = selected ? Color.White : TagChip.ColorOf(own);
+            x += 19;
+        }
+        else if (GlyphOf(node) is { } glyph)
         {
             TextRenderer.DrawText(g, glyph.Text, _glyph, new Point(x, r.Y + 6), selected ? Color.White : glyph.Color(theme), TextFormatFlags.NoPadding);
             x += 19;
@@ -423,11 +459,17 @@ sealed class HistoryRows : Control
         int right = r.Right - 6;
         if (!node.IsItem)
         {
-            string count = node.Count.ToString();
+            string count = (target ?? node).Count.ToString();
             int w = TextRenderer.MeasureText(count, _time, Size.Empty, TextFormatFlags.NoPadding).Width;
             TextRenderer.DrawText(g, count, _time, new Point(right - w, r.Y + 7), quiet, TextFormatFlags.NoPadding);
             right -= w + 8;
         }
+
+        if (node.Kind is HistoryNodeKind.Date or HistoryNodeKind.Group && node.Day == _paintedDay)
+            right = DrawChip(g, "Today", theme.PrimaryDim, theme.TextPrimary, right, r);
+
+        foreach (var tag in Tree!.TagsOf(node).Take(MostChips))
+            right = DrawChip(g, tag.Name, TagChip.ColorOf(tag), TagChip.ColorOf(tag).GetBrightness() > 0.55f ? Color.Black : Color.White, right, r);
 
         var font = scoped || node.Kind is HistoryNodeKind.Root or HistoryNodeKind.Branch ? _bold : _font;
         var box = new Rectangle(x, r.Y, Math.Max(0, right - x), r.Height);
@@ -435,10 +477,25 @@ sealed class HistoryRows : Control
             TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
     }
 
+    /// <summary>A small chip against the right edge; answers where the row's text must now end.</summary>
+    private int DrawChip(Graphics g, string words, Color back, Color fore, int right, Rectangle r)
+    {
+        int width = Math.Min(70, TextRenderer.MeasureText(words, _chip, Size.Empty, TextFormatFlags.NoPadding).Width + 8);
+        var box = new Rectangle(right - width, r.Y + 6, width, r.Height - 12);
+        using var brush = new SolidBrush(back);
+        g.FillRectangle(brush, box);
+        TextRenderer.DrawText(g, words, _chip, box, fore,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+        return box.Left - 4;
+    }
+
     private readonly record struct Glyph(string Text, Func<PluginTheme, Color> Color);
 
     private static Glyph? GlyphOf(HistoryNode node) => node.Kind switch
     {
+        HistoryNodeKind.Pin => new Glyph("\uE718", t => t.TextSecondary),
+        HistoryNodeKind.Branch when node.Key == HistoryTree.PinnedKey => new Glyph("\uE718", t => t.Primary),
+        HistoryNodeKind.Branch when node.Key == HistoryTree.TagsKey => new Glyph("\uE8EC", t => t.Primary),
         HistoryNodeKind.Date => new Glyph("", t => t.TextSecondary),
         HistoryNodeKind.Branch when node.Key == HistoryTree.SessionsKey => new Glyph("", t => t.PrimaryLight),
         HistoryNodeKind.Branch => new Glyph("", t => t.Primary),
@@ -455,6 +512,8 @@ sealed class HistoryRows : Control
             _bold.Dispose();
             _time.Dispose();
             _glyph.Dispose();
+            _chip.Dispose();
+            _dayTimer.Dispose();
         }
 
         base.Dispose(disposing);

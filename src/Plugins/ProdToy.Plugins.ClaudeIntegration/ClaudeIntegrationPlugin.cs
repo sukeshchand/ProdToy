@@ -92,6 +92,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         _chatHistory = new ChatHistory(
             context.DataDirectory,
             () => context.LoadSettings<ClaudePluginSettings>().HistoryEnabled,
+            () => context.LoadSettings<ClaudePluginSettings>().SuppressMessageRegex,
             envId: ClaudePaths.EnvId,
             machineName: Environment.MachineName);
 
@@ -104,6 +105,9 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         {
             try
             {
+                // Beside history\, not in it: that folder's every .json is read as a day file.
+                tree.TagStore = TagStore.Load(Path.Combine(context.DataDirectory, "history-tags.json"));
+                tree.PinStore = PinStore.Load(Path.Combine(context.DataDirectory, "history-pins.json"));
                 tree.Load(history.SnapshotIndex());
             }
             catch (Exception ex)
@@ -144,8 +148,16 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
             string cwd = payload.cwd ?? "";
             string hookEvent = payload.hookEvent ?? "";
 
+            // The bare idle ping is not an answer: it is not saved, so it takes no pending question and
+            // never reaches the tree. It goes on to Telegram, whose own setting decides.
+            if (IsIdlePing(hookEvent, payload.notificationType, message))
+            {
+                _ = _telegram.SendAsync(title, message, hookEvent);
+                return;
+            }
+
             // Phase 3: write the response into plugin-owned history.
-            var saved = _chatHistory.SaveResponse(title, message, type, sessionId, cwd);
+            var saved = _chatHistory.SaveResponse(title, message, type, sessionId, cwd, hookEvent);
 
             // Phase 8: PipeRouter dispatches on the UI thread via
             // _popupForm.Invoke() — a synchronous SendMessage. WebView2's
@@ -176,6 +188,14 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         {
             _context.LogError("claude.notify handler failed", ex);
         }
+    }
+
+    private bool IsIdlePing(string hookEvent, string? notificationType, string message)
+    {
+        if (hookEvent != "Notification") return false;
+        return string.IsNullOrEmpty(notificationType)
+            ? IdlePing.Matches(message, _context.LoadSettings<ClaudePluginSettings>().SuppressMessageRegex)
+            : notificationType == "idle_prompt";
     }
 
     private void EnsureChatPopup()
@@ -224,7 +244,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         }
     }
 
-    private sealed record NotifyPayload(string? title, string? message, string? type, string? sessionId, string? cwd, string? hookEvent);
+    private sealed record NotifyPayload(string? title, string? message, string? type, string? sessionId, string? cwd, string? hookEvent, string? notificationType = null);
     private sealed record SaveQuestionPayload(string? question, string? sessionId, string? cwd);
 
     public void Start()

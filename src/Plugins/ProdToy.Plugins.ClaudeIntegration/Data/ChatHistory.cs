@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ProdToy.Sdk;
 
 namespace ProdToy.Plugins.ClaudeIntegration;
@@ -35,6 +36,39 @@ record HistoryIndex(
     string MachineName = "",
     string Preview = "");
 
+/// <summary>
+/// The bare "Claude is waiting" ping. Never saved any more; older ones stay in the day files but out of
+/// the index, so the tree and the pager never see them. The messages are short, so the pattern only runs
+/// on short text: the index reads every entry of the history.
+/// </summary>
+static class IdlePing
+{
+    private const int LongestPing = 200;
+    private static Regex? _rule;
+    private static string _pattern = "";
+
+    public static bool Matches(string? message, string? pattern)
+    {
+        if (string.IsNullOrEmpty(message) || string.IsNullOrEmpty(pattern) || message.Length > LongestPing) return false;
+        try
+        {
+            var rule = _rule;
+            if (rule == null || _pattern != pattern)
+            {
+                rule = new Regex(pattern, RegexOptions.Compiled);
+                _rule = rule;
+                _pattern = pattern;
+            }
+
+            return rule.IsMatch(message);
+        }
+        catch (ArgumentException)
+        {
+            return false;   // a typo in the setting filters nothing
+        }
+    }
+}
+
 /// <summary>What <see cref="ChatHistory.SaveResponse"/> stored, and where.</summary>
 record SavedResponse(HistoryIndex Index, HistoryEntry Entry);
 
@@ -53,6 +87,7 @@ sealed class ChatHistory
 {
     private readonly string _historyDir;
     private readonly Func<bool> _isEnabledGetter;
+    private readonly Func<string> _pingPatternGetter;
     private readonly string _envId;
     private readonly string _machineName;
     private readonly object _lock = new();
@@ -62,10 +97,11 @@ sealed class ChatHistory
     /// <summary>How much of a question a tree row keeps.</summary>
     private const int PreviewLength = 80;
 
-    public ChatHistory(string pluginDataDirectory, Func<bool> isEnabledGetter, string envId, string machineName)
+    public ChatHistory(string pluginDataDirectory, Func<bool> isEnabledGetter, Func<string> pingPatternGetter, string envId, string machineName)
     {
         _historyDir = Path.Combine(pluginDataDirectory, "history");
         _isEnabledGetter = isEnabledGetter;
+        _pingPatternGetter = pingPatternGetter;
         _envId = envId ?? "";
         _machineName = machineName ?? "";
     }
@@ -112,7 +148,11 @@ sealed class ChatHistory
         }
     }
 
-    public SavedResponse? SaveResponse(string title, string message, string type, string sessionId = "", string cwd = "")
+    /// <summary>
+    /// A response answers the session's pending question, except a Notification: a permission prompt is
+    /// its own row and must not take the question from the answer that follows it.
+    /// </summary>
+    public SavedResponse? SaveResponse(string title, string message, string type, string sessionId = "", string cwd = "", string hookEvent = "")
     {
         if (!IsEnabled) return null;
 
@@ -120,8 +160,9 @@ sealed class ChatHistory
         {
             var entries = LoadDayEntries(DateTime.Now);
 
+            bool takesQuestion = hookEvent != "Notification";
             int pendingIdx = -1;
-            if (!string.IsNullOrEmpty(sessionId))
+            if (takesQuestion && !string.IsNullOrEmpty(sessionId))
             {
                 for (int i = entries.Count - 1; i >= 0; i--)
                 {
@@ -133,7 +174,7 @@ sealed class ChatHistory
                     }
                 }
             }
-            else if (entries.Count > 0 && entries[^1].Type == NotificationType.Pending)
+            else if (takesQuestion && entries.Count > 0 && entries[^1].Type == NotificationType.Pending)
             {
                 pendingIdx = entries.Count - 1;
             }
@@ -174,7 +215,8 @@ sealed class ChatHistory
     /// <summary>A row's one line: the first words of the question, else of the reply, else the title.</summary>
     private static string PreviewOf(HistoryEntry e)
     {
-        string text = !string.IsNullOrWhiteSpace(e.Question) ? e.Question
+        string text = PromptCards.ShortLine(e.Question) is { } card ? card
+            : !string.IsNullOrWhiteSpace(e.Question) ? e.Question
             : !string.IsNullOrWhiteSpace(e.Message) ? e.Message
             : e.Title;
         var line = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
@@ -316,10 +358,11 @@ sealed class ChatHistory
         }
     }
 
-    private static void AppendIndexForFile(string file, List<HistoryIndex> target)
+    private void AppendIndexForFile(string file, List<HistoryIndex> target)
     {
         try
         {
+            string pingPattern = _pingPatternGetter();
             string json = File.ReadAllText(file);
             var entries = JsonSerializer.Deserialize<List<HistoryEntry>>(json);
             if (entries == null) return;
@@ -328,6 +371,8 @@ sealed class ChatHistory
             for (int i = 0; i < entries.Count; i++)
             {
                 var e = entries[i];
+                if (e.Type != NotificationType.Pending && IdlePing.Matches(e.Message, pingPattern)) continue;
+
                 // Prefer the entry's own EnvId/MachineName (stamped at write time),
                 // fall back to the filename-derived id for legacy entries.
                 string envId = !string.IsNullOrEmpty(e.EnvId) ? e.EnvId : fileEnvId;

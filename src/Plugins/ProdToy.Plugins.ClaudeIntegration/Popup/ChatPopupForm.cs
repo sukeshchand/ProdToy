@@ -17,7 +17,7 @@ namespace ProdToy.Plugins.ClaudeIntegration;
 /// life of the plugin. Show/Hide reuses the window so WebView2 state
 /// survives across notifications.
 /// </summary>
-sealed class ChatPopupForm : Form, IPluginPopup
+sealed partial class ChatPopupForm : Form, IPluginPopup
 {
     private readonly IPluginHost _host;
     private readonly ChatHistory _history;
@@ -43,6 +43,9 @@ sealed class ChatPopupForm : Form, IPluginPopup
     private readonly Label _iconLabel;
     private readonly RoundedButton _prevButton;
     private readonly RoundedButton _nextButton;
+    private readonly RoundedButton _firstButton;
+    private readonly RoundedButton _lastButton;
+    private readonly TagChipStrip _tagChips;
     private readonly Label _navLabel;
     private readonly Label _scopeChip;
 
@@ -65,6 +68,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
     private readonly Panel _strip;
     private readonly RoundedButton _treeButton;
     private readonly HistoryTreePanel _treePanel;
+    private readonly Panel _treeSplitter;
     private readonly Panel _rightPane;
     private readonly System.Windows.Forms.Timer _loadingTimer;
 
@@ -97,7 +101,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
     private int _treeWidth;
 
     public const int MinTreeWidth = 220;
-    public const int MaxTreeWidth = 600;
+    public const int MaxTreeWidth = 1200;
     private const int StripWidth = 48;
 
     private const int HeaderHeight = 58;
@@ -229,6 +233,12 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _nextButton.FlatAppearance.MouseOverBackColor = _theme.Primary;
         _nextButton.Click += (_, _) => NavigateHistory(+1);
 
+        _firstButton = NavEndButton("|\u25C0");
+        _firstButton.Click += (_, _) => JumpHistory(last: false);
+        _lastButton = NavEndButton("\u25B6|");
+        _lastButton.Click += (_, _) => JumpHistory(last: true);
+        _tagChips = new TagChipStrip { Height = 16, Visible = false };
+
         _navLabel = new Label
         {
             Text = "",
@@ -252,7 +262,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _infoPanel.Controls.AddRange(new Control[]
         {
             _iconLabel, _titleLabel, _subtitleLabel,
-            _prevButton, _navLabel, _nextButton, _scopeChip,
+            _firstButton, _prevButton, _navLabel, _nextButton, _lastButton, _scopeChip, _tagChips,
         });
 
         // --- Footer ---
@@ -378,6 +388,10 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _treePanel = new HistoryTreePanel(_theme) { Width = _treeWidth, Visible = _treeOpen };
         _treePanel.SetTree(_tree);
         _treePanel.NodePicked += OnNodePicked;
+        _treePanel.NodeMenu += OnNodeMenu;
+
+        _treeSplitter = new Panel { Dock = DockStyle.Left, Width = 5, Cursor = Cursors.SizeWE, BackColor = _theme.BgDark, Visible = _treeOpen };
+        WireSplitter();
 
         _rightPane = new Panel { Dock = DockStyle.Fill, BackColor = _theme.BgDark };
         _rightPane.Controls.Add(_webViewContainer);
@@ -392,6 +406,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
         // WinForms docks the last-added control first. Fill goes in last visually
         // but first in the Controls collection.
         Controls.Add(_rightPane);
+        Controls.Add(_treeSplitter);
         Controls.Add(_treePanel);
         Controls.Add(_strip);
         Controls.Add(_headerLine);
@@ -626,6 +641,17 @@ sealed class ChatPopupForm : Form, IPluginPopup
 
     private void OnNodePicked(HistoryNode node)
     {
+        if (ReferenceEquals(node, _tree.Pinned)) return;   // a list of pins, not a scope
+
+        if (node.Kind == HistoryNodeKind.Pin)
+        {
+            // A pin behaves as its target; an item scopes to its own group. A gone target does nothing.
+            if (_tree.Find(node.Target) is not { } target) return;
+            if (target.IsItem) _scope = target.Parent;
+            OnNodePicked(target);
+            return;
+        }
+
         if (node.IsItem)
         {
             _itemKey = HistoryTree.ItemKey(node.Item!);
@@ -637,7 +663,8 @@ sealed class ChatPopupForm : Form, IPluginPopup
 
         _scope = node;
         var items = _tree.Items(node);
-        bool stays = _itemKey != null && _tree.Contains(node, _itemKey);
+        bool newest = node.Kind is HistoryNodeKind.Group or HistoryNodeKind.Tag;
+        bool stays = !newest && _itemKey != null && _tree.Contains(node, _itemKey);
         if (!stays && items.Count > 0)
         {
             _itemKey = HistoryTree.ItemKey(items[0]);
@@ -696,6 +723,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
 
         _treeOpen = open;
         _treePanel.Visible = open;
+        _treeSplitter.Visible = open;
         ApplyTreeButtonColors();
 
         // The panel takes its room from outside, so the message keeps its width.
@@ -798,6 +826,7 @@ sealed class ChatPopupForm : Form, IPluginPopup
             _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
             _webView.CoreWebView2.Settings.IsZoomControlEnabled = false;
+            _webView.CoreWebView2.NavigationStarting += OnWebNavigationStarting;
             _webViewReady = true;
 
             if (_pendingHtml != null)
@@ -813,6 +842,45 @@ sealed class ChatPopupForm : Form, IPluginPopup
             _webViewFailed = true;
             _webViewInitStarted = false;
             try { WebViewInitFailed?.Invoke(); } catch { }
+        }
+    }
+
+    private RoundedButton NavEndButton(string text)
+    {
+        var button = new RoundedButton
+        {
+            Text = text,
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            Size = new Size(36, 26),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = _theme.PrimaryDim,
+            ForeColor = _theme.TextSecondary,
+            Cursor = Cursors.Hand,
+            Visible = false,
+        };
+        button.FlatAppearance.BorderSize = 0;
+        button.FlatAppearance.MouseOverBackColor = _theme.Primary;
+        return button;
+    }
+
+    /// <summary>An output file link: Notepad gets the path as an argument, nothing goes through the shell.</summary>
+    private static void OnWebNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
+    {
+        if (!e.Uri.StartsWith(PromptCards.OpenFileScheme, StringComparison.Ordinal)) return;
+
+        e.Cancel = true;
+        try
+        {
+            string path = Uri.UnescapeDataString(e.Uri[PromptCards.OpenFileScheme.Length..]);
+            if (!PromptCards.CanOpen(path)) return;
+
+            var start = new System.Diagnostics.ProcessStartInfo("notepad.exe") { UseShellExecute = false };
+            start.ArgumentList.Add(path);
+            System.Diagnostics.Process.Start(start);
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"Could not open the output file: {ex.Message}");
         }
     }
 
@@ -939,10 +1007,20 @@ sealed class ChatPopupForm : Form, IPluginPopup
         string bodyPrefix;
         if (!string.IsNullOrWhiteSpace(question))
         {
-            var qLines = question.Split('\n');
-            string shortQ = qLines.Length > 3 ? string.Join("\n", qLines.Take(3)) + "..." : question;
-            string escapedQ = System.Net.WebUtility.HtmlEncode(shortQ).Replace("\n", "<br/>");
-            bodyPrefix = $"<div class=\"user-block\"><div class=\"label\">{firstName}:{questionTimeHtml}</div><div class=\"text\">{escapedQ}</div></div><div class=\"claude-block\"><div class=\"claude-label\">Response:{responseTimeHtml}</div><div class=\"claude-content\">";
+            string asked;
+            if (PromptCards.ToHtml(question, questionTimeHtml) is { } cards)
+            {
+                asked = cards;
+            }
+            else
+            {
+                var qLines = question.Split('\n');
+                string shortQ = qLines.Length > 3 ? string.Join("\n", qLines.Take(3)) + "..." : question;
+                string escapedQ = System.Net.WebUtility.HtmlEncode(shortQ).Replace("\n", "<br/>");
+                asked = $"<div class=\"user-block\"><div class=\"label\">{firstName}:{questionTimeHtml}</div><div class=\"text\">{escapedQ}</div></div>";
+            }
+
+            bodyPrefix = $"{asked}<div class=\"claude-block\"><div class=\"claude-label\">Response:{responseTimeHtml}</div><div class=\"claude-content\">";
         }
         else
         {
@@ -1213,6 +1291,8 @@ sealed class ChatPopupForm : Form, IPluginPopup
         bool hasMultiple = items.Count > 1;
         _prevButton.Visible = hasMultiple;
         _nextButton.Visible = hasMultiple;
+        _firstButton.Visible = hasMultiple;
+        _lastButton.Visible = hasMultiple;
         _navLabel.Visible = hasMultiple;
         _scopeChip.Visible = _scope != null && _tree.IsReady;
         if (_scope != null) _scopeChip.Text = _tree.ScopeLabel(_scope);
@@ -1223,7 +1303,11 @@ sealed class ChatPopupForm : Form, IPluginPopup
             _navLabel.Text = $"{at + 1} / {items.Count}";
             _prevButton.Enabled = at > 0;
             _nextButton.Enabled = at < items.Count - 1;
+            _firstButton.Enabled = at > 0;
+            _lastButton.Enabled = at < items.Count - 1;
         }
+
+        ShowTagChips();
     }
 
     /// <summary>Moves in the scope, latest first: the first item is the newest.</summary>
@@ -1266,12 +1350,16 @@ sealed class ChatPopupForm : Form, IPluginPopup
         if (_prevButton.Visible)
         {
             int navY = (InfoBarHeight - _prevButton.Height) / 2;
-            navX -= _nextButton.Width;
+            navX -= _lastButton.Width;
+            _lastButton.Location = new Point(navX, navY);
+            navX -= 4 + _nextButton.Width;
             _nextButton.Location = new Point(navX, navY);
             navX -= (8 + _navLabel.PreferredWidth);
             _navLabel.Location = new Point(navX, navY + (_prevButton.Height - _navLabel.Height) / 2);
             navX -= (8 + _prevButton.Width);
             _prevButton.Location = new Point(navX, navY);
+            navX -= 4 + _firstButton.Width;
+            _firstButton.Location = new Point(navX, navY);
             navX -= 10;
         }
 
@@ -1431,6 +1519,14 @@ sealed class ChatPopupForm : Form, IPluginPopup
         _nextButton.BackColor = theme.PrimaryDim;
         _nextButton.ForeColor = theme.TextSecondary;
         _nextButton.FlatAppearance.MouseOverBackColor = theme.Primary;
+        foreach (var end in new[] { _firstButton, _lastButton })
+        {
+            end.BackColor = theme.PrimaryDim;
+            end.ForeColor = theme.TextSecondary;
+            end.FlatAppearance.MouseOverBackColor = theme.Primary;
+        }
+
+        _treeSplitter.BackColor = theme.BgDark;
         _navLabel.ForeColor = theme.TextSecondary;
 
         _strip.BackColor = theme.BgHeader;
