@@ -34,6 +34,8 @@ dotnet publish -c Release src/ProdToy.Win
 .\publish.ps1 -DeployPath "I:\ProdToy\_beta" -ReleaseNotes "Feature description"
 ```
 
+A changed plugin must raise the version in its `[Plugin(...)]` attribute: the updater skips a plugin whose version is not higher. `check-plugin-versions.ps1` fails the release otherwise.
+
 There are no tests or linting configured.
 
 ## Architecture

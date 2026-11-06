@@ -12,6 +12,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -37,6 +39,11 @@ jobs:
           else
             echo "EXISTS=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: Check plugin versions
+        if: steps.check_tag.outputs.EXISTS == 'false'
+        shell: pwsh
+        run: .\check-plugin-versions.ps1
 
       - name: Run publish.ps1
         if: steps.check_tag.outputs.EXISTS == 'false'
