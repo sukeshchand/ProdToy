@@ -216,7 +216,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         };
         _prevButton.FlatAppearance.BorderSize = 0;
         _prevButton.FlatAppearance.MouseOverBackColor = _theme.Primary;
-        _prevButton.Click += (_, _) => NavigateHistory(-1);
+        _prevButton.Click += (_, _) => NavigateHistory(older: true);
 
         _nextButton = new RoundedButton
         {
@@ -231,7 +231,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         };
         _nextButton.FlatAppearance.BorderSize = 0;
         _nextButton.FlatAppearance.MouseOverBackColor = _theme.Primary;
-        _nextButton.Click += (_, _) => NavigateHistory(+1);
+        _nextButton.Click += (_, _) => NavigateHistory(older: false);
 
         _firstButton = NavEndButton("|\u25C0");
         _firstButton.Click += (_, _) => JumpHistory(last: false);
@@ -245,7 +245,8 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
             Font = new Font("Segoe UI", 8f),
             ForeColor = _theme.TextSecondary,
             BackColor = Color.Transparent,
-            AutoSize = true,
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleCenter,
             Visible = false,
         };
 
@@ -424,6 +425,8 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         _sparkleTimer.Tick += SparkleTimer_Tick;
 
         Shown += (_, _) => { UpdateHistoryNav(); PositionControls(); };
+        // Shown fires once; a window hidden by OK and shown again lays out again too.
+        VisibleChanged += (_, _) => { if (Visible) { UpdateHistoryNav(); PositionControls(); } };
         Resize += (_, _) => PositionControls();
         // Defer WebView2 init until the form handle exists. Calling
         // EnsureCoreWebView2Async from the constructor races the form's HWND
@@ -754,8 +757,8 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
-        if (keyData == (Keys.Alt | Keys.Left)) { NavigateHistory(-1); return true; }
-        if (keyData == (Keys.Alt | Keys.Right)) { NavigateHistory(+1); return true; }
+        if (keyData == (Keys.Alt | Keys.Left)) { NavigateHistory(older: true); return true; }
+        if (keyData == (Keys.Alt | Keys.Right)) { NavigateHistory(older: false); return true; }
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
@@ -1288,35 +1291,34 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
     private void UpdateHistoryNav()
     {
         var items = ScopeItems();
-        bool hasMultiple = items.Count > 1;
-        _prevButton.Visible = hasMultiple;
-        _nextButton.Visible = hasMultiple;
-        _firstButton.Visible = hasMultiple;
-        _lastButton.Visible = hasMultiple;
-        _navLabel.Visible = hasMultiple;
-        _scopeChip.Visible = _scope != null && _tree.IsReady;
+        // What shows is decided here and kept: PositionControls goes by it, never by Control.Visible (false while hidden).
+        _pagerShown = items.Count > 1;
+        _pagerCount = items.Count;
         if (_scope != null) _scopeChip.Text = _tree.ScopeLabel(_scope);
 
-        if (hasMultiple)
+        if (_pagerShown)
         {
+            // The list is latest first; the pager runs oldest (1) to newest (n).
             int at = CurrentPosition(items);
-            _navLabel.Text = $"{at + 1} / {items.Count}";
-            _prevButton.Enabled = at > 0;
-            _nextButton.Enabled = at < items.Count - 1;
-            _firstButton.Enabled = at > 0;
-            _lastButton.Enabled = at < items.Count - 1;
+            _navLabel.Text = $"{PagerPosition.Shown(at, items.Count)} / {items.Count}";
+            _prevButton.Enabled = _firstButton.Enabled = PagerPosition.CanOlder(at, items.Count);
+            _nextButton.Enabled = _lastButton.Enabled = PagerPosition.CanNewer(at, items.Count);
         }
 
         ShowTagChips();
     }
 
-    /// <summary>Moves in the scope, latest first: the first item is the newest.</summary>
-    private void NavigateHistory(int direction)
+    private bool _pagerShown;
+    private int _pagerCount;
+
+    /// <summary>One step in the scope: Previous = one older, Next = one newer (the newest is the last position).</summary>
+    private void NavigateHistory(bool older)
     {
         var items = ScopeItems();
         if (items.Count == 0) return;
 
-        int at = Math.Clamp(CurrentPosition(items) + direction, 0, items.Count - 1);
+        int now = CurrentPosition(items);
+        int at = older ? PagerPosition.Older(now, items.Count) : PagerPosition.Newer(now, items.Count);
         LoadItem(items[at]);
         RememberScope();
         SyncTree();
@@ -1345,32 +1347,38 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         // Row 3: Snooze checkbox, centered below OK.
         _snoozeCheckBox.Location = new Point((footerW - _snoozeCheckBox.PreferredSize.Width) / 2, _okButton.Bottom + 6);
 
-        int ipw = _infoPanel.ClientSize.Width;
-        int navX = ipw - 12;
-        if (_prevButton.Visible)
+        // The info bar: one rule places the pager, the chip and the subtitle's stop, so no two controls overlap.
+        var subtitle = _subtitleLabel.GetPreferredSize(Size.Empty);
+        string widest = $"{_pagerCount} / {_pagerCount}";
+        var counter = TextRenderer.MeasureText(widest, _navLabel.Font);
+        bool hasChip = _scope != null && _tree.IsReady && _scopeChip.Text.Length > 0;
+        var r = InfoBarLayout.Place(new InfoBarLayout.Input(
+            _infoPanel.ClientSize.Width, InfoBarHeight,
+            _subtitleLabel.Left + Math.Max(_titleLabel.PreferredWidth, subtitle.Width),
+            _prevButton.Size, _firstButton.Size, new Size(counter.Width + 4, counter.Height),
+            hasChip ? _scopeChip.PreferredSize : Size.Empty, _pagerShown));
+
+        foreach (var c in new Control[] { _firstButton, _prevButton, _navLabel, _nextButton, _lastButton }) c.Visible = r.ShowPager;
+        if (r.ShowPager)
         {
-            int navY = (InfoBarHeight - _prevButton.Height) / 2;
-            navX -= _lastButton.Width;
-            _lastButton.Location = new Point(navX, navY);
-            navX -= 4 + _nextButton.Width;
-            _nextButton.Location = new Point(navX, navY);
-            navX -= (8 + _navLabel.PreferredWidth);
-            _navLabel.Location = new Point(navX, navY + (_prevButton.Height - _navLabel.Height) / 2);
-            navX -= (8 + _prevButton.Width);
-            _prevButton.Location = new Point(navX, navY);
-            navX -= 4 + _firstButton.Width;
-            _firstButton.Location = new Point(navX, navY);
-            navX -= 10;
+            _firstButton.Bounds = r.First;
+            _prevButton.Bounds = r.Previous;
+            _navLabel.Bounds = r.Counter;
+            _nextButton.Bounds = r.Next;
+            _lastButton.Bounds = r.Last;
         }
 
-        if (_scope != null && _tree.IsReady)
+        _scopeChip.Visible = r.ShowChip;
+        if (r.ShowChip)
         {
-            // The chip gives way before it can cover the heading.
-            int chipWidth = _scopeChip.PreferredWidth;
-            int left = navX - chipWidth;
-            _scopeChip.Visible = left > _subtitleLabel.Left + Math.Max(_titleLabel.PreferredWidth, _subtitleLabel.PreferredWidth) + 12;
-            _scopeChip.Location = new Point(left, (InfoBarHeight - _scopeChip.PreferredHeight) / 2);
+            _scopeChip.Location = r.Chip.Location;
+            _scopeChip.SendToBack();   // a safety net only: the rule above keeps it clear of the buttons
         }
+
+        // A long subtitle stops before the chip or the pager.
+        _subtitleLabel.AutoSize = false;
+        _subtitleLabel.AutoEllipsis = true;
+        _subtitleLabel.Size = new Size(Math.Max(0, Math.Min(subtitle.Width, r.SubtitleRight - _subtitleLabel.Left)), subtitle.Height);
     }
 
     // ---------- Ok button + snooze ----------

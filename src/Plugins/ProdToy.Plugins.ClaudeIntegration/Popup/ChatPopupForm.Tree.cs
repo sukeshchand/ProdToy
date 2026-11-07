@@ -62,7 +62,8 @@ sealed partial class ChatPopupForm
         var items = ScopeItems();
         if (items.Count == 0) return;
 
-        LoadItem(items[last ? items.Count - 1 : 0]);
+        // The list is latest first: Last = the newest (index 0), First = the oldest.
+        LoadItem(items[last ? PagerPosition.Newest(items.Count) : PagerPosition.Oldest(items.Count)]);
         RememberScope();
         SyncTree();
     }
