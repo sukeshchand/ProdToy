@@ -29,6 +29,15 @@ enum AlarmNotificationMode
     Both
 }
 
+/// <summary>What the ring window shows. Text = the alarm's Message (no folder);
+/// Markdown / Html = a body file in the alarm's own folder <c>alarms/&lt;id&gt;/</c>.</summary>
+enum AlarmBodyKind
+{
+    Text,
+    Markdown,
+    Html,
+}
+
 enum AlarmPriority
 {
     Low,
@@ -204,6 +213,16 @@ record AlarmEntry
     [JsonPropertyName("actions")]
     public AlarmAction[]? Actions { get; init; }
 
+    // --- body (optional; an alarm saved before this field exists loads as Text) ---
+
+    [JsonPropertyName("bodyKind")]
+    public AlarmBodyKind BodyKind { get; init; } = AlarmBodyKind.Text;
+
+    /// <summary>The body file's name inside the alarm's folder (body.md / body.html);
+    /// null for a Text alarm.</summary>
+    [JsonPropertyName("bodyPath")]
+    public string? BodyPath { get; init; }
+
     public DateTime? GetNextTrigger()
     {
         if (Status != AlarmStatus.Active) return null;
@@ -369,4 +388,15 @@ record AlarmHistoryEntry
 
     [JsonPropertyName("detail")]
     public string? Detail { get; init; }
+
+    /// <summary>Set on a firing: the body kind the alarm had at that moment.</summary>
+    [JsonPropertyName("bodyKind")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AlarmBodyKind? BodyKind { get; init; }
+
+    /// <summary>Set on a firing when the body file was 2 MB or less: the copy's path,
+    /// relative to the plugin data folder.</summary>
+    [JsonPropertyName("bodyCopy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BodyCopy { get; init; }
 }

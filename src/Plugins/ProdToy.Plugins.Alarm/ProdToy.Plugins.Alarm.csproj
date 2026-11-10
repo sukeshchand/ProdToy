@@ -20,6 +20,12 @@
       <Private>false</Private>
       <ExcludeAssets>runtime</ExcludeAssets>
     </ProjectReference>
+    <!-- WebView2 (alarm window body) is bundled with the host at runtime: compile-time
+         reference only, kept out of the plugin package. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>

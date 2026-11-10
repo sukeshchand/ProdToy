@@ -586,6 +586,8 @@ class AlarmForm : Form
             Status = AlarmStatus.Active,
             PausedUntil = null, SnoozedUntil = null, SkipNextOccurrence = false, LastError = null,
         };
+        try { AlarmStore.Bodies.CopyFolder(src.Id, copy.Id); }
+        catch (Exception ex) { PluginLog.Warn($"Could not copy the alarm folder: {ex.Message}"); }
         AlarmStore.AddAlarm(copy);
         AlarmScheduler.Refresh();
         _expandedId = copy.Id;

@@ -29,13 +29,42 @@ static class AlarmStore
     private static readonly List<AlarmHistoryEntry> _historyBuffer = new();
     private static System.Threading.Timer? _historyFlushTimer;
 
+    /// <summary>The alarm body folders (<c>alarms/&lt;id&gt;/</c>) under the plugin data folder.</summary>
+    public static AlarmBodyFiles Bodies { get; private set; } = new(Path.GetTempPath());
+
+    public static string DataDirectory => _dataDir;
+
     public static void Initialize(string dataDirectory, Func<int> getMaxHistoryEntries)
     {
         _dataDir = dataDirectory;
         _alarmsFile = Path.Combine(dataDirectory, "alarms.json");
         _historyFile = Path.Combine(dataDirectory, "alarm-history.json");
         _getMaxHistoryEntries = getMaxHistoryEntries;
+        Bodies = new AlarmBodyFiles(dataDirectory);
+        lock (_alarmLock) { _cachedAlarms = null; }
+        lock (_historyLock) { _cachedHistory = null; _historyBuffer.Clear(); }
     }
+
+    /// <summary>A Triggered / RestartRecovered history row that also remembers the body kind and,
+    /// for a body file of 2 MB or less, a copy of it.</summary>
+    public static AlarmHistoryEntry FiringEntry(AlarmEntry alarm, AlarmHistoryEventType type, string detail)
+    {
+        string? copy = null;
+        try { copy = Bodies.SnapshotForHistory(alarm, DateTime.Now); }
+        catch (Exception ex) { PluginLog.Warn($"Alarm body copy for history failed: {ex.Message}"); }
+        return new AlarmHistoryEntry
+        {
+            AlarmId = alarm.Id,
+            AlarmTitle = alarm.Title,
+            EventType = type,
+            Detail = detail,
+            BodyKind = alarm.BodyKind,
+            BodyCopy = copy,
+        };
+    }
+
+    /// <summary>Writes the buffered history rows now (tests and shutdown).</summary>
+    public static void FlushHistoryNow() => FlushHistory();
 
     public static void StartHistoryFlush()
     {
@@ -132,6 +161,8 @@ static class AlarmStore
         {
             alarms.Remove(alarm);
             SaveAlarms(alarms);
+            try { Bodies.DeleteFolder(id); }
+            catch (Exception ex) { PluginLog.Warn($"Could not delete the alarm folder of '{alarm.Title}': {ex.Message}"); }
             AddHistoryEntry(new AlarmHistoryEntry
             {
                 AlarmId = id,
@@ -273,7 +304,14 @@ static class AlarmStore
 
             int max = _getMaxHistoryEntries();
             if (history.Count > max)
+            {
+                foreach (var dropped in history.Take(history.Count - max))
+                {
+                    try { Bodies.DeleteHistoryCopy(dropped.BodyCopy); }
+                    catch (Exception ex) { PluginLog.Warn($"Could not delete a history body copy: {ex.Message}"); }
+                }
                 history = history.Skip(history.Count - max).ToList();
+            }
 
             var jsonOut = JsonSerializer.Serialize(history, _jsonOpts);
             Directory.CreateDirectory(_dataDir);

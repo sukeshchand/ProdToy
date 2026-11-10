@@ -142,13 +142,8 @@ static class AlarmScheduler
                         try
                         {
                             PluginLog.Info($"AlarmScheduler firing '{alarm.Title}' (scheduled {alarm.Schedule.TimeOfDay}, now {now:HH:mm:ss})");
-                            AlarmStore.AddHistoryEntry(new AlarmHistoryEntry
-                            {
-                                AlarmId = alarm.Id,
-                                AlarmTitle = alarm.Title,
-                                EventType = AlarmHistoryEventType.Triggered,
-                                Detail = $"Scheduled: {alarm.Schedule.TimeOfDay}, Actual: {now:HH:mm:ss}",
-                            });
+                            AlarmStore.AddHistoryEntry(AlarmStore.FiringEntry(alarm, AlarmHistoryEventType.Triggered,
+                                $"Scheduled: {alarm.Schedule.TimeOfDay}, Actual: {now:HH:mm:ss}"));
 
                             AlarmStore.RecordTrigger(alarm.Id);
                             AlarmTriggered?.Invoke(alarm);
@@ -289,13 +284,8 @@ static class AlarmScheduler
                     || alarm.LastTriggeredAt.Value.TimeOfDay < time.Subtract(TimeSpan.FromMinutes(1))))
                 {
                     PluginLog.Info($"AlarmScheduler recovered missed '{alarm.Title}' (scheduled {scheduledToday:HH:mm}, now {now:HH:mm:ss})");
-                    AlarmStore.AddHistoryEntry(new AlarmHistoryEntry
-                    {
-                        AlarmId = alarm.Id,
-                        AlarmTitle = alarm.Title,
-                        EventType = AlarmHistoryEventType.RestartRecovered,
-                        Detail = $"Missed at {scheduledToday:HH:mm}, recovered within {graceMinutes}min grace period",
-                    });
+                    AlarmStore.AddHistoryEntry(AlarmStore.FiringEntry(alarm, AlarmHistoryEventType.RestartRecovered,
+                        $"Missed at {scheduledToday:HH:mm}, recovered within {graceMinutes}min grace period"));
 
                     AlarmStore.RecordTrigger(alarm.Id);
                     AlarmTriggered?.Invoke(alarm);

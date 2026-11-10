@@ -79,7 +79,7 @@ static class AlarmNotifier
                 _host.QueuePopup(() =>
                 {
                     PluginLog.Info($"AlarmNotifier: factory building ring form for '{alarm.Title}'");
-                    var ringForm = new AlarmRingForm(alarm, _host!.CurrentTheme, _host.GlobalFont);
+                    var ringForm = AlarmRingLauncher.Create(alarm, preview: false);
                     ringForm.Dismissed += () =>
                     {
                         AlarmStore.AddHistoryEntry(new AlarmHistoryEntry

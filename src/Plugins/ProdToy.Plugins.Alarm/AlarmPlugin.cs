@@ -35,7 +35,9 @@ public partial class AlarmPlugin : IPlugin, IDoctor
             return s.AlarmHistoryMaxEntries;
         });
 
-        // MCP tools (alarm_list/create/update/delete/pause/resume/snooze/history)
+        AlarmRingLauncher.Initialize(context.Host);
+
+        // MCP tools (alarm_list/get/create/update/delete/pause/resume/snooze/preview/history)
         // so a Claude instance can set and manage reminders for the user.
         _mcpToolRegs.AddRange(AlarmMcpTools.RegisterAll(context));
     }
