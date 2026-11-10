@@ -38,7 +38,9 @@ sealed class UnreadQueue
     /// <param name="shownKey">The item the window displays now, if any.</param>
     public ArrivalAction Arrive(string? itemKey, bool popupAllowed, bool windowShown, string? shownKey)
     {
-        if (!string.IsNullOrEmpty(itemKey)) _store.MarkUnread(itemKey);
+        if (string.IsNullOrEmpty(itemKey)) return popupAllowed ? ArrivalAction.Show : ArrivalAction.Silent;
+
+        _store.MarkUnread(itemKey);
         return Decide(popupAllowed, windowShown, shownKey != null && shownKey != itemKey && _store.IsUnread(shownKey));
     }
 

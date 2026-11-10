@@ -70,8 +70,9 @@ public class UnreadQueueTests
         var queue = NewQueue();
         queue.Arrive("d#1", true, false, null);
 
-        Assert.Equal(ArrivalAction.Queue, queue.Arrive(null, true, true, "d#1"));
+        Assert.Equal(ArrivalAction.Show, queue.Arrive(null, true, true, "d#1"));
         Assert.Equal(ArrivalAction.Show, queue.Arrive(null, true, false, "d#1"));
+        Assert.Equal(ArrivalAction.Silent, queue.Arrive(null, false, true, "d#1"));
         Assert.Equal(1, queue.Count);
     }
 

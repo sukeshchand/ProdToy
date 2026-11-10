@@ -426,6 +426,15 @@ sealed class HistoryRows : Control
         Color quiet = selected ? Color.White : theme.TextSecondary;
         int x = r.X + 4 + depth * Indent;
 
+        if (node.IsItem && Tree!.ReadStore?.IsUnread(HistoryTree.ItemKey(node.Item!)) == true)
+        {
+            // New: not yet confirmed with OK.
+            using var dot = new SolidBrush(selected ? Color.White : NewMark.Dot(theme));
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.FillEllipse(dot, x + 3, r.Y + 9, 8, 8);
+            g.SmoothingMode = SmoothingMode.Default;
+        }
+
         if (node.Children.Count > 0)
         {
             bool open = _matches != null || _open.Contains(node.Key);

@@ -18,6 +18,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
     private HistoryTree _historyTree = null!;
     private TelegramNotifier _telegram = null!;
     private readonly List<IDisposable> _mcpToolRegs = new();
+    private string? _trayBaseText;
 
     public void Install(IPluginContext context)
     {
@@ -101,6 +102,13 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         _historyTree = new HistoryTree();
         var tree = _historyTree;
         var history = _chatHistory;
+
+        // The New marks are read at once (a notification may arrive before the tree is built); beside history\ like the tags.
+        var readMarks = ReadStore.Load(Path.Combine(context.DataDirectory, "read-marks.json"), DateTime.Now);
+        readMarks.Changed += () => context.Host.BeginInvokeOnUI(UpdateTrayUnread);
+        tree.ReadStore = readMarks;
+        tree.SetFolderView(FolderViews.Parse(context.LoadSettings<ClaudePluginSettings>().HistoryFolderView));
+
         _ = Task.Run(() =>
         {
             try
@@ -109,6 +117,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
                 tree.TagStore = TagStore.Load(Path.Combine(context.DataDirectory, "history-tags.json"));
                 tree.PinStore = PinStore.Load(Path.Combine(context.DataDirectory, "history-pins.json"));
                 tree.Load(history.SnapshotIndex());
+                readMarks.Prune(tree.ItemKeys());   // items that left the history lose their New mark
             }
             catch (Exception ex)
             {
@@ -116,7 +125,11 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
                 tree.Load([]);
             }
 
-            context.Host.BeginInvokeOnUI(() => _chatPopup?.OnTreeReady());
+            context.Host.BeginInvokeOnUI(() =>
+            {
+                _chatPopup?.OnTreeReady();
+                UpdateTrayUnread();
+            });
         });
 
         _telegram = new TelegramNotifier(context);
@@ -337,6 +350,8 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         try { _chatPopup?.Dispose(); } catch { }
         _chatPopup = null;
 
+        try { if (_trayBaseText != null) _context.Host.TrayIcon.Text = _trayBaseText; } catch { }
+
         _context.Log("Claude integration stopped");
     }
 
@@ -382,6 +397,23 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
     }
 
     public void Dispose() { }
+
+    /// <summary>The tray icon's tooltip says how many notifications are still New.</summary>
+    private void UpdateTrayUnread()
+    {
+        try
+        {
+            var icon = _context.Host.TrayIcon;
+            _trayBaseText ??= icon.Text ?? "ProdToy";
+            int n = _historyTree.ReadStore?.Count ?? 0;
+            string text = n > 0 ? $"{_trayBaseText} - {n} unread" : _trayBaseText;
+            icon.Text = text.Length > 127 ? text[..127] : text;
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"Could not update the tray tooltip: {ex.Message}");
+        }
+    }
 
     public IReadOnlyList<MenuContribution> GetMenuItems() =>
     [

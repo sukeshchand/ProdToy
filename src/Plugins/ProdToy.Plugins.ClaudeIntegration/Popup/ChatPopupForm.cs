@@ -72,6 +72,11 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
     private readonly Panel _rightPane;
     private readonly System.Windows.Forms.Timer _loadingTimer;
 
+    // New / Read: the queue's rules, the chips under the tree button and the count on it.
+    private readonly UnreadQueue _unread;
+    private readonly UnreadChipStrip _chips;
+    private readonly Label _unreadBadge;
+
     private bool _webViewReady;
     private bool _webViewFailed;
     private bool _webViewInitStarted;
@@ -386,6 +391,34 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         _treeButton.Click += (_, _) => ToggleTree();
         _strip.Controls.Add(_treeButton);
 
+        var readMarks = tree.ReadStore ?? ReadStore.Load(Path.Combine(context.DataDirectory, "read-marks.json"), DateTime.Now);
+        tree.ReadStore ??= readMarks;
+        _unread = new UnreadQueue(readMarks);
+        _chips = new UnreadChipStrip { Theme = _theme, Location = new Point(2, 58), Width = StripWidth - 4, Height = 100 };
+        _chips.ChipClicked += ShowItem;
+        _chips.MarkRead += key => _unread.MarkRead(key);
+        _chips.MarkAllRead += () => _unread.MarkAllRead();
+        _unreadBadge = new Label
+        {
+            AutoSize = false,
+            Size = new Size(22, 14),
+            Location = new Point(StripWidth - 24, 5),
+            Font = new Font("Segoe UI", 6.5f, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleCenter,
+            BackColor = NewMark.Back(_theme),
+            ForeColor = NewMark.Fore(_theme),
+            Visible = false,
+        };
+        _strip.Controls.Add(_chips);
+        _strip.Controls.Add(_unreadBadge);
+        _unreadBadge.BringToFront();
+        _strip.Resize += (_, _) =>
+        {
+            _chips.Height = Math.Max(0, _strip.ClientSize.Height - _chips.Top - 8);
+            UpdateUnreadBadge();
+        };
+        readMarks.Changed += OnReadMarksChanged;
+
         _treePanel = new HistoryTreePanel(_theme) { Width = _treeWidth, Visible = _treeOpen };
         _treePanel.SetTree(_tree);
         _treePanel.NodePicked += OnNodePicked;
@@ -512,25 +545,33 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
             _treePanel.RefreshRows();
         }
 
-        var settings = _context.LoadSettings<ClaudePluginSettings>();
-        if (!settings.NotificationsEnabled) return;
-        if (IsSnoozed) return;
-
         // Suppress messages matching the user-configured regex (default
         // catches the bare "Claude is waiting for your input" pings) — but
         // only for live incoming notifications. When the user explicitly
         // clicks "Show Last Notification" we always honor the request, even
         // if the saved message would otherwise be filtered.
-        if (!bypassFilter && MatchesSuppressRegex(message, settings.SuppressMessageRegex)) return;
+        var settings = _context.LoadSettings<ClaudePluginSettings>();
+        bool allowed = settings.NotificationsEnabled && !IsSnoozed
+            && (bypassFilter || !MatchesSuppressRegex(message, settings.SuppressMessageRegex));
 
         string mode = settings.NotificationMode;
         bool wantPopup = mode is "Popup" or "Popup + Windows";
         bool wantBalloon = mode is "Windows" or "Popup + Windows";
 
-        if (wantBalloon)
+        if (allowed && wantBalloon)
             ShowTrayBalloon(title, message, type);
 
-        if (!wantPopup) return;
+        // A saved item is New until OK. While the item on screen is New the window is left alone: only the chips,
+        // the tree and the pager's total change. Snoozed or suppressed items stay New without a pop-up.
+        var action = _unread.Arrive(newItem, allowed && wantPopup, Visible && WindowState != FormWindowState.Minimized, _itemKey);
+        RefreshUnread();
+        if (action == ArrivalAction.Silent) return;
+        if (action == ArrivalAction.Queue)
+        {
+            UpdateHistoryNav();
+            PositionControls();
+            return;
+        }
 
         _loadVersion++;
         HideLoading();
@@ -596,6 +637,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         EnsureScope();
         _treePanel.RefreshRows();
         SyncTree();
+        RefreshUnread();
     }
 
     /// <summary>The scope once, from the settings; a saved key that is gone falls back to the root.</summary>
@@ -621,6 +663,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
 
     private void SyncTree()
     {
+        _chips.SetCurrent(_itemKey);
         _treePanel.SetState(_scope, _itemKey);
         UpdateHistoryNav();
         PositionControls();
@@ -683,6 +726,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
     {
         int version = ++_loadVersion;
         _itemKey = HistoryTree.ItemKey(item);
+        _chips.SetCurrent(_itemKey);
         _loadingTimer.Start();
         try
         {
@@ -734,6 +778,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         ApplyMinimumWidth();
         if (WindowState == FormWindowState.Normal) Width = width;
         SyncTree();
+        UpdateUnreadBadge();
     }
 
     public void SetTreeWidth(int width)
@@ -759,6 +804,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
     {
         if (keyData == (Keys.Alt | Keys.Left)) { NavigateHistory(older: true); return true; }
         if (keyData == (Keys.Alt | Keys.Right)) { NavigateHistory(older: false); return true; }
+        if (keyData == Keys.Escape) { Hide(); return true; }   // closes; marks nothing Read
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
@@ -1383,17 +1429,72 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
 
     // ---------- Ok button + snooze ----------
 
+    /// <summary>OK: the item on screen is Read. The newest New item shows next; with none left the window closes.</summary>
     private void OnOkClick()
     {
-        if (_snoozeCheckBox.Checked)
+        string? next = _unread.Ok(_itemKey, TimeOf);
+        if (next == null)
         {
-            SetSnooze(DateTime.Now.AddMinutes(30));
+            Hide();
+            return;
         }
-        else if (IsSnoozed)
+
+        ShowItem(next);
+    }
+
+    private DateTime? TimeOf(string itemKey) => _tree.FindItem(itemKey)?.Timestamp;
+
+    /// <summary>Shows one item (a chip, or the next New one after OK): its scope as for a new notification, the tree revealed. It stays New.</summary>
+    private void ShowItem(string itemKey)
+    {
+        if (!_tree.IsReady || _tree.FindItem(itemKey) is not { } item) return;
+
+        EnsureScope();
+        SetScope(_tree.ScopeFor(itemKey, _scope), itemKey);
+        if (_tree.ItemNode(itemKey, _scope) is { } node) _treePanel.Reveal(node);
+        LoadItem(item);
+        if (!Visible) ShowManual();
+    }
+
+    // ---------- New chips ----------
+
+    private void OnReadMarksChanged()
+    {
+        if (IsDisposed) return;
+        if (InvokeRequired)
         {
-            SetSnooze(DateTime.MinValue);
+            if (IsHandleCreated) BeginInvoke(RefreshUnread);
+            return;
         }
-        Hide();
+
+        RefreshUnread();
+    }
+
+    /// <summary>The chips, the count on the tree button and the tree's New dots, from the read marks.</summary>
+    private void RefreshUnread()
+    {
+        var chips = new List<UnreadChip>();
+        if (_tree.IsReady)
+        {
+            foreach (var key in _unread.NewestFirst(TimeOf))
+            {
+                if (_tree.FindItem(key) is not { } item) continue;
+                chips.Add(new UnreadChip(key, HistoryTree.FolderLabel(item.Cwd), item.Timestamp,
+                    string.IsNullOrWhiteSpace(item.Preview) ? item.Title : item.Preview));
+            }
+        }
+
+        _chips.SetChips(chips, _itemKey);
+        UpdateUnreadBadge();
+        _treePanel.Invalidate(true);
+    }
+
+    /// <summary>The count on the tree button: shown when the tree is closed or the chips do not all fit.</summary>
+    private void UpdateUnreadBadge()
+    {
+        int n = _chips.Count;
+        _unreadBadge.Text = n > 99 ? "99+" : n.ToString();
+        _unreadBadge.Visible = n > 0 && (!_treeOpen || _chips.Overflowing);
     }
 
     // ---------- Funny quote animation ----------
@@ -1546,6 +1647,10 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         _treePanel.ApplyTheme(theme);
         _treePanel.Invalidate(true);
         ApplyTreeButtonColors();
+        _chips.Theme = theme;
+        _chips.Invalidate();
+        _unreadBadge.BackColor = NewMark.Back(theme);
+        _unreadBadge.ForeColor = NewMark.Fore(theme);
 
         ApplyTypeColors(_lastType);
         if (_webViewReady && !string.IsNullOrEmpty(_lastMessage))
@@ -1570,6 +1675,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         if (disposing)
         {
             try { _host.ThemeChanged -= OnThemeChanged; } catch { }
+            try { _unread.Store.Changed -= OnReadMarksChanged; } catch { }
             try { _typeTimer?.Dispose(); } catch { }
             try { _loadingTimer?.Dispose(); } catch { }
             try { _sparkleTimer?.Dispose(); } catch { }
