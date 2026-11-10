@@ -39,6 +39,20 @@ public partial class ShortCutManagerPlugin
         CheckJsonFile(checks, Path.Combine(dataDir, "shortcuts-recyclebin.json"), "shortcuts-recyclebin.json is valid JSON", expectArray: true);
         CheckJsonFile(checks, Path.Combine(dataDir, "settings.json"),             "Plugin settings is valid JSON", expectArray: false);
 
+        // Claude CLI options catalog behind the shortcut editor's ⋯ menu.
+        checks.Add(new DoctorCheck
+        {
+            Source = DoctorSource,
+            Title = ClaudeCliCatalog.CliVersion == null
+                ? "Claude CLI options: built-in list"
+                : $"Claude CLI options: read from CLI {ClaudeCliCatalog.CliVersion}",
+            Passed = true,
+            Details = $"{ClaudeCliCatalog.Current.Count} options"
+                + (ClaudeCliCatalog.RefreshedAt is DateTime at ? $", refreshed {at:yyyy-MM-dd HH:mm}" : "")
+                + (ClaudeCliCatalog.CacheFile.Length > 0 ? $"\n{ClaudeCliCatalog.CacheFile}" : "")
+                + "\n(Refresh from the ⋯ menu of a Claude shortcut's args.)",
+        });
+
         // Stale WT profile tracking.
         try
         {

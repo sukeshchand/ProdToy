@@ -39,6 +39,12 @@ A Windows developer utility that integrates with Claude Code CLI. Provides rich 
 - **Triple Ctrl** -- triple Ctrl-tap to instantly open last screenshot editor
 - **Status Line Config** -- toggle individual status line items
 
+### Shortcuts
+- **Saved shortcuts** -- launch Claude CLI, npm, dotnet, PowerShell, custom commands, URLs and Visual Studio solutions from a folder tree
+- **Claude CLI flags** -- chips for the common flags (`--permission-mode auto`, `--continue`, `--resume`, `-p`, `--model`, `/rename`); new Claude shortcuts start with `--permission-mode auto --continue`
+- **Options menu** -- the ⋯ chip (or a right-click on the chips) lists every Claude CLI option by group with a ✓ for the active ones, the help text as a tooltip, value prompts and choice submenus
+- **Refresh options** -- "Refresh options from `claude --help`" reads the installed CLI's options and keeps them for the next start; without the CLI a built-in list is used
+
 ## Requirements
 
 - Windows 10/11

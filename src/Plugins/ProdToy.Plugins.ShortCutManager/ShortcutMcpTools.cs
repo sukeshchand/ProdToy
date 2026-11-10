@@ -111,7 +111,7 @@ static class ShortcutMcpTools
                 "Create a new saved shortcut.",
                 Schema(NameArg,
                     ("profile", "string", "Launch profile id (default \"custom\"). Common: claude, custom, vssln, url.", false),
-                    ("args", "string", "Profile arguments: the command line (custom), CLI args (claude), URL (url), or .sln path (vssln).", false),
+                    ("args", "string", "Profile arguments: the command line (custom), CLI args (claude; default \"--permission-mode auto --continue\"), URL (url), or .sln path (vssln).", false),
                     ("workingDirectory", "string", "Required for terminal profiles; the directory to run in.", false),
                     ("folder", "string", "Folder path to file it under (created if new). Default: root.", false)),
                 ShortcutSection,

@@ -61,6 +61,7 @@ public partial class ShortCutManagerPlugin : IPlugin, IDoctor
         DesktopShortcutSync.Initialize(scopedDataDir);
         AutoLoginPaths.Initialize(scopedDataDir);
         ConsolidatedSettings.Initialize(scopedDataDir);
+        ClaudeCliCatalog.Initialize(scopedDataDir);
 
         // Two pipe handlers:
         //   shortcuts.context-launch — Explorer right-click invocation;

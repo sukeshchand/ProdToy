@@ -82,7 +82,8 @@ static class ShortcutRpc
                 + $"Available: {string.Join(", ", LaunchProfiles.All.Select(p => $"{p.Id} ({p.DisplayName})"))}."));
         var profile = LaunchProfiles.GetOrDefault(profileId);
 
-        string args = LauncherRpc.ParseString(cmd.PayloadJson, "args") ?? "";
+        // No args given = the profile's default (a new Claude shortcut gets --permission-mode auto --continue).
+        string args = LauncherRpc.ParseString(cmd.PayloadJson, "args") ?? profile.DefaultArgs;
         string workDir = LauncherRpc.ParseString(cmd.PayloadJson, "workingDirectory") ?? "";
         string folder = ShortcutFolders.Normalize(LauncherRpc.ParseString(cmd.PayloadJson, "folder"));
 

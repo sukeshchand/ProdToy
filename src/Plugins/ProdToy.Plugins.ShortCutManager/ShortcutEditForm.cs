@@ -229,8 +229,9 @@ class ShortcutEditForm : Form
             bool isClaude = profileIdx >= 0
                 && profileIdx < LaunchProfiles.All.Length
                 && LaunchProfiles.All[profileIdx].Id.Equals("claude", StringComparison.OrdinalIgnoreCase);
-            if (isClaude && string.IsNullOrWhiteSpace(_argsBox.Text))
-                _argsBox.Text = $"\"/rename {leaf}\"";
+            if (isClaude && (string.IsNullOrWhiteSpace(_argsBox.Text)
+                    || _argsBox.Text.Trim() == LaunchProfiles.All[profileIdx].DefaultArgs))
+                _argsBox.Text = (_argsBox.Text.Trim() + $" \"/rename {leaf}\"").Trim();
         };
         _host.Controls.Add(browseBtn);
         y += 34;
@@ -283,6 +284,12 @@ class ShortcutEditForm : Form
             Margin = new Padding(0),
         };
         _host.Controls.Add(chipPanel);
+        _chipProfile = initialProfile;
+        chipPanel.MouseUp += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Right && _chipProfile.HasOptionsMenu)
+                ShowOptionsMenu(chipPanel, e.Location);
+        };
         RebuildArgsChips(chipPanel, initialProfile, theme);
         // Keep the chip highlight/tick in sync when the args are edited directly.
         _argsBox.TextChanged += (_, _) => RefreshArgsChipStates(chipPanel);
@@ -611,163 +618,93 @@ class ShortcutEditForm : Form
 
         y = AddSection("INTEGRATION", y);
 
-        // This tab's toggle captions are longer than the shared label column
-        // (labelW) — "Ignore in Consolidated Launcher" overlapped its toggle.
-        // Give the toggles their own column, measured from the widest caption.
-        var integrationCaptionFont = new Font("Segoe UI", 9.5f);
-        string[] integrationCaptions =
+        // The rows sit in a table: caption column AutoSize, toggle column AutoSize,
+        // hint column fills the rest. The columns size from the rendered text, so a
+        // long caption ("Ignore in Consolidated Launcher") never runs under its
+        // toggle at any DPI / font scaling.
+        var integrationTable = new TableLayoutPanel
         {
-            "Keep running on Stop All", "Ignore in Consolidated Launcher",
-            "Require administrator", "Show in Explorer right-click", "Add shortcut to desktop",
-        };
-        int toggleX = Math.Max(inputX, pad + integrationCaptions
-            .Max(t => TextRenderer.MeasureText(t, integrationCaptionFont).Width) + 16);
-        int toggleHintW = inputW - (toggleX - inputX);
-
-        var keepRunningCaption = new Label
-        {
-            Text = "Keep running on Stop All",
-            Font = integrationCaptionFont,
-            ForeColor = theme.TextPrimary,
-            AutoSize = true,
-            Location = new Point(pad, y + 4),
+            Location = new Point(pad, y),
+            Size = new Size(_pageW - pad * 2 - 18, 380),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            ColumnCount = 3,
             BackColor = Color.Transparent,
+            Padding = new Padding(0),
+            Margin = new Padding(0),
         };
-        _host.Controls.Add(keepRunningCaption);
-        _keepRunningToggle = new ToggleSwitch(theme)
-        {
-            Checked = existing?.ExcludeFromStopAll ?? false,
-            Location = new Point(toggleX, y + 2),
-        };
-        _host.Controls.Add(_keepRunningToggle);
-        var keepRunningHint = new Label
-        {
-            Text = "Consolidated Launcher's “Stop All” skips this (for always-on support tools). The row’s ■ still stops it.",
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-            ForeColor = theme.TextSecondary,
-            AutoSize = false,
-            Size = new Size(toggleHintW, 30),
-            Location = new Point(toggleX + _keepRunningToggle.Width + 12, y + 4),
-            BackColor = Color.Transparent,
-        };
-        _host.Controls.Add(keepRunningHint);
-        y += 42;
+        integrationTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        integrationTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        integrationTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        _host.Controls.Add(integrationTable);
 
-        var ignoreConsolidatedCaption = new Label
+        ToggleSwitch AddToggleRow(string caption, bool isOn, string hint)
         {
-            Text = "Ignore in Consolidated Launcher",
+            int row = integrationTable.RowCount++;
+            integrationTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            integrationTable.Controls.Add(new Label
+            {
+                Text = caption,
+                Font = new Font("Segoe UI", 9.5f),
+                ForeColor = theme.TextPrimary,
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 8, 16, 8),
+                BackColor = Color.Transparent,
+            }, 0, row);
+            var toggle = new ToggleSwitch(theme)
+            {
+                Checked = isOn,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 6, 12, 6),
+            };
+            integrationTable.Controls.Add(toggle, 1, row);
+            integrationTable.Controls.Add(new Label
+            {
+                Text = hint,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+                ForeColor = theme.TextSecondary,
+                AutoSize = true,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right,
+                Margin = new Padding(0, 6, 0, 6),
+                BackColor = Color.Transparent,
+            }, 2, row);
+            return toggle;
+        }
+
+        _keepRunningToggle = AddToggleRow("Keep running on Stop All", existing?.ExcludeFromStopAll ?? false,
+            "Consolidated Launcher's “Stop All” skips this (for always-on support tools). The row’s ■ still stops it.");
+        _ignoreConsolidatedToggle = AddToggleRow("Ignore in Consolidated Launcher", existing?.ExcludeFromConsolidated ?? false,
+            "Don’t show this as a row in the Consolidated Launcher (for things that aren’t a capturable process — a Claude session, a URL, a VS solution).");
+        _adminToggle = AddToggleRow("Require administrator", existing?.RequireAdmin ?? false,
+            "Elevate via UAC prompt on launch");
+        _explorerMenuToggle = AddToggleRow("Show in Explorer right-click", existing?.ShowInExplorerContextMenu ?? false,
+            "Adds a “Run …” menu item when right-clicking inside this working directory");
+        _desktopShortcutToggle = AddToggleRow("Add shortcut to desktop", existing?.AddToDesktop ?? false,
+            "Creates a desktop .lnk that triggers the same launch action");
+
+        // Desktop name: caption in the first column, the box across the other two.
+        int nameRow = integrationTable.RowCount++;
+        integrationTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        integrationTable.Controls.Add(new Label
+        {
+            Text = "Desktop name",
             Font = new Font("Segoe UI", 9.5f),
-            ForeColor = theme.TextPrimary,
-            AutoSize = true,
-            Location = new Point(pad, y + 4),
-            BackColor = Color.Transparent,
-        };
-        _host.Controls.Add(ignoreConsolidatedCaption);
-        _ignoreConsolidatedToggle = new ToggleSwitch(theme)
-        {
-            Checked = existing?.ExcludeFromConsolidated ?? false,
-            Location = new Point(toggleX, y + 2),
-        };
-        _host.Controls.Add(_ignoreConsolidatedToggle);
-        var ignoreConsolidatedHint = new Label
-        {
-            Text = "Don’t show this as a row in the Consolidated Launcher (for things that aren’t a capturable process — a Claude session, a URL, a VS solution).",
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-            ForeColor = theme.TextSecondary,
-            AutoSize = false,
-            Size = new Size(toggleHintW, 30),
-            Location = new Point(toggleX + _ignoreConsolidatedToggle.Width + 12, y + 4),
-            BackColor = Color.Transparent,
-        };
-        _host.Controls.Add(ignoreConsolidatedHint);
-        y += 42;
-
-        var adminCaption = new Label
-        {
-            Text = "Require administrator",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = theme.TextPrimary,
-            AutoSize = true,
-            Location = new Point(pad, y + 4),
-            BackColor = Color.Transparent,
-        };
-        _host.Controls.Add(adminCaption);
-        _adminToggle = new ToggleSwitch(theme)
-        {
-            Checked = existing?.RequireAdmin ?? false,
-            Location = new Point(toggleX, y + 2),
-        };
-        _host.Controls.Add(_adminToggle);
-        var adminHint = new Label
-        {
-            Text = "Elevate via UAC prompt on launch",
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
             ForeColor = theme.TextSecondary,
             AutoSize = true,
-            Location = new Point(toggleX + _adminToggle.Width + 12, y + 6),
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 8, 16, 8),
             BackColor = Color.Transparent,
-        };
-        _host.Controls.Add(adminHint);
-        y += 38;
+        }, 0, nameRow);
+        _desktopShortcutNameBox = MakeTextBox(0, 0, 200);
+        _host.Controls.Remove(_desktopShortcutNameBox);
+        _desktopShortcutNameBox.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        _desktopShortcutNameBox.Margin = new Padding(0, 6, 0, 6);
+        integrationTable.Controls.Add(_desktopShortcutNameBox, 1, nameRow);
+        integrationTable.SetColumnSpan(_desktopShortcutNameBox, 2);
+        // Filler row takes the slack below.
+        integrationTable.RowCount++;
+        integrationTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
-        var explorerCaption = new Label
-        {
-            Text = "Show in Explorer right-click",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = theme.TextPrimary,
-            AutoSize = true,
-            Location = new Point(pad, y + 4),
-            BackColor = Color.Transparent,
-        };
-        _host.Controls.Add(explorerCaption);
-        _explorerMenuToggle = new ToggleSwitch(theme)
-        {
-            Checked = existing?.ShowInExplorerContextMenu ?? false,
-            Location = new Point(toggleX, y + 2),
-        };
-        _host.Controls.Add(_explorerMenuToggle);
-        var explorerHint = new Label
-        {
-            Text = "Adds a “Run …” menu item when right-clicking inside this working directory",
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-            ForeColor = theme.TextSecondary,
-            AutoSize = true,
-            Location = new Point(toggleX + _explorerMenuToggle.Width + 12, y + 6),
-            BackColor = Color.Transparent,
-        };
-        _host.Controls.Add(explorerHint);
-        y += 38;
-
-        var desktopCaption = new Label
-        {
-            Text = "Add shortcut to desktop",
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = theme.TextPrimary,
-            AutoSize = true,
-            Location = new Point(pad, y + 4),
-            BackColor = Color.Transparent,
-        };
-        _host.Controls.Add(desktopCaption);
-        _desktopShortcutToggle = new ToggleSwitch(theme)
-        {
-            Checked = existing?.AddToDesktop ?? false,
-            Location = new Point(toggleX, y + 2),
-        };
-        _host.Controls.Add(_desktopShortcutToggle);
-        var desktopHint = new Label
-        {
-            Text = "Creates a desktop .lnk that triggers the same launch action",
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-            ForeColor = theme.TextSecondary,
-            AutoSize = true,
-            Location = new Point(toggleX + _desktopShortcutToggle.Width + 12, y + 6),
-            BackColor = Color.Transparent,
-        };
-        _host.Controls.Add(desktopHint);
-        y += 36;
-
-        AddLabel("Desktop name", pad, y);
-        _desktopShortcutNameBox = MakeTextBox(inputX, y, inputW);
         if (existing != null && !string.IsNullOrEmpty(existing.DesktopShortcutName))
         {
             _desktopShortcutNameBox.Text = existing.DesktopShortcutName;
@@ -1323,44 +1260,94 @@ class ShortcutEditForm : Form
         return $"{leaf.Trim()} {profileName.Trim()}";
     }
 
+    // The profile whose chips are on screen (drives the ⋯ menu and the toggle logic).
+    private LaunchProfile _chipProfile = LaunchProfiles.Default;
+
+    private RoundedButton MakeChip(string text, PluginTheme theme)
+    {
+        var chip = new RoundedButton
+        {
+            Text = text,
+            Font = new Font("Consolas", 9f),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = new Padding(0, 0, 6, 6),
+            Padding = new Padding(8, 2, 8, 2),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = theme.PrimaryDim,
+            ForeColor = theme.TextPrimary,
+            Cursor = Cursors.Hand,
+        };
+        chip.FlatAppearance.BorderSize = 0;
+        chip.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
+        return chip;
+    }
+
     private void RebuildArgsChips(FlowLayoutPanel panel, LaunchProfile profile, PluginTheme theme)
     {
         foreach (Control c in panel.Controls) c.Dispose();
         panel.Controls.Clear();
+        _chipProfile = profile;
 
-        foreach (var token in profile.SuggestedTokens)
+        foreach (var option in profile.SuggestedTokens)
         {
-            var chip = new RoundedButton
-            {
-                Text = token,
-                Tag = token,
-                Font = new Font("Consolas", 9f),
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Margin = new Padding(0, 0, 6, 6),
-                Padding = new Padding(8, 2, 8, 2),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = theme.PrimaryDim,
-                ForeColor = theme.TextPrimary,
-                Cursor = Cursors.Hand,
-            };
-            chip.FlatAppearance.BorderSize = 0;
-            chip.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
-            string captured = token;
+            var chip = MakeChip(option.Label, theme);
+            chip.Tag = option;
+            if (option.Description.Length > 0)
+                _chipTips.SetToolTip(chip, ArgsEditor.Wrap(option.Description));
+            var captured = option;
             chip.Click += (_, _) =>
             {
-                // "/rename <name>" is a template — insert /rename with the shortcut's
-                // own name; other chips just toggle their literal token.
-                _argsBox.Text = captured.Contains("<name>")
-                    ? ToggleRenameDirective(_argsBox.Text, _nameBox.Text)
-                    : ToggleArgsToken(_argsBox.Text, captured);
-                _argsBox.Focus();
-                _argsBox.SelectionStart = _argsBox.Text.Length;
+                ApplyArgs(ToggleChip(_argsBox.Text, captured, profile));
                 RefreshArgsChipStates(panel);
+            };
+            chip.MouseUp += (_, e) =>
+            {
+                if (e.Button == MouseButtons.Right && profile.HasOptionsMenu)
+                    ShowOptionsMenu(chip, e.Location);
             };
             panel.Controls.Add(chip);
         }
+
+        if (profile.HasOptionsMenu)
+        {
+            var more = MakeChip("⋯", theme);
+            _chipTips.SetToolTip(more, "Every Claude CLI option, grouped (also on right-click of this row)");
+            more.Click += (_, _) => ShowOptionsMenu(more, new Point(0, more.Height));
+            panel.Controls.Add(more);
+        }
         RefreshArgsChipStates(panel);
+    }
+
+    private readonly ToolTip _chipTips = new() { AutoPopDelay = 20000, InitialDelay = 400 };
+
+    /// <summary>Puts new args into the box, caret at the end.</summary>
+    private void ApplyArgs(string args)
+    {
+        _argsBox.Text = args;
+        _argsBox.Focus();
+        _argsBox.SelectionStart = _argsBox.Text.Length;
+    }
+
+    private string ToggleChip(string? args, CliOption option, LaunchProfile profile)
+    {
+        // "/rename <name>" is a template — insert /rename with the shortcut's own name.
+        if (option.Token.Contains("<name>")) return ToggleRenameDirective(args, _nameBox.Text);
+        if (!profile.HasOptionsMenu) return ToggleArgsToken(args, option.Token);
+        var catalog = ClaudeCliCatalog.Current;
+        var full = catalog.FirstOrDefault(o => o.Matches(option.Token)) ?? option;
+        return option.ChipValue != null
+            ? ArgsEditor.ToggleValue(args, full, option.ChipValue, catalog)
+            : ArgsEditor.Toggle(args, full, catalog);
+    }
+
+    private bool ChipActive(string? args, CliOption option, LaunchProfile profile)
+    {
+        if (option.Token.Contains("<name>")) return _renameRx.IsMatch(args ?? "");
+        if (!profile.HasOptionsMenu) return ArgsHasToken(args, option.Token);
+        var full = ClaudeCliCatalog.Current.FirstOrDefault(o => o.Matches(option.Token)) ?? option;
+        if (option.ChipValue == null) return ArgsEditor.Has(args, full);
+        return string.Equals(ArgsEditor.GetValue(args, full), option.ChipValue, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Highlight (with a ✓) the suggestion chips whose token is already in
@@ -1369,13 +1356,179 @@ class ShortcutEditForm : Form
     {
         foreach (Control c in panel.Controls)
         {
-            if (c is not RoundedButton chip || chip.Tag is not string token) continue;
-            bool active = token.Contains("<name>")
-                ? _renameRx.IsMatch(_argsBox.Text ?? "")
-                : ArgsHasToken(_argsBox.Text, token);
-            chip.Text = active ? "✓ " + token : token;
+            if (c is not RoundedButton chip || chip.Tag is not CliOption option) continue;
+            bool active = ChipActive(_argsBox.Text, option, _chipProfile);
+            chip.Text = active ? "✓ " + option.Label : option.Label;
             chip.BackColor = active ? _theme.Primary : _theme.PrimaryDim;
             chip.ForeColor = active ? Color.White : _theme.TextPrimary;
+        }
+    }
+
+    // ------------------------------------------------------------ ⋯ options menu
+
+    private ContextMenuStrip? _optionsMenu;
+
+    /// <summary>The grouped menu of every Claude CLI option, rebuilt on each open so
+    /// the ✓ states and values match the args box.</summary>
+    private void ShowOptionsMenu(Control anchor, Point at)
+    {
+        _optionsMenu?.Dispose();
+        var menu = new ContextMenuStrip
+        {
+            ShowItemToolTips = true,
+            BackColor = _theme.BgHeader,
+            ForeColor = _theme.TextPrimary,
+        };
+        _optionsMenu = menu;
+        var catalog = ClaudeCliCatalog.Current;
+        string args = _argsBox.Text ?? "";
+
+        foreach (var group in ClaudeCliCatalog.Groups)
+        {
+            var options = catalog.Where(o => o.Group == group).ToList();
+            if (options.Count == 0) continue;
+            var groupItem = new ToolStripMenuItem(group);
+            int on = 0;
+            foreach (var option in options)
+            {
+                var item = BuildOptionItem(option, args, catalog);
+                if (item.Checked) on++;
+                groupItem.DropDownItems.Add(item);
+            }
+            if (on > 0) groupItem.Text = $"{group}  ({on})";
+            StyleDropDown(groupItem);
+            menu.Items.Add(groupItem);
+        }
+
+        menu.Items.Add(new ToolStripSeparator());
+        var refresh = new ToolStripMenuItem("Refresh options from `claude --help`")
+        {
+            ToolTipText = ArgsEditor.Wrap("Reads the options of the installed Claude CLI, adds any new ones to this menu "
+                + "and keeps them for the next time. Without the CLI the built-in list is used."),
+        };
+        refresh.Click += async (_, _) => await RefreshCatalogAsync();
+        menu.Items.Add(refresh);
+        menu.Items.Add(new ToolStripMenuItem(ClaudeCliCatalog.CliVersion == null
+            ? "Options: built-in list"
+            : $"Options: from Claude CLI {ClaudeCliCatalog.CliVersion}") { Enabled = false });
+
+        menu.Show(anchor, at);
+    }
+
+    private void StyleDropDown(ToolStripMenuItem item)
+    {
+        if (item.DropDown is ToolStripDropDownMenu dd)
+        {
+            dd.ShowItemToolTips = true;
+            dd.BackColor = _theme.BgHeader;
+            dd.ForeColor = _theme.TextPrimary;
+        }
+    }
+
+    private ToolStripMenuItem BuildOptionItem(CliOption option, string args, IReadOnlyList<CliOption> catalog)
+    {
+        bool isRename = option.Token.Contains("<name>");
+        string? value = isRename ? null : ArgsEditor.GetValue(args, option);
+        bool present = isRename ? _renameRx.IsMatch(args) : value != null;
+
+        string text = option.Token;
+        if (!isRename && option.ValueKind != CliValueKind.None)
+            text += " " + (string.IsNullOrEmpty(value)
+                ? (option.ValueHint.Length > 0 ? option.ValueHint : option.ValueKind == CliValueKind.Required ? "<value>" : "[value]")
+                : value);
+        var item = new ToolStripMenuItem(text)
+        {
+            Checked = present,
+            ToolTipText = ArgsEditor.Wrap(option.Description),
+        };
+
+        if (isRename || option.ValueKind == CliValueKind.None)
+        {
+            item.Click += (_, _) => ApplyMenuArgs(isRename
+                ? ToggleRenameDirective(_argsBox.Text, _nameBox.Text)
+                : ArgsEditor.Toggle(_argsBox.Text, option, catalog));
+            return item;
+        }
+
+        if (option.ChoiceList.Length > 0)
+        {
+            // Choices as a submenu: picking one sets / swaps the value, picking the
+            // current one again removes the option.
+            if (option.ValueKind == CliValueKind.Optional)
+            {
+                var bare = new ToolStripMenuItem("(no value)") { Checked = value == "" };
+                bare.Click += (_, _) => ApplyMenuArgs(value == ""
+                    ? ArgsEditor.Remove(_argsBox.Text, option)
+                    : ArgsEditor.SetValue(_argsBox.Text, option, null, catalog));
+                item.DropDownItems.Add(bare);
+            }
+            foreach (var choice in option.ChoiceList)
+            {
+                var c = new ToolStripMenuItem(choice)
+                {
+                    Checked = string.Equals(value, choice, StringComparison.OrdinalIgnoreCase),
+                };
+                string captured = choice;
+                c.Click += (_, _) => ApplyMenuArgs(ArgsEditor.ToggleValue(_argsBox.Text, option, captured, catalog));
+                item.DropDownItems.Add(c);
+            }
+            AddRemoveItem(item, option, present);
+            StyleDropDown(item);
+            return item;
+        }
+
+        if (!present)
+        {
+            item.Click += (_, _) => PromptForValue(option, catalog);
+            return item;
+        }
+
+        // Present with a free value: change it or take it out.
+        var change = new ToolStripMenuItem("Change value…");
+        change.Click += (_, _) => PromptForValue(option, catalog);
+        item.DropDownItems.Add(change);
+        AddRemoveItem(item, option, present: true);
+        StyleDropDown(item);
+        return item;
+    }
+
+    private void AddRemoveItem(ToolStripMenuItem parent, CliOption option, bool present)
+    {
+        if (!present) return;
+        parent.DropDownItems.Add(new ToolStripSeparator());
+        var remove = new ToolStripMenuItem($"Remove {option.Token}");
+        remove.Click += (_, _) => ApplyMenuArgs(ArgsEditor.Remove(_argsBox.Text, option));
+        parent.DropDownItems.Add(remove);
+    }
+
+    private void PromptForValue(CliOption option, IReadOnlyList<CliOption> catalog)
+    {
+        string current = ArgsEditor.GetValue(_argsBox.Text, option) ?? "";
+        string hint = option.ValueHint.Length > 0 ? option.ValueHint : "value";
+        string prompt = option.ValueKind == CliValueKind.Optional
+            ? $"{option.Token} {hint} (may be left empty)"
+            : $"{option.Token} {hint}";
+        var input = TextInputDialog.Prompt(this, _theme, option.Token, prompt, current);
+        if (input == null) return;
+        if (input.Length == 0 && option.ValueKind == CliValueKind.Required) return;
+        ApplyMenuArgs(ArgsEditor.SetValue(_argsBox.Text, option, input, catalog));
+    }
+
+    private void ApplyMenuArgs(string args) => ApplyArgs(args);   // TextChanged refreshes the chips
+
+    private async Task RefreshCatalogAsync()
+    {
+        UseWaitCursor = true;
+        try
+        {
+            var result = await Task.Run(() => ClaudeCliCatalog.Refresh());
+            if (IsDisposed) return;
+            MessageBox.Show(this, result.Message, "Claude CLI options",
+                MessageBoxButtons.OK, result.Ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            if (!IsDisposed) UseWaitCursor = false;
         }
     }
 

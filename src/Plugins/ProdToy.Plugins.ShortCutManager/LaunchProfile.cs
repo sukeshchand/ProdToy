@@ -41,9 +41,15 @@ sealed record LaunchProfile
 
     /// <summary>
     /// Short arg snippets surfaced as clickable chips below the args textbox.
-    /// Clicking a chip appends the snippet to the textbox. Empty array ⇒ no chips.
+    /// Clicking a chip toggles the snippet in the textbox. Empty array ⇒ no chips.
+    /// The plain profiles give only a token (empty description); Claude's chips
+    /// come from <see cref="ClaudeCliCatalog"/>.
     /// </summary>
-    public string[] SuggestedTokens { get; init; } = Array.Empty<string>();
+    public CliOption[] SuggestedTokens { get; init; } = Array.Empty<CliOption>();
+
+    /// <summary>The chip row ends with a ⋯ chip that opens the menu of every
+    /// option in <see cref="ClaudeCliCatalog"/>. Claude-specific.</summary>
+    public bool HasOptionsMenu { get; init; }
 
     /// <summary>
     /// When true, a trailing <c>--continue</c>/<c>-c</c> in the args triggers
@@ -55,6 +61,11 @@ sealed record LaunchProfile
 
 static class LaunchProfiles
 {
+    /// <summary>Args of a NEW Claude shortcut. Existing shortcuts keep theirs.</summary>
+    public const string ClaudeDefaultArgs = "--permission-mode auto --continue";
+
+    private static CliOption[] Plain(params string[] tokens) => tokens.Select(t => new CliOption(t)).ToArray();
+
     public static readonly LaunchProfile[] All = new[]
     {
         new LaunchProfile
@@ -62,18 +73,10 @@ static class LaunchProfiles
             Id = "claude",
             DisplayName = "Claude CLI",
             Command = "claude",
-            DefaultArgs = "",
-            ArgsHint = "Appended to `claude`. Click a chip below to add common flags.",
-            SuggestedTokens = new[]
-            {
-                "--dangerously-skip-permissions",
-                "--continue",
-                "-p",
-                "--model sonnet",
-                "--model opus",
-                "--model haiku",
-                "/rename <name>",
-            },
+            DefaultArgs = ClaudeDefaultArgs,
+            ArgsHint = "Appended to `claude`. Click a chip to toggle a flag; ⋯ (or right-click) lists every option.",
+            SuggestedTokens = ClaudeCliCatalog.Chips,
+            HasOptionsMenu = true,
             SupportsContinueFallback = true,
         },
         new LaunchProfile
@@ -83,7 +86,7 @@ static class LaunchProfiles
             Command = "npm",
             DefaultArgs = "",
             ArgsHint = "Appended to `npm`. Click a chip below to add a common subcommand.",
-            SuggestedTokens = new[] { "install", "run dev", "run build", "run start", "test", "start" },
+            SuggestedTokens = Plain("install", "run dev", "run build", "run start", "test", "start"),
         },
         new LaunchProfile
         {
@@ -92,7 +95,7 @@ static class LaunchProfiles
             Command = "npx",
             DefaultArgs = "",
             ArgsHint = "Appended to `npx`. Click a chip below to add a common invocation.",
-            SuggestedTokens = new[] { "vite", "vite build", "vite preview" },
+            SuggestedTokens = Plain("vite", "vite build", "vite preview"),
         },
         new LaunchProfile
         {
@@ -101,7 +104,7 @@ static class LaunchProfiles
             Command = "dotnet",
             DefaultArgs = "",
             ArgsHint = "Appended to `dotnet`. Click a chip below to add a common subcommand.",
-            SuggestedTokens = new[] { "run", "build", "test", "watch run", "restore", "publish" },
+            SuggestedTokens = Plain("run", "build", "test", "watch run", "restore", "publish"),
         },
         new LaunchProfile
         {
@@ -110,7 +113,7 @@ static class LaunchProfiles
             Command = "pwsh",
             DefaultArgs = "",
             ArgsHint = "Appended to `pwsh`. Click a chip below to add a common flag.",
-            SuggestedTokens = new[] { "-NoExit", "-Command", "-File", "-ExecutionPolicy Bypass" },
+            SuggestedTokens = Plain("-NoExit", "-Command", "-File", "-ExecutionPolicy Bypass"),
         },
         new LaunchProfile
         {

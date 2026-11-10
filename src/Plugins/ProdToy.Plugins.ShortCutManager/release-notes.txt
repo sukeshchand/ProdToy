@@ -1,3 +1,10 @@
+Claude CLI options in the shortcut editor
+  - The chip row under a Claude shortcut's args now starts with --permission-mode auto (in place of --dangerously-skip-permissions), then --continue, --resume, -p, --model fable / opus / sonnet and /rename <name>. Each chip shows the option's help text as a tooltip.
+  - A new ⋯ chip (or a right-click on the chip row) opens a menu with every Claude CLI option, grouped as Permissions, Session, Model, Tools, Output and Other. A ✓ marks the options already in the args; hovering an item shows its help text.
+  - Options that take a value ask for it, or offer their choices as a submenu. Picking another value swaps the old one, so the args keep a single --model. Options that cannot be combined switch each other off (--chrome / --no-chrome, --dangerously-skip-permissions / --permission-mode).
+  - "Refresh options from claude --help" reads the options of the installed CLI, adds new ones to the menu and keeps them in claude-options.json for the next start. Without the CLI the built-in list is used. The Doctor page shows which CLI version the list came from.
+  - New Claude shortcuts start with --permission-mode auto --continue. Existing shortcuts keep their args unchanged.
+  - Integration tab: the captions ("Ignore in Consolidated Launcher", "Keep running on Stop All", ...) no longer overlap their toggles at larger display scaling.
 Initial standalone release — extracted from the Claude Integration plugin into its own "Shortcuts" plugin so the feature is usable regardless of Claude.
   - Generic launch profiles (Claude CLI default; npm, Vite, dotnet, PowerShell, Custom) swap the command and the hint shown in the edit form.
   - Folder tree with hardcoded "Shortcuts" root, recycle bin slot with Restore / permanent-delete, per-folder filtering.
