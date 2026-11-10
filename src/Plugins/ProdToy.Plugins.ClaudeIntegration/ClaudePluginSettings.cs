@@ -41,6 +41,10 @@ record ClaudePluginSettings
     [JsonPropertyName("historyScopeKey")] public string HistoryScopeKey { get; init; } = "";
     [JsonPropertyName("historyItemKey")] public string HistoryItemKey { get; init; } = "";
 
+    // How the Folders branch groups: "opened" (the folder the CLI was opened in, then the inner folder),
+    // "working" (the folder each notification came from) or "folderFirst" (opened folder, then the days).
+    [JsonPropertyName("historyFolderView")] public string HistoryFolderView { get; init; } = FolderViews.Opened;
+
     /// <summary>
     /// LEGACY single-machine list. Kept only so older JSON files still load —
     /// at runtime, <see cref="LocalConfigDirs"/> and <see cref="WithLocalConfigDirs"/>
@@ -110,6 +114,9 @@ record ClaudePluginSettings
     // a 30-minute snooze survives an app restart. (The host used to keep
     // this in-memory; we deliberately upgrade to persistent here.)
     [JsonPropertyName("snoozeUntil")] public DateTime SnoozeUntil { get; init; } = DateTime.MinValue;
+
+    // The last length picked with More... in the Snooze menu (minutes; 0 = never), offered again as "Last: ...".
+    [JsonPropertyName("snoozeLastMinutes")] public int SnoozeLastMinutes { get; init; } = 0;
 
     // --- Telegram ---
     // Outbound-only notification channel that runs alongside the popup/balloon.

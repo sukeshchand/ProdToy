@@ -69,6 +69,22 @@ static class PagerPosition
     /// <summary>The shown position, 1 = the oldest, count = the newest; 0 when the item is not in the scope.</summary>
     public static int Shown(int index, int count) => index < 0 || index >= count ? 0 : count - index;
 
+    /// <summary>
+    /// Where an item sits in the scope's list (latest first), found by its key every time and never remembered: a newer item
+    /// arriving in the scope grows the count but leaves the shown number of the item being read as it was.
+    /// </summary>
+    public static int IndexOf(IReadOnlyList<HistoryIndex> items, string? itemKey)
+    {
+        if (itemKey == null) return -1;
+        for (int i = 0; i < items.Count; i++)
+            if (HistoryTree.ItemKey(items[i]) == itemKey) return i;
+        return -1;
+    }
+
+    /// <summary>The counter's words for an item: "position / count".</summary>
+    public static string Label(IReadOnlyList<HistoryIndex> items, string? itemKey)
+        => $"{Shown(IndexOf(items, itemKey), items.Count)} / {items.Count}";
+
     public static int Oldest(int count) => count - 1;
 
     public static int Newest(int count) => 0;

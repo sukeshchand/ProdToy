@@ -20,6 +20,9 @@ sealed class HistoryNode
     /// <summary>A group's folder or session, as the tree knows it.</summary>
     public string GroupId { get; init; } = "";
 
+    /// <summary>A folder the CLI was opened in (the Folders branch's opened-folder level), not an inner working folder.</summary>
+    public bool IsOpenedFolder { get; init; }
+
     /// <summary>A pin's target: a node key.</summary>
     public string? Target { get; init; }
 
@@ -38,13 +41,55 @@ sealed class HistoryNode
 
     /// <summary>The text the find box searches.</summary>
     public string SearchText => Kind == HistoryNodeKind.Item
-        ? $"{Item!.Preview} {Item.Cwd} {Item.SessionId}"
+        ? $"{Item!.Preview} {Item.Cwd} {Item.ProjectRoot} {Item.SessionId}"
         : Label;
+}
+
+/// <summary>How the Folders branch groups its items.</summary>
+enum FolderView
+{
+    /// <summary>date &gt; opened folder &gt; inner folder &gt; items (the inner level is skipped when it is the opened folder).</summary>
+    Opened,
+
+    /// <summary>date &gt; working folder &gt; items: the folder each notification came from.</summary>
+    Working,
+
+    /// <summary>opened folder &gt; date &gt; inner folder &gt; items: one opened folder across days.</summary>
+    FolderFirst,
+}
+
+static class FolderViews
+{
+    public const string Opened = "opened";
+    public const string Working = "working";
+    public const string FolderFirst = "folderFirst";
+
+    public static FolderView Parse(string? setting) => setting switch
+    {
+        Working => FolderView.Working,
+        FolderFirst => FolderView.FolderFirst,
+        _ => FolderView.Opened,
+    };
+
+    public static string ToSetting(FolderView view) => view switch
+    {
+        FolderView.Working => Working,
+        FolderView.FolderFirst => FolderFirst,
+        _ => Opened,
+    };
+
+    public static string Title(FolderView view) => view switch
+    {
+        FolderView.Working => "Working folder",
+        FolderView.FolderFirst => "Folder first",
+        _ => "Opened folder",
+    };
 }
 
 /// <summary>
 /// The history as a tree: History > Folders | Sessions > date > folder or session > items, latest
-/// first at every level. Loaded once off the UI thread and kept in memory; a new notification goes
+/// first at every level. The Folders branch groups by the folder the CLI was opened in, then the inner
+/// working folder (see <see cref="FolderView"/>). Loaded once off the UI thread and kept in memory; a new notification goes
 /// in with <see cref="Add"/>, so nothing is ever rebuilt. Every member takes the lock, so a
 /// notification arriving during the first load just waits in <see cref="_waiting"/>.
 /// </summary>
@@ -64,7 +109,11 @@ sealed class HistoryTree
     private readonly Dictionary<string, List<HistoryNode>> _itemNodes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<HistoryIndex>> _subtree = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<string>> _folderItems = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _sessionRoots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _roots = new(StringComparer.Ordinal);
+    private readonly List<HistoryIndex> _all = new();
     private readonly List<HistoryIndex> _waiting = new();
+    private FolderView _view = FolderView.Opened;
     private bool _ready;
 
     public HistoryNode Root { get; }
@@ -80,6 +129,11 @@ sealed class HistoryTree
 
     /// <summary>Set before <see cref="Load"/>.</summary>
     public PinStore? PinStore { get; set; }
+
+    /// <summary>Which items are still New; the rows paint a dot for them. Set before <see cref="Load"/>.</summary>
+    public ReadStore? ReadStore { get; set; }
+
+    public FolderView FolderView { get { lock (_lock) return _view; } }
 
     public HistoryTree()
     {
@@ -130,6 +184,65 @@ sealed class HistoryTree
         lock (_lock) return _nodes.GetValueOrDefault(key);
     }
 
+    /// <summary>The saved key's node, else its nearest ancestor that exists (opened folder, then day, then the root).</summary>
+    public HistoryNode FindOrAncestor(string? key)
+    {
+        lock (_lock)
+        {
+            for (string? k = key; !string.IsNullOrEmpty(k);)
+            {
+                if (_nodes.TryGetValue(k, out var found)) return found;
+                int cut = k.LastIndexOf('|');
+                k = cut < 0 ? null : k[..cut];
+            }
+
+            return Root;
+        }
+    }
+
+    /// <summary>An item by its key; null when the tree does not hold it.</summary>
+    public HistoryIndex? FindItem(string? itemKey)
+    {
+        if (string.IsNullOrEmpty(itemKey)) return null;
+        lock (_lock) return _itemNodes.TryGetValue(itemKey, out var places) ? places[0].Item : null;
+    }
+
+    /// <summary>Every item key the tree holds.</summary>
+    public IReadOnlyList<string> ItemKeys()
+    {
+        lock (_lock) return _itemNodes.Keys.ToList();
+    }
+
+    /// <summary>The folder the CLI was opened in for this item: saved with it, or derived from its session.</summary>
+    public string OpenedFolderOf(string? itemKey)
+    {
+        if (string.IsNullOrEmpty(itemKey)) return "";
+        lock (_lock) return _roots.GetValueOrDefault(itemKey) ?? "";
+    }
+
+    /// <summary>Regroups the Folders branch. Before the first load it only takes note.</summary>
+    public void SetFolderView(FolderView view)
+    {
+        lock (_lock)
+        {
+            if (view == _view) return;
+            _view = view;
+            if (!_ready) return;
+
+            foreach (var child in Folders.Children) Unregister(child);
+            Folders.Children.Clear();
+            Folders.Count = 0;
+            Folders.Newest = default;
+            foreach (var item in _all)
+            {
+                string key = ItemKey(item);
+                _itemNodes[key][0] = Place(Folders, item, key, FolderSteps(item, key));
+            }
+
+            _subtree.Clear();
+        }
+    }
+
     /// <summary>The items of a node's whole subtree, latest first.</summary>
     public IReadOnlyList<HistoryIndex> Items(HistoryNode node)
     {
@@ -167,13 +280,25 @@ sealed class HistoryTree
     }
 
     /// <summary>
-    /// A new notification's scope: the current one when it holds the item, else the item's own group
-    /// (its date > its folder, or its session when the current scope is in the Sessions branch).
+    /// A new notification's scope: the current one when it holds the item (the reading position stays), else the
+    /// item's own group - its opened folder in the Opened-folder and Folder-first views, its working folder in the
+    /// Working-folder view, its session when the current scope is in the Sessions branch.
     /// </summary>
     public HistoryNode ScopeFor(string itemKey, HistoryNode? current)
     {
         if (current != null && Contains(current, itemKey)) return current;
-        return ItemNode(itemKey, current)?.Parent ?? current ?? Root;
+
+        var node = ItemNode(itemKey, current);
+        if (node == null) return current ?? Root;
+
+        lock (_lock)
+        {
+            if (_view != FolderView.Working && BranchOf(node) == Folders
+                && node.SelfAndAncestors().FirstOrDefault(n => n.IsOpenedFolder) is { } opened)
+                return opened;
+        }
+
+        return node.Parent ?? current ?? Root;
     }
 
     /// <summary>A tag goes on an item or a folder, never on a session.</summary>
@@ -194,7 +319,10 @@ sealed class HistoryTree
         lock (_lock)
         {
             if (!_itemNodes.TryGetValue(itemKey, out var places)) return Array.Empty<TreeTag>();
-            return store.ForItem(itemKey).Concat(store.ForFolder(FolderKey(places[0].Item!.Cwd))).DistinctBy(t => t.Id).ToList();
+            return store.ForItem(itemKey)
+                .Concat(store.ForFolder(FolderKey(places[0].Item!.Cwd)))
+                .Concat(store.ForFolder(FolderKey(_roots.GetValueOrDefault(itemKey) ?? "")))
+                .DistinctBy(t => t.Id).ToList();
         }
     }
 
@@ -273,16 +401,31 @@ sealed class HistoryTree
         }
     }
 
-    /// <summary>What the chip beside the pager says.</summary>
-    public string ScopeLabel(HistoryNode node) => node.Kind switch
+    /// <summary>
+    /// What the chip beside the pager says. Under Folders it reads down the path: "day › folder", "day › folder › inner";
+    /// a top-level day or an opened folder across days says which branch it pages.
+    /// </summary>
+    public string ScopeLabel(HistoryNode node)
     {
-        HistoryNodeKind.Root => $"All · {Root.Count}",
-        HistoryNodeKind.Branch => $"{node.Label} · all",
-        HistoryNodeKind.Date => $"{node.Parent!.Label} · {node.Label}",
-        HistoryNodeKind.Group => $"{node.Label} · {node.Parent!.Label}",
-        HistoryNodeKind.Tag => $"Tag · {node.Label}",
-        _ => node.Label,
-    };
+        if (node.Kind is HistoryNodeKind.Date or HistoryNodeKind.Group && node.Parent != null && BranchOf(node) == Folders)
+        {
+            if (node.Parent == Folders)
+                return node.Kind == HistoryNodeKind.Date ? $"{Folders.Label} · {node.Label}" : $"{node.Label} · all days";
+
+            var path = node.SelfAndAncestors().TakeWhile(n => n.Kind != HistoryNodeKind.Branch).Reverse().Select(n => n.Label);
+            return string.Join(" \u203A ", path);
+        }
+
+        return node.Kind switch
+        {
+            HistoryNodeKind.Root => $"All · {Root.Count}",
+            HistoryNodeKind.Branch => $"{node.Label} · all",
+            HistoryNodeKind.Date => $"{node.Parent!.Label} · {node.Label}",
+            HistoryNodeKind.Group => $"{node.Label} · {node.Parent!.Label}",
+            HistoryNodeKind.Tag => $"Tag · {node.Label}",
+            _ => node.Label,
+        };
+    }
 
     private static string TagKey(string tagId) => $"{TagsKey}|{tagId}";
 
@@ -303,36 +446,90 @@ sealed class HistoryTree
         string key = ItemKey(item);
         if (_itemNodes.ContainsKey(key)) return false;
 
+        _roots[key] = RootOf(item);
+        _all.Add(item);
         var places = new List<HistoryNode>
         {
-            Place(Folders, item, key, FolderKey(item.Cwd), FolderLabel(item.Cwd)),
-            Place(Sessions, item, key, item.SessionId, SessionLabel(item.SessionId)),
+            Place(Folders, item, key, FolderSteps(item, key)),
+            Place(Sessions, item, key, new[] { DateStep(item), new Step(item.SessionId, HistoryNodeKind.Group, SessionLabel(item.SessionId), item.SessionId, Dated: true) }),
         };
         _itemNodes[key] = places;
         Root.Count++;
         if (item.Timestamp > Root.Newest) Root.Newest = item.Timestamp;
         _subtree.Clear();
 
-        string folder = FolderKey(item.Cwd);
-        if (!_folderItems.TryGetValue(folder, out var inFolder)) _folderItems[folder] = inFolder = new List<string>();
-        inFolder.Add(key);
-        if (_ready && TagStore?.FolderHasTags(folder) == true) SyncTags();
+        bool tagged = false;
+        foreach (string folder in new[] { FolderKey(item.Cwd), FolderKey(_roots[key]) }.Distinct())
+        {
+            if (!_folderItems.TryGetValue(folder, out var inFolder)) _folderItems[folder] = inFolder = new List<string>();
+            inFolder.Add(key);
+            tagged |= TagStore?.FolderHasTags(folder) == true;
+        }
+
+        if (_ready && tagged) SyncTags();
         return true;
     }
 
-    private HistoryNode Place(HistoryNode branch, HistoryIndex item, string itemKey, string groupId, string groupLabel)
+    /// <summary>
+    /// The folder the CLI was opened in: saved with the item, else the earliest working folder of its session (a session
+    /// starts there before it moves anywhere; the items come in time order), else the item's own working folder.
+    /// </summary>
+    private string RootOf(HistoryIndex item)
     {
-        string day = item.Timestamp.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        string saved = item.ProjectRoot ?? "";
+        if (item.SessionId.Length == 0) return saved.Length > 0 ? saved : item.Cwd;
+
+        if (saved.Length > 0)
+        {
+            _sessionRoots.TryAdd(item.SessionId, saved);
+            return saved;
+        }
+
+        if (_sessionRoots.TryGetValue(item.SessionId, out var known)) return known;
+        _sessionRoots[item.SessionId] = item.Cwd;
+        return item.Cwd;
+    }
+
+    /// <summary>One level on an item's path in a branch.</summary>
+    private readonly record struct Step(string KeyPart, HistoryNodeKind Kind, string Label, string GroupId = "", bool Opened = false, bool Dated = false);
+
+    private static Step DateStep(HistoryIndex item) => new(
+        item.Timestamp.ToString("yyyyMMdd", CultureInfo.InvariantCulture), HistoryNodeKind.Date,
+        item.Timestamp.ToString("ddd dd MMM yyyy", CultureInfo.CurrentCulture), Dated: true);
+
+    /// <summary>The item's path under Folders in the current view.</summary>
+    private IReadOnlyList<Step> FolderSteps(HistoryIndex item, string itemKey)
+    {
+        string cwdKey = FolderKey(item.Cwd);
+        if (_view == FolderView.Working)
+            return new[] { DateStep(item), new Step(cwdKey, HistoryNodeKind.Group, FolderLabel(item.Cwd), cwdKey, Dated: true) };
+
+        string root = _roots.GetValueOrDefault(itemKey) ?? item.Cwd;
+        string rootKey = FolderKey(root);
+        bool inner = cwdKey != rootKey;
+        var opened = new Step(rootKey, HistoryNodeKind.Group, FolderLabel(root), rootKey, Opened: true, Dated: _view == FolderView.Opened);
+        var innerStep = new Step(cwdKey, HistoryNodeKind.Group, InnerLabel(root, item.Cwd), cwdKey, Dated: true);
+
+        var steps = _view == FolderView.FolderFirst
+            ? new List<Step> { opened, DateStep(item) }
+            : new List<Step> { DateStep(item), opened };
+        if (inner) steps.Add(innerStep);
+        return steps;
+    }
+
+    private HistoryNode Place(HistoryNode branch, HistoryIndex item, string itemKey, IEnumerable<Step> steps)
+    {
         var onDay = DateOnly.FromDateTime(item.Timestamp);
-        var date = GetOrAdd(branch, $"{branch.Key}|{day}", HistoryNodeKind.Date,
-            item.Timestamp.ToString("ddd dd MMM yyyy", CultureInfo.CurrentCulture), onDay);
-        var group = GetOrAdd(date, $"{date.Key}|{groupId}", HistoryNodeKind.Group, groupLabel, onDay, groupId);
-        var node = NewChild(group, $"{group.Key}|{itemKey}", HistoryNodeKind.Item, item.Preview, item);
+        var parent = branch;
+        foreach (var step in steps)
+            parent = GetOrAdd(parent, $"{parent.Key}|{step.KeyPart}", step.Kind, step.Label, step.Dated ? onDay : null, step.GroupId, step.Opened);
+
+        var node = NewChild(parent, $"{parent.Key}|{itemKey}", HistoryNodeKind.Item, item.Preview, item);
         node.Newest = item.Timestamp;
         node.Count = 1;
 
         Reposition(node);
-        for (var n = group; n != null && n != Root; n = n.Parent)
+        for (var n = parent; n != null && n != Root; n = n.Parent)
         {
             n.Count++;
             if (item.Timestamp > n.Newest) n.Newest = item.Timestamp;
@@ -342,12 +539,12 @@ sealed class HistoryTree
         return node;
     }
 
-    private HistoryNode GetOrAdd(HistoryNode parent, string key, HistoryNodeKind kind, string label, DateOnly? day = null, string groupId = "")
-        => _nodes.TryGetValue(key, out var found) ? found : NewChild(parent, key, kind, label, day: day, groupId: groupId);
+    private HistoryNode GetOrAdd(HistoryNode parent, string key, HistoryNodeKind kind, string label, DateOnly? day = null, string groupId = "", bool opened = false)
+        => _nodes.TryGetValue(key, out var found) ? found : NewChild(parent, key, kind, label, day: day, groupId: groupId, opened: opened);
 
-    private HistoryNode NewChild(HistoryNode parent, string key, HistoryNodeKind kind, string label, HistoryIndex? item = null, DateOnly? day = null, string groupId = "")
+    private HistoryNode NewChild(HistoryNode parent, string key, HistoryNodeKind kind, string label, HistoryIndex? item = null, DateOnly? day = null, string groupId = "", bool opened = false)
     {
-        var node = Register(new HistoryNode { Key = key, Kind = kind, Label = label, Parent = parent, Item = item, Day = day, GroupId = groupId });
+        var node = Register(new HistoryNode { Key = key, Kind = kind, Label = label, Parent = parent, Item = item, Day = day, GroupId = groupId, IsOpenedFolder = opened });
         parent.Children.Add(node);
         return node;
     }
@@ -356,6 +553,12 @@ sealed class HistoryTree
     {
         _nodes[node.Key] = node;
         return node;
+    }
+
+    private void Unregister(HistoryNode node)
+    {
+        _nodes.Remove(node.Key);
+        foreach (var child in node.Children) Unregister(child);
     }
 
     /// <summary>Keeps a node in order among its siblings: latest first; the branches stay put.</summary>
@@ -378,10 +581,20 @@ sealed class HistoryTree
     public static string FolderKey(string cwd)
         => cwd.Trim().TrimEnd('/', '\\').ToLowerInvariant();
 
-    private static string FolderLabel(string cwd)
+    public static string FolderLabel(string cwd)
     {
         string name = Path.GetFileName(cwd.Trim().TrimEnd('/', '\\'));
         return name.Length > 0 ? name : NoFolder;
+    }
+
+    /// <summary>An inner folder by its path below the opened folder ("src\App"), else by its own name.</summary>
+    public static string InnerLabel(string root, string cwd)
+    {
+        string r = root.Trim().TrimEnd('/', '\\');
+        string c = cwd.Trim().TrimEnd('/', '\\');
+        if (r.Length > 0 && c.Length > r.Length + 1 && c.StartsWith(r, StringComparison.OrdinalIgnoreCase) && c[r.Length] is '/' or '\\')
+            return c[(r.Length + 1)..];
+        return FolderLabel(cwd);
     }
 
     private static string SessionLabel(string sessionId)

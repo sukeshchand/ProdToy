@@ -19,7 +19,8 @@ record HistoryEntry(
     string Cwd = "",
     DateTime QuestionTimestamp = default,
     string EnvId = "",
-    string MachineName = "");
+    string MachineName = "",
+    string ProjectRoot = "");
 
 /// <summary>
 /// Lightweight index entry cached in memory (no message/question text).
@@ -34,7 +35,8 @@ record HistoryIndex(
     string Cwd = "",
     string EnvId = "",
     string MachineName = "",
-    string Preview = "");
+    string Preview = "",
+    string ProjectRoot = "");
 
 /// <summary>
 /// The bare "Claude is waiting" ping. Never saved any more; older ones stay in the day files but out of
@@ -132,7 +134,7 @@ sealed class ChatHistory
         return sep >= 0 ? name[(sep + 2)..] : "";
     }
 
-    public void SaveQuestion(string question, string sessionId = "", string cwd = "")
+    public void SaveQuestion(string question, string sessionId = "", string cwd = "", string projectRoot = "")
     {
         if (!IsEnabled || string.IsNullOrWhiteSpace(question)) return;
 
@@ -142,7 +144,7 @@ sealed class ChatHistory
             var now = DateTime.Now;
             entries.Add(new HistoryEntry(
                 "ProdToy", "", question.Trim(), NotificationType.Pending,
-                now, sessionId, cwd, now, _envId, _machineName));
+                now, sessionId, cwd, now, _envId, _machineName, projectRoot));
             WriteDay(DateTime.Now, entries);
             PatchCache(ToIndex(entries[^1], entries.Count - 1));
         }
@@ -152,7 +154,7 @@ sealed class ChatHistory
     /// A response answers the session's pending question, except a Notification: a permission prompt is
     /// its own row and must not take the question from the answer that follows it.
     /// </summary>
-    public SavedResponse? SaveResponse(string title, string message, string type, string sessionId = "", string cwd = "", string hookEvent = "")
+    public SavedResponse? SaveResponse(string title, string message, string type, string sessionId = "", string cwd = "", string hookEvent = "", string projectRoot = "")
     {
         if (!IsEnabled) return null;
 
@@ -192,13 +194,14 @@ sealed class ChatHistory
                     SessionId = sessionId,
                     Cwd = cwd,
                     QuestionTimestamp = qts,
+                    ProjectRoot = projectRoot.Length > 0 ? projectRoot : pending.ProjectRoot ?? "",
                     // EnvId / MachineName are preserved from the pending entry via `with`.
                 };
             }
             else
             {
                 entries.Add(new HistoryEntry(
-                    title, message, "", type, DateTime.Now, sessionId, cwd, default, _envId, _machineName));
+                    title, message, "", type, DateTime.Now, sessionId, cwd, default, _envId, _machineName, projectRoot));
                 pendingIdx = entries.Count - 1;
             }
 
@@ -210,7 +213,7 @@ sealed class ChatHistory
     }
 
     private HistoryIndex ToIndex(HistoryEntry e, int position) => new(
-        e.Title, e.Type, e.Timestamp, GetDayFile(e.Timestamp), position, e.SessionId, e.Cwd, _envId, _machineName, PreviewOf(e));
+        e.Title, e.Type, e.Timestamp, GetDayFile(e.Timestamp), position, e.SessionId, e.Cwd, _envId, _machineName, PreviewOf(e), e.ProjectRoot ?? "");
 
     /// <summary>A row's one line: the first words of the question, else of the reply, else the title.</summary>
     private static string PreviewOf(HistoryEntry e)
@@ -378,7 +381,7 @@ sealed class ChatHistory
                 string envId = !string.IsNullOrEmpty(e.EnvId) ? e.EnvId : fileEnvId;
                 target.Add(new HistoryIndex(
                     e.Title, e.Type, e.Timestamp, file, i, e.SessionId, e.Cwd,
-                    envId, e.MachineName, PreviewOf(e)));
+                    envId, e.MachineName, PreviewOf(e), e.ProjectRoot ?? ""));
             }
         }
         catch (Exception ex)
