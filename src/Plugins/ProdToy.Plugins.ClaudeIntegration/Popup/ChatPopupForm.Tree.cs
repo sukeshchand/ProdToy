@@ -75,6 +75,25 @@ sealed partial class ChatPopupForm
         var target = node.Kind == HistoryNodeKind.Pin ? _tree.Find(node.Target) : node;
         var menu = new ContextMenuStrip();
 
+        // The Folders header chooses how its folders group.
+        if (ReferenceEquals(node, _tree.Folders))
+        {
+            var group = new ToolStripMenuItem("Group folders by");
+            foreach (var view in new[] { FolderView.Opened, FolderView.Working, FolderView.FolderFirst })
+            {
+                var choice = new ToolStripMenuItem(FolderViews.Title(view)) { Checked = _tree.FolderView == view };
+                choice.Click += (_, _) => SetFolderView(view);
+                group.DropDownItems.Add(choice);
+            }
+
+            menu.Items.Add(group);
+        }
+
+        // Page here: the node's whole subtree becomes the pager's list (a day, an opened folder with every inner folder, ...).
+        if (node.Kind is HistoryNodeKind.Root or HistoryNodeKind.Branch or HistoryNodeKind.Date or HistoryNodeKind.Group or HistoryNodeKind.Tag
+            && !ReferenceEquals(node, _tree.Pinned))
+            menu.Items.Add("Page here", null, (_, _) => OnNodePicked(node));
+
         if (node.Kind == HistoryNodeKind.Pin)
             menu.Items.Add("Unpin", null, (_, _) => Unpin(node.Target!));
         else if (node.Kind is HistoryNodeKind.Date or HistoryNodeKind.Group or HistoryNodeKind.Item or HistoryNodeKind.Tag && _tree.PinStore is { } pins)
@@ -94,6 +113,19 @@ sealed partial class ChatPopupForm
 
         menu.Closed += (_, _) => BeginInvoke(menu.Dispose);
         menu.Show(screen);
+    }
+
+    /// <summary>Regroups the Folders branch and remembers the choice; the scope falls back to its nearest ancestor that still exists.</summary>
+    private void SetFolderView(FolderView view)
+    {
+        var s = _context.LoadSettings<ClaudePluginSettings>();
+        _context.SaveSettings(s with { HistoryFolderView = FolderViews.ToSetting(view) });
+        _tree.SetFolderView(view);
+        if (_scope != null) _scope = _tree.FindOrAncestor(_scope.Key);
+        RememberScope();
+        _treePanel.RefreshRows();
+        SyncTree();
+        if (_scope != null && _itemKey != null && _tree.ItemNode(_itemKey, _scope) is { } node) _treePanel.Reveal(node);
     }
 
     private void Pin(HistoryNode node)
@@ -124,7 +156,7 @@ sealed partial class ChatPopupForm
 
         // A tag may have gone even on Cancel: deleting one is done at once.
         _tree.SyncTags();
-        if (_scope != null && _tree.Find(_scope.Key) == null) _scope = _tree.Root;
+        if (_scope != null && _tree.Find(_scope.Key) == null) _scope = _tree.FindOrAncestor(_scope.Key);
         SyncTree();
     }
 

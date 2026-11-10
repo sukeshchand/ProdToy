@@ -474,6 +474,9 @@ sealed class HistoryRows : Control
             right -= w + 8;
         }
 
+        if (ReferenceEquals(node, Tree!.Folders))
+            right = DrawChip(g, FolderViews.Title(Tree.FolderView).ToLowerInvariant(), theme.BgHeader, theme.TextSecondary, right, r);
+
         if (node.Kind is HistoryNodeKind.Date or HistoryNodeKind.Group && node.Day == _paintedDay)
             right = DrawChip(g, "Today", theme.PrimaryDim, theme.TextPrimary, right, r);
 

@@ -160,6 +160,8 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
             string sessionId = payload.sessionId ?? "";
             string cwd = payload.cwd ?? "";
             string hookEvent = payload.hookEvent ?? "";
+            // The folder the CLI was opened in; the cwd above is where the session is now.
+            string projectRoot = ProjectRootResolver.Resolve(payload.transcriptPath);
 
             // The bare idle ping is not an answer: it is not saved, so it takes no pending question and
             // never reaches the tree. It goes on to Telegram, whose own setting decides.
@@ -170,7 +172,7 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
             }
 
             // Phase 3: write the response into plugin-owned history.
-            var saved = _chatHistory.SaveResponse(title, message, type, sessionId, cwd, hookEvent);
+            var saved = _chatHistory.SaveResponse(title, message, type, sessionId, cwd, hookEvent, projectRoot);
 
             // Phase 8: PipeRouter dispatches on the UI thread via
             // _popupForm.Invoke() — a synchronous SendMessage. WebView2's
@@ -249,7 +251,8 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
             _chatHistory.SaveQuestion(
                 payload.question ?? "",
                 payload.sessionId ?? "",
-                payload.cwd ?? "");
+                payload.cwd ?? "",
+                ProjectRootResolver.Resolve(payload.transcriptPath));
         }
         catch (Exception ex)
         {
@@ -257,8 +260,8 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         }
     }
 
-    private sealed record NotifyPayload(string? title, string? message, string? type, string? sessionId, string? cwd, string? hookEvent, string? notificationType = null);
-    private sealed record SaveQuestionPayload(string? question, string? sessionId, string? cwd);
+    private sealed record NotifyPayload(string? title, string? message, string? type, string? sessionId, string? cwd, string? hookEvent, string? notificationType = null, string? transcriptPath = null);
+    private sealed record SaveQuestionPayload(string? question, string? sessionId, string? cwd, string? transcriptPath = null);
 
     public void Start()
     {

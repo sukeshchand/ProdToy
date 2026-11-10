@@ -69,6 +69,7 @@ $message   = "Task finished."
 $type      = "success"
 $sessionId = ""
 $cwd       = ""
+$transcriptPath = ""
 $eventName = ""
 $notificationType = ""
 
@@ -79,6 +80,8 @@ if ($inputJson) {
 
         if ($payload.session_id) { $sessionId = $payload.session_id }
         if ($payload.cwd)        { $cwd = $payload.cwd }
+        # The transcript sits under the CLI's folder for where it was opened; ProdToy groups by that folder.
+        if ($payload.transcript_path) { $transcriptPath = [string]$payload.transcript_path }
 
         if ($eventName -eq "UserPromptSubmit") {
             if (-not $hookUserPromptEnabled) { exit 0 }
@@ -94,6 +97,7 @@ if ($inputJson) {
                     question  = [string]$payload.prompt
                     sessionId = $sessionId
                     cwd       = $cwd
+                    transcriptPath = $transcriptPath
                 } | ConvertTo-Json -Compress
 
                 $qFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "prodtoy_save_question.json")
@@ -132,6 +136,7 @@ $notifyPayload = @{
     cwd       = $cwd
     hookEvent = [string]$eventName
     notificationType = $notificationType
+    transcriptPath = $transcriptPath
 } | ConvertTo-Json -Compress
 
 $nFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "prodtoy_notify.json")

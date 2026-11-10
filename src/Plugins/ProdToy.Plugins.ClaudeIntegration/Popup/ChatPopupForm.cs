@@ -590,7 +590,10 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         var entry = saved?.Entry;
         DateTime questionTime = entry == null ? default
             : entry.QuestionTimestamp == default ? entry.Timestamp : entry.QuestionTimestamp;
-        DisplayMessage(title, message, type, entry?.Question ?? "", sessionId, cwd, questionTime, DateTime.Now, machineName);
+        string openedFolder = newItem != null ? _tree.OpenedFolderOf(newItem) : "";
+        if (openedFolder.Length == 0) openedFolder = entry?.ProjectRoot ?? "";
+        DisplayMessage(title, message, type, entry?.Question ?? "", sessionId, cwd, questionTime, DateTime.Now, machineName,
+            projectRoot: openedFolder);
 
         // Fresh funny quote + typewriter animation.
         if (_showQuotes)
@@ -640,11 +643,11 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         RefreshUnread();
     }
 
-    /// <summary>The scope once, from the settings; a saved key that is gone falls back to the root.</summary>
+    /// <summary>The scope once, from the settings; a saved key that is gone falls back to its nearest ancestor that exists.</summary>
     private void EnsureScope()
     {
         if (_scope != null) return;
-        _scope = _tree.Find(_context.LoadSettings<ClaudePluginSettings>().HistoryScopeKey) ?? _tree.Root;
+        _scope = _tree.FindOrAncestor(_context.LoadSettings<ClaudePluginSettings>().HistoryScopeKey);
     }
 
     private void SetScope(HistoryNode scope, string itemKey)
@@ -741,8 +744,9 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
             if (entry == null) return;
 
             var qts = entry.QuestionTimestamp == default ? entry.Timestamp : entry.QuestionTimestamp;
+            string openedFolder = _tree.OpenedFolderOf(HistoryTree.ItemKey(item));
             DisplayMessage(entry.Title, entry.Message, entry.Type, entry.Question, entry.SessionId, entry.Cwd, qts,
-                entry.Timestamp, entry.MachineName, html);
+                entry.Timestamp, entry.MachineName, html, openedFolder.Length > 0 ? openedFolder : entry.ProjectRoot ?? "");
         }
         catch (Exception ex)
         {
@@ -1018,7 +1022,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
     private void DisplayMessage(string title, string message, string type,
         string question = "", string sessionId = "", string cwd = "",
         DateTime questionTime = default, DateTime responseTime = default,
-        string machineName = "", string? renderedHtml = null)
+        string machineName = "", string? renderedHtml = null, string projectRoot = "")
     {
         _lastMessage = message;
         _lastType = type;
@@ -1027,7 +1031,10 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         // Heading shows the working folder when we have one (e.g. "DevToy")
         // instead of the generic hook title ("ProdToy - Done"). Falls back to
         // the title if there's no cwd.
+        // When the session moved below the folder the CLI was opened in, it reads "opened › inner".
         string folder = string.IsNullOrEmpty(cwd) ? "" : Path.GetFileName(cwd.TrimEnd('/', '\\'));
+        if (folder.Length > 0 && projectRoot.Length > 0 && HistoryTree.FolderKey(projectRoot) != HistoryTree.FolderKey(cwd))
+            folder = $"{HistoryTree.FolderLabel(projectRoot)} \u203A {HistoryTree.InnerLabel(projectRoot, cwd)}";
         string heading = string.IsNullOrEmpty(folder) ? title : folder;
         Text = heading;
         _titleLabel.Text = heading;
