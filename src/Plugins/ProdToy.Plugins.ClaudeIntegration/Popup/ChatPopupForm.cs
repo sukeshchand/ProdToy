@@ -10,7 +10,7 @@ namespace ProdToy.Plugins.ClaudeIntegration;
 /// <summary>
 /// Plugin-owned Claude chat popup. Owns everything Claude-specific that
 /// used to live on the host's PopupForm: funny-quote header with sparkles,
-/// snooze checkbox, notification-mode dispatch (popup vs. tray balloon),
+/// the footer (Snooze menu · OK · ⋯ menu), notification-mode dispatch (popup vs. tray balloon),
 /// chat history navigation, and filter dialog.
 ///
 /// Lifecycle: created lazily in the notify handler, kept alive for the
@@ -49,15 +49,14 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
     private readonly Label _navLabel;
     private readonly Label _scopeChip;
 
-    // Footer: OK + snooze checkbox.
+    // Footer: one row - Snooze ▾ · OK · ⋯ (copy and open actions).
     private readonly Panel _footerPanel;
     private readonly Panel _separator;
     private readonly RoundedButton _okButton;
-    private readonly CheckBox _snoozeCheckBox;
-    private readonly Label _copyMdLink;
-    private readonly Label _copyPreviewLink;
-    private readonly Label _copyHtmlLink;
-    private readonly Label _openHtmlLink;
+    private readonly RoundedButton _snoozeButton;
+    private readonly RoundedButton _moreButton;
+    private readonly ContextMenuStrip _moreMenu;
+    private readonly System.Windows.Forms.Timer _snoozeTimer;
 
     // Content area.
     private readonly Panel _webViewContainer;
@@ -111,7 +110,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
 
     private const int HeaderHeight = 58;
     private const int InfoBarHeight = 72;
-    private const int FooterHeight = 112;
+    private const int FooterHeight = 60;
 
     public ChatPopupForm(IPluginContext context, ChatHistory history, HistoryTree tree)
     {
@@ -302,33 +301,32 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         _okButton.FlatAppearance.MouseDownBackColor = _theme.PrimaryDim;
         _okButton.Click += (_, _) => OnOkClick();
 
-        _snoozeCheckBox = new CheckBox
-        {
-            Text = "Snooze for 30 minutes",
-            Font = new Font("Segoe UI", 9f),
-            ForeColor = _theme.TextSecondary,
-            BackColor = Color.Transparent,
-            AutoSize = true,
-            Cursor = Cursors.Hand,
-        };
+        // Snooze ▾: 10 · 20 · 30 · 60 minutes, More…, Wake now. Snoozing closes the window and marks nothing Read.
+        _snoozeButton = FooterButton("Snooze \u25BE", new Size(120, 32));
+        _snoozeButton.Click += (_, _) => SnoozeMenu.ShowUnder(_snoozeButton, _context, _theme,
+            snoozed: () => { UpdateSnoozeButton(); Hide(); },
+            woke: UpdateSnoozeButton);
 
-        // Copy-to-clipboard links for the chat response text.
-        _copyMdLink = CreateCopyLink("Copy Markdown");
-        _copyMdLink.Click += (_, _) => CopyAs("markdown");
-        _copyPreviewLink = CreateCopyLink("Copy Preview");
-        _copyPreviewLink.Click += (_, _) => CopyAs("preview");
-        _copyHtmlLink = CreateCopyLink("Copy HTML");
-        _copyHtmlLink.Click += (_, _) => CopyAs("html");
-        _openHtmlLink = CreateCopyLink("Open as HTML page");
-        _openHtmlLink.Click += (_, _) => OpenAsHtmlPage();
+        // ⋯: the copy and open actions for the response on screen.
+        _moreButton = FooterButton("\u22EF", new Size(44, 32));
+        _moreButton.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
+        _moreMenu = new ContextMenuStrip { ShowImageMargin = false };
+        _moreMenu.Items.Add("Copy Markdown", null, (_, _) => CopyAs("markdown"));
+        _moreMenu.Items.Add("Copy Preview", null, (_, _) => CopyAs("preview"));
+        _moreMenu.Items.Add("Copy HTML", null, (_, _) => CopyAs("html"));
+        _moreMenu.Items.Add(new ToolStripSeparator());
+        _moreMenu.Items.Add("Open as HTML page", null, (_, _) => OpenAsHtmlPage());
+        _moreButton.Click += (_, _) => _moreMenu.Show(_moreButton, new Point(_moreButton.Width - _moreMenu.PreferredSize.Width, _moreButton.Height));
+
+        // The button counts the snooze down while the window is up.
+        _snoozeTimer = new System.Windows.Forms.Timer { Interval = 20_000 };
+        _snoozeTimer.Tick += (_, _) => { if (Visible) UpdateSnoozeButton(); };
+        _snoozeTimer.Start();
 
         _footerPanel.Controls.Add(_separator);
-        _footerPanel.Controls.Add(_copyMdLink);
-        _footerPanel.Controls.Add(_copyPreviewLink);
-        _footerPanel.Controls.Add(_copyHtmlLink);
-        _footerPanel.Controls.Add(_openHtmlLink);
+        _footerPanel.Controls.Add(_snoozeButton);
         _footerPanel.Controls.Add(_okButton);
-        _footerPanel.Controls.Add(_snoozeCheckBox);
+        _footerPanel.Controls.Add(_moreButton);
 
         // --- Content area ---
         // Set the user data folder via CreationProperties BEFORE the control's
@@ -459,7 +457,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
 
         Shown += (_, _) => { UpdateHistoryNav(); PositionControls(); };
         // Shown fires once; a window hidden by OK and shown again lays out again too.
-        VisibleChanged += (_, _) => { if (Visible) { UpdateHistoryNav(); PositionControls(); } };
+        VisibleChanged += (_, _) => { if (Visible) { UpdateSnoozeButton(); UpdateHistoryNav(); PositionControls(); } };
         Resize += (_, _) => PositionControls();
         // Defer WebView2 init until the form handle exists. Calling
         // EnsureCoreWebView2Async from the constructor races the form's HWND
@@ -1087,7 +1085,7 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
             .Replace("<body>", $"<body>{bodyPrefix}")
             .Replace("</body>", "</div></div></body>");
 
-        _snoozeCheckBox.Checked = IsSnoozed;
+        UpdateSnoozeButton();
 
         // Smart resize: estimate content height from line count and adjust.
         // Use try-catch because Screen.FromControl can fail when the form
@@ -1155,41 +1153,55 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
 
     // ---------- Copy-to-clipboard ----------
 
-    private Label CreateCopyLink(string text)
+    private RoundedButton FooterButton(string text, Size size)
     {
-        var link = new Label
+        var button = new RoundedButton
         {
             Text = text,
-            Font = new Font("Segoe UI", 8f),
-            ForeColor = _theme.TextSecondary,
-            BackColor = Color.Transparent,
-            AutoSize = true,
+            Font = new Font("Segoe UI", 9f),
+            Size = size,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = _theme.PrimaryDim,
+            ForeColor = _theme.TextPrimary,
             Cursor = Cursors.Hand,
+            TabStop = false,
         };
-        link.MouseEnter += (_, _) =>
+        button.FlatAppearance.BorderSize = 0;
+        button.FlatAppearance.MouseOverBackColor = _theme.Primary;
+        return button;
+    }
+
+    /// <summary>The Snooze button says how long is left while snoozed.</summary>
+    private void UpdateSnoozeButton()
+    {
+        var until = SnoozeUntil;
+        string text = SnoozeMath.ButtonText(until, DateTime.Now) + " \u25BE";
+        if (_snoozeButton.Text == text) return;
+        _snoozeButton.Text = text;
+        int width = TextRenderer.MeasureText(text, _snoozeButton.Font).Width + 24;
+        _snoozeButton.Width = Math.Max(120, width);
+        PositionControls();
+    }
+
+    /// <summary>A short "done" or "failed" on the ⋯ button after one of its actions.</summary>
+    private void FlashMoreButton(bool ok)
+    {
+        _moreButton.Text = ok ? "\u2713" : "!";
+        _moreButton.ForeColor = ok ? _theme.SuccessColor : _theme.ErrorColor;
+        var resetTimer = new System.Windows.Forms.Timer { Interval = ok ? 1500 : 2000 };
+        resetTimer.Tick += (_, _) =>
         {
-            link.ForeColor = _theme.Primary;
-            link.Font = new Font(link.Font, FontStyle.Underline);
+            _moreButton.Text = "\u22EF";
+            _moreButton.ForeColor = _theme.TextPrimary;
+            resetTimer.Stop();
+            resetTimer.Dispose();
         };
-        link.MouseLeave += (_, _) =>
-        {
-            link.ForeColor = _theme.TextSecondary;
-            link.Font = new Font(link.Font, FontStyle.Regular);
-        };
-        return link;
+        resetTimer.Start();
     }
 
     private void CopyAs(string format)
     {
         if (string.IsNullOrEmpty(_lastMessage)) return;
-
-        Label link = format switch
-        {
-            "markdown" => _copyMdLink,
-            "preview" => _copyPreviewLink,
-            _ => _copyHtmlLink,
-        };
-        string originalText = link.Text;
 
         try
         {
@@ -1213,32 +1225,12 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
                 Clipboard.SetDataObject(textToCopy, copy: true);
             }
 
-            link.Text = "\u2713 Copied";
-            link.ForeColor = _theme.SuccessColor;
-            var resetTimer = new System.Windows.Forms.Timer { Interval = 1500 };
-            resetTimer.Tick += (_, _) =>
-            {
-                link.Text = originalText;
-                link.ForeColor = _theme.TextSecondary;
-                resetTimer.Stop();
-                resetTimer.Dispose();
-            };
-            resetTimer.Start();
+            FlashMoreButton(ok: true);
         }
         catch (Exception ex)
         {
             PluginLog.Warn($"ChatPopup CopyAs({format}) failed: {ex.Message}");
-            link.Text = "Failed";
-            link.ForeColor = _theme.ErrorColor;
-            var resetTimer = new System.Windows.Forms.Timer { Interval = 2000 };
-            resetTimer.Tick += (_, _) =>
-            {
-                link.Text = originalText;
-                link.ForeColor = _theme.TextSecondary;
-                resetTimer.Stop();
-                resetTimer.Dispose();
-            };
-            resetTimer.Start();
+            FlashMoreButton(ok: false);
         }
     }
 
@@ -1247,7 +1239,6 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
     private void OpenAsHtmlPage()
     {
         if (string.IsNullOrEmpty(_lastMessage)) return;
-        string originalText = _openHtmlLink.Text;
         try
         {
             string html = RenderHtml(_lastMessage);
@@ -1282,33 +1273,12 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
             string file = Path.Combine(dir, $"claude-{DateTime.Now:yyyyMMdd-HHmmss-fff}.html");
             File.WriteAllText(file, html, System.Text.Encoding.UTF8);
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(file) { UseShellExecute = true });
-
-            _openHtmlLink.Text = "✓ Opened";
-            _openHtmlLink.ForeColor = _theme.SuccessColor;
-            var resetTimer = new System.Windows.Forms.Timer { Interval = 1500 };
-            resetTimer.Tick += (_, _) =>
-            {
-                _openHtmlLink.Text = originalText;
-                _openHtmlLink.ForeColor = _theme.TextSecondary;
-                resetTimer.Stop();
-                resetTimer.Dispose();
-            };
-            resetTimer.Start();
+            FlashMoreButton(ok: true);
         }
         catch (Exception ex)
         {
             PluginLog.Warn($"ChatPopup OpenAsHtmlPage failed: {ex.Message}");
-            _openHtmlLink.Text = "Failed";
-            _openHtmlLink.ForeColor = _theme.ErrorColor;
-            var resetTimer = new System.Windows.Forms.Timer { Interval = 2000 };
-            resetTimer.Tick += (_, _) =>
-            {
-                _openHtmlLink.Text = originalText;
-                _openHtmlLink.ForeColor = _theme.TextSecondary;
-                resetTimer.Stop();
-                resetTimer.Dispose();
-            };
-            resetTimer.Start();
+            FlashMoreButton(ok: false);
         }
     }
 
@@ -1379,26 +1349,14 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
 
     private void PositionControls()
     {
-        if (_footerPanel == null || _okButton == null) return;
+        if (_footerPanel == null || _okButton == null || _snoozeButton == null || _moreButton == null) return;
 
-        int footerW = _footerPanel.ClientSize.Width;
-
-        // Row 1: Copy links, centered above the OK button.
-        int linkSpacing = 16;
-        int totalLinkWidth = _copyMdLink.PreferredWidth + _copyPreviewLink.PreferredWidth
-            + _copyHtmlLink.PreferredWidth + _openHtmlLink.PreferredWidth + linkSpacing * 3;
-        int linkStartX = (footerW - totalLinkWidth) / 2;
-        int linkY = 8;
-        _copyMdLink.Location = new Point(linkStartX, linkY);
-        _copyPreviewLink.Location = new Point(_copyMdLink.Right + linkSpacing, linkY);
-        _copyHtmlLink.Location = new Point(_copyPreviewLink.Right + linkSpacing, linkY);
-        _openHtmlLink.Location = new Point(_copyHtmlLink.Right + linkSpacing, linkY);
-
-        // Row 2: OK button, centered.
-        _okButton.Location = new Point((footerW - _okButton.Width) / 2, linkY + _copyMdLink.Height + 6);
-
-        // Row 3: Snooze checkbox, centered below OK.
-        _snoozeCheckBox.Location = new Point((footerW - _snoozeCheckBox.PreferredSize.Width) / 2, _okButton.Bottom + 6);
+        // The footer: one row, OK centred, Snooze on its left, ⋯ on its right (below the 1 px separator).
+        var row = FooterLayout.Place(_footerPanel.ClientSize.Width, _footerPanel.ClientSize.Height - _separator.Height,
+            _snoozeButton.Size, _okButton.Size, _moreButton.Size);
+        _snoozeButton.Location = new Point(row.Snooze.X, row.Snooze.Y + _separator.Height);
+        _okButton.Location = new Point(row.Ok.X, row.Ok.Y + _separator.Height);
+        _moreButton.Location = new Point(row.More.X, row.More.Y + _separator.Height);
 
         // The info bar: one rule places the pager, the chip and the subtitle's stop, so no two controls overlap.
         var subtitle = _subtitleLabel.GetPreferredSize(Size.Empty);
@@ -1624,10 +1582,12 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
         _okButton.FlatAppearance.MouseOverBackColor = theme.PrimaryLight;
         _okButton.FlatAppearance.MouseDownBackColor = theme.PrimaryDim;
 
-        _snoozeCheckBox.ForeColor = theme.TextSecondary;
-
-        foreach (var copyLink in new[] { _copyMdLink, _copyPreviewLink, _copyHtmlLink, _openHtmlLink })
-            copyLink.ForeColor = theme.TextSecondary;
+        foreach (var button in new[] { _snoozeButton, _moreButton })
+        {
+            button.BackColor = theme.PrimaryDim;
+            button.ForeColor = theme.TextPrimary;
+            button.FlatAppearance.MouseOverBackColor = theme.Primary;
+        }
 
         _prevButton.BackColor = theme.PrimaryDim;
         _prevButton.ForeColor = theme.TextSecondary;
@@ -1684,6 +1644,8 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
             try { _host.ThemeChanged -= OnThemeChanged; } catch { }
             try { _unread.Store.Changed -= OnReadMarksChanged; } catch { }
             try { _typeTimer?.Dispose(); } catch { }
+            try { _snoozeTimer?.Dispose(); } catch { }
+            try { _moreMenu?.Dispose(); } catch { }
             try { _loadingTimer?.Dispose(); } catch { }
             try { _sparkleTimer?.Dispose(); } catch { }
             try { _webView?.Dispose(); } catch { }

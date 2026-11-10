@@ -624,29 +624,28 @@ public partial class ClaudeIntegrationPlugin : IPlugin, IDoctor
         notifSubControls.Add(quotesCheck);
         y += 28;
 
-        bool isSnoozed = settings.SnoozeUntil > DateTime.Now;
-        var snoozeCheck = new CheckBox
+        // The same Snooze menu as the popup's footer: 10 · 20 · 30 · 60 minutes, More…, Wake now.
+        string SnoozeWords() => SnoozeMath.ButtonText(_context.LoadSettings<ClaudePluginSettings>().SnoozeUntil, DateTime.Now) + " \u25BE";
+        var snoozeButton = new Button
         {
-            Text = isSnoozed
-                ? $"Snoozed ({Math.Max(1, (int)(settings.SnoozeUntil - DateTime.Now).TotalMinutes)} min left)"
-                : "Snooze notifications (30 min)",
+            Text = SnoozeWords(),
             Font = new Font("Segoe UI", 9.5f),
             ForeColor = theme.TextPrimary,
-            BackColor = Color.Transparent,
-            Checked = isSnoozed,
+            BackColor = theme.PrimaryDim,
+            FlatStyle = FlatStyle.Flat,
             Enabled = notifEnabled,
             AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(6, 0, 6, 0),
             Location = new Point(pad + 8, y),
             Cursor = Cursors.Hand,
         };
-        snoozeCheck.CheckedChanged += (_, _) =>
-        {
-            var s = _context.LoadSettings<ClaudePluginSettings>();
-            var until = snoozeCheck.Checked ? DateTime.Now.AddMinutes(30) : DateTime.MinValue;
-            _context.SaveSettings(s with { SnoozeUntil = until });
-        };
-        panel.Controls.Add(snoozeCheck);
-        notifSubControls.Add(snoozeCheck);
+        snoozeButton.FlatAppearance.BorderColor = theme.Border;
+        snoozeButton.Click += (_, _) => SnoozeMenu.ShowUnder(snoozeButton, _context, theme,
+            snoozed: () => snoozeButton.Text = SnoozeWords(),
+            woke: () => snoozeButton.Text = SnoozeWords());
+        panel.Controls.Add(snoozeButton);
+        notifSubControls.Add(snoozeButton);
 
         notifEnabledCheck.CheckedChanged += (_, _) =>
         {
