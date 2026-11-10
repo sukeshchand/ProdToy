@@ -584,6 +584,11 @@ sealed partial class ChatPopupForm : Form, IPluginPopup
             SetScope(_tree.ScopeFor(newItem, _scope), newItem);
             if (_tree.ItemNode(newItem, _scope) is { } node) _treePanel.Reveal(node);
         }
+        else if (newItem != null)
+        {
+            _itemKey = newItem;   // the tree is still loading: OK must still mark the item on screen
+            _chips.SetCurrent(newItem);
+        }
 
         var entry = saved?.Entry;
         DateTime questionTime = entry == null ? default

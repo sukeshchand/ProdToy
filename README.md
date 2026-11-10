@@ -7,6 +7,9 @@ A Windows developer utility that integrates with Claude Code CLI. Provides rich 
 ### Claude Code Integration
 - **Rich Notifications** -- popup notifications for task completions, errors, and pending questions with themed UI and markdown rendering
 - **Response History** -- daily JSON-based chat history with session filtering and date navigation
+- **New and Read** -- a new notification never replaces the one you are reading: it gets a highlighted New chip in the popup's left strip and a dot in the history tree, and the pager only grows its total. OK marks the item on screen Read and shows the newest New one next (or closes the window on the last); a closed window pops up on the newest. Right-click a chip for Mark read / Mark all read
+- **Folder grouping** -- the history tree groups each day by the folder Claude was opened in, with the inner folders it moved into below it; right-click the Folders header to switch to the working-folder list or to folder first (one folder across days). Pick a day, an opened folder or an inner folder to page through exactly that
+- **Popup footer** -- Snooze · OK · ⋯ on one row: the ⋯ menu copies the response as Markdown, preview or HTML, or opens it as an HTML page; Snooze offers 10, 20, 30 or 60 minutes, More… (up to 1 day) and Wake now
 - **Hook Management** -- configurable hooks for Stop, Notification, and UserPromptSubmit events
 - **Status Line** -- custom status bar for Claude CLI showing model, branch, context usage, edit stats
 - **Named-pipe IPC** -- single-instance architecture with pipe-based communication

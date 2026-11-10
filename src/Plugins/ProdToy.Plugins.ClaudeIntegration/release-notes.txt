@@ -1,4 +1,15 @@
-Shortcuts moved to a standalone plugin
-  - The "Claude Shortcuts" launcher/folder tree/recycle-bin feature has been extracted into a separate "Shortcuts" plugin (ProdToy.Plugin.ShortCutManager). This plugin keeps only the Claude-specific hooks, status line, notification popup and Telegram integration.
-  - On first launch of the new Shortcuts plugin your existing shortcut data (shortcuts.json, shortcut-folders.json, shortcut-recycled.json, owned-wt-profiles.json) is copied across automatically, so nothing is lost.
-  - The "Claude Shortcuts…" menu entry is gone from this plugin; use the new "Shortcuts…" entry from the ShortCutManager plugin.
+New and Read notifications
+  - A new notification no longer replaces the one you are reading. Every notification starts New; while the one on screen is New, a newer one only adds a highlighted New chip in the left strip (newest on top), a dot in the history tree and one more to the pager's total. The text you read does not move and its number stays.
+  - Press OK to mark the item on screen Read; the newest New item shows next, and OK on the last one closes the window. Esc, closing, paging, a chip or the tree mark nothing.
+  - Click a chip to show its item; right-click a chip for Mark read and Mark all read. The chip of the item on screen is outlined; the tree button shows the count when the tree is closed or the chips do not all fit, and the tray tooltip says how many are unread.
+  - With the window closed, a new notification pops up on the new item and the older New chips stay. Snoozed or filtered notifications are kept as New without a pop-up.
+  - New marks survive a restart (read-marks.json beside the history). Everything from before this version counts as Read.
+
+History grouped by the folder Claude was opened in
+  - Folders > day > opened folder > inner folder: a session that moves into sub-folders stays under the folder it started in. The inner level is skipped when it is the opened folder itself, and counts add up to the opened folder. Older history groups the same way; nothing is rewritten.
+  - Right-click the Folders header to group by Opened folder (default), Working folder (the earlier flat list) or Folder first (one opened folder across days). The choice is remembered.
+  - Pick an opened folder (or "Page here" in a node's menu) to page through all of its inner folders; the chip beside the pager reads "day › folder" or "day › folder › inner". The window's heading reads "opened › inner" when they differ.
+
+Footer: Snooze · OK · ⋯
+  - The copy and open links moved into a ⋯ menu beside OK (Copy Markdown, Copy Preview, Copy HTML, Open as HTML page).
+  - Snooze is a menu: 10, 20, 30, 60 minutes, More… (any length up to 1 day, with 2 h, 4 h, 8 h and 1 day shortcuts) and the last custom length. Snoozing closes the window without marking the item Read; while snoozed the button shows the time left and the menu offers Wake now. The settings page uses the same menu.
