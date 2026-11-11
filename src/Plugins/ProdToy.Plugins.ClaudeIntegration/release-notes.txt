@@ -13,3 +13,6 @@ History grouped by the folder Claude was opened in
 Footer: Snooze · OK · ⋯
   - The copy and open links moved into a ⋯ menu beside OK (Copy Markdown, Copy Preview, Copy HTML, Open as HTML page).
   - Snooze is a menu: 10, 20, 30, 60 minutes, More… (any length up to 1 day, with 2 h, 4 h, 8 h and 1 day shortcuts) and the last custom length. Snoozing closes the window without marking the item Read; while snoozed the button shows the time left and the menu offers Wake now. The settings page uses the same menu.
+
+Fixes
+  - The history pager no longer overlaps the folder chip after the window was hidden; the newest notification is the last position.
